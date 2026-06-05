@@ -1,0 +1,63 @@
+units metal
+boundary p p p
+atom_style atomic
+
+atom_modify map array sort 0 0.0
+
+read_data POSCAR_Fe3O4_FeM.lmp
+
+pair_style pace
+pair_coeff * * ../ACE_Fe-O.yace Fe Mn O
+
+thermo 10
+
+compute eng all pe/atom
+
+variable Tstar equal 1200
+variable Press equal 10 # in bars
+variable NStep equal 2000
+variable dumpEvery equal 10
+
+replicate 2 2 2
+
+timestep 0.001
+reset_timestep 0
+run 0
+#############################
+## Equilibrate temperature ##
+#############################
+velocity all create ${Tstar} 4928459 rot yes dist gaussian
+fix equil all nvt temp ${Tstar} ${Tstar} $(100.0*dt)
+run 100
+unfix equil
+##########
+## GCMC ##
+##########
+group iron type 1 2
+fix mc_mag iron atom/swap 10 100 680295 ${Tstar} semi-grand yes types 1 2 mu 0.0 0.0
+########################
+## Molecular dynamics ##
+########################
+compute mdtemp all temp
+compute_modify mdtemp dynamic/dof yes
+# NPT
+fix heat all npt temp ${Tstar} ${Tstar} $(100.0*dt) aniso ${Press} ${Press} $(1000.0*dt)
+# NVT
+##fix heat all nvt temp ${Tstar} ${Tstar} $(100.0*dt)
+fix_modify heat temp mdtemp
+
+thermo ${dumpEvery}
+thermo_style custom step pe ke temp press
+
+dump 1 all custom ${dumpEvery} traj.dump id element x y z
+dump_modify 1 element Fe Mn O
+
+run ${NStep}
+######################
+## Final relaxation ##
+######################
+unfix heat
+velocity all set 0.0 0.0 0.0
+fix final_relax all box/relax aniso 0.0 vmax 0.001
+minimize 0 0.001 1000000 1000000
+min_style cg

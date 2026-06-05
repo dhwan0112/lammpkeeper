@@ -1,0 +1,7 @@
+# 대용량 시뮬레이션 산출물 (재생성 가능) — git 추적 제외
+*.log
+*.cube
+*.dump
+*.tar.gz
+*.tgz
+*.lammpstrj
