@@ -8,4 +8,7 @@ before/after baseline before being committed.
 
 Currently extracted:
     display  — terminal output helpers (was byte-identical in both packages)
+    mapping  — canonical per-force-field type<->element convention (was
+               duplicated across prep FF_PRESETS, post detect_forcefield, and
+               post spin analysis)
 """

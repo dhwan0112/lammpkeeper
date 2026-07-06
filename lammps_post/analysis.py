@@ -20,6 +20,8 @@ Dependencies:
 
 import numpy as np
 
+from lammpkeeper.common.mapping import label_to_type
+
 def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=0.3):
     """
     Track the evolution of Fe atomic partial charges over time.
@@ -754,15 +756,16 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
             'o_fraction'    : np.array — n_o / total_atoms
     """
     ti = col_idx['type']
+    ace = label_to_type('ace')   # {'Fe_up': 1, 'Fe_down': 2, 'O': 3}
 
     time, n_up, n_down, n_o = [], [], [], []
     for fr in frames:
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
         time.append(fr['timestep'] * dt_fs / 1000)
-        n_up.append(int(np.sum(types == 1)))
-        n_down.append(int(np.sum(types == 2)))
-        n_o.append(int(np.sum(types == 3)))
+        n_up.append(int(np.sum(types == ace['Fe_up'])))
+        n_down.append(int(np.sum(types == ace['Fe_down'])))
+        n_o.append(int(np.sum(types == ace['O'])))
 
     n_up = np.array(n_up)
     n_down = np.array(n_down)

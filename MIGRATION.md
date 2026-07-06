@@ -63,24 +63,53 @@ definitions, help text, `--version` string, and exit behavior unchanged.
 
 ---
 
-## Stage 2 — refactoring (planned, not yet done)
+## Stage 2 — refactoring (incremental, each step regression-verified)
 
-Guarded by regression baselines (before/after RDF & MSD on a sample trajectory).
+Guarded by before/after baselines. Each step is a pure/value-preserving refactor
+verified against the committed prior state, then committed.
 
-- Extract shared modules into `lammpkeeper/common/` (ranked by payoff):
-  1. `display.py` — currently **byte-identical** in both packages.
-  2. `mapping.py` — a single source of truth for the per-force-field
-     type↔element map. Today `lammps_pre` encodes it (forward) while
-     `lammps_post` re-derives it (reverse), with no shared definition — the
-     highest-value and highest-risk consolidation (see below).
-  3. `forcefields.py` — reconcile FF naming (`prep`: ace/reaxff2010/reaxff2015
-     vs `post`: reaxff/ace/hdnnp) and shared units/dt/atom_style metadata.
-  4. `lammps_data.py` — the data-file format contract shared by prep (write)
-     and post (read).
-  5. `units.py` — ps↔fs↔steps conversion (metal ×1000 / real).
-- Promote genuinely-common CLI args (`--batch`; `--version`) to a parent parser.
+### Completed
+
+**Step A — `common/display.py`.** `display.py` was byte-identical in both
+packages. Moved to the single source of truth; both package modules are now
+re-export shims. Verified: rendered display API and CLI snapshots
+(`post --find`, no-data error, `--help`) byte-identical before/after; object
+identity `lammps_pre.display.C is lammps_post.display.C is
+lammpkeeper.common.display.C`.
+
+**Step B — `common/mapping.py`.** Single source of truth for the per-force-field
+`type↔element↔label` convention, replacing three independent copies:
+`lammps_pre.state.FF_PRESETS` (forward), `lammps_post.parsers.detect_forcefield`
+(reverse: ACE element dict, ReaxFF/HDNNP fallbacks), and
+`lammps_post.analysis.analyze_spin_evolution` (hardcoded ACE types 1/2/3).
+Value-preserving; does **not** alter post's atom-count heuristic (the separate,
+still-open reverse-map fragility — documented below).
+
+Regression record (fixture `regular_MD/traj.dump`, 448 atoms, 350 frames, ACE
+element-path; numpy-only). Canonical fingerprint of prep `FF_PRESETS` atom_types,
+post `ff_info`/`_guess_o_type`, RDF(Fe↑–O), MSD(O), MSD(Fe↑), and spin —
+**identical before/after** (44 KB canonical blob byte-for-byte; TOTAL sha256
+`6a3b93bc…`). Note: this fixture exercises the deterministic element path, not
+the count heuristic (Rule 3) or slab z-PBC / 2D-MSD paths — those remain
+unverified and are out of scope for this value-preserving step.
+
+### Planned (still behavior-sensitive — flag before doing)
+
+- `forcefields.py` — reconcile FF naming (`prep`: ace/reaxff2010/reaxff2015 vs
+  `post`: reaxff/ace/hdnnp) and shared units/dt/atom_style metadata.
+- `lammps_data.py` — the data-file format contract shared by prep (write) and
+  post (read).
+- `units.py` — ps↔fs↔steps conversion (note: prep `ps_to_steps` and post `dt_fs`
+  derivation are *different* operations; shared surface is only the metal-vs-real
+  convention, so payoff is small).
+- Reverse-map fragility fix (behavior/format change): make prep emit
+  `dump_modify element Fe Mn O` so post reverse-maps ACE deterministically
+  instead of via the atom-count heuristic. Requires re-confirming the
+  "same coordinates, format-only difference" fair-comparison invariant.
+- Promoting `--batch`/`--version` to a parent parser cuts against the current
+  forward-verbatim dispatcher — needs a design decision first.
 - Optionally move packages into `lammpkeeper/prep/` and `lammpkeeper/post/` and
-  update imports (kept a compatibility shim for external references).
+  update imports (with a compatibility shim for external references).
 
 ### Known invariants to re-verify in Stage 2 (do NOT change in Stage 1)
 - **ACE type↔element mapping (top priority).** prep writes ACE trajectories with

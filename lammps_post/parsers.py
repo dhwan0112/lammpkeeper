@@ -20,6 +20,8 @@ import os
 import re
 import numpy as np
 
+from lammpkeeper.common.mapping import type_to_label, element_to_label
+
 def parse_dump(filepath, max_frames=None, stride=1):
     """
     Universal LAMMPS dump / lammpstrj trajectory file parser.
@@ -751,7 +753,7 @@ def detect_forcefield(columns, col_idx, frames):
             else:
                 type_map = {int(t): f'Type{t}' for t in unique_types}
         else:
-            type_map = {1: 'Fe', 2: 'O'}  # Fallback default
+            type_map = type_to_label('reaxff')  # Fallback default: {1:'Fe', 2:'O'}
 
         return {
             'forcefield': 'reaxff',
@@ -778,7 +780,7 @@ def detect_forcefield(columns, col_idx, frames):
                 'has_charge': False,
                 'has_velocity': 'vx' in cols_set,
                 'has_element': True,
-                'atom_types': {'Fe': 'Fe_up', 'Mn': 'Fe_down', 'O': 'O'},
+                'atom_types': element_to_label('ace'),
             }
 
     # --- Detection Rule 3: ≥ 3 atom types → ACE (spin-resolved) ---
@@ -839,7 +841,7 @@ def detect_forcefield(columns, col_idx, frames):
         'has_charge': False,
         'has_velocity': 'vx' in cols_set,
         'has_element': has_element,
-        'atom_types': {1: 'Fe', 2: 'O'},
+        'atom_types': type_to_label('hdnnp'),
     }
 
 

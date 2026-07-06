@@ -7,6 +7,7 @@ timestep, and output fields when the user selects a force field.
 """
 
 from lammps_pre import A_FE_BCC, O2_BOND_LENGTH
+from lammpkeeper.common.mapping import type_to_label
 
 # ═══════════════════════════════════════════════════════════════
 # Force Field Presets
@@ -26,7 +27,7 @@ FF_PRESETS = {
         'T_damp': 0.1,                 # ps = 100 fs
         'T_damp_display_fs': 100.0,
         'rc': 7.0,
-        'atom_types': {1: 'Fe_up', 2: 'Fe_down', 3: 'O'},
+        'atom_types': type_to_label('ace'),
         'masses': {1: 55.845, 2: 55.845, 3: 15.999},
         'has_spin': True,
         'has_qeq': False,
@@ -63,7 +64,7 @@ FF_PRESETS = {
         'T_damp': 25.0,                 # fs (= 100 * dt)
         'T_damp_display_fs': 25.0,
         'rc': 5.0,
-        'atom_types': {1: 'Fe', 2: 'O'},
+        'atom_types': type_to_label('reaxff'),
         'masses': {1: 55.845, 2: 15.999},
         'has_spin': False,
         'has_qeq': True,
@@ -97,7 +98,7 @@ FF_PRESETS = {
         'T_damp': 25.0,
         'T_damp_display_fs': 25.0,
         'rc': 5.0,
-        'atom_types': {1: 'Fe', 2: 'O'},
+        'atom_types': type_to_label('reaxff'),
         'masses': {1: 55.845, 2: 15.999},
         'has_spin': False,
         'has_qeq': True,
