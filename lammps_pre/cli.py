@@ -14,7 +14,7 @@ from lammps_pre import VERSION
 from lammps_pre.display import C
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='LAMMPS-PRE: Pre-Processing Interactive CLI')
 
@@ -46,7 +46,7 @@ def main():
     parser.add_argument('--version', action='version',
                         version=f'lammps-pre {VERSION}')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Lazy import
     from lammps_pre.shell import LammpsPreShell

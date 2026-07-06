@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lammpkeeper"
+version = "0.1.0"
+description = "LammpKeeper (lkpr): unified LAMMPS pre/post-processing CLI for iron-redox MLFF studies"
+readme = "MIGRATION.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+]
+
+# prep (lammps-pre) and post (lammps-post) have disjoint heavy dependencies,
+# so they are split into extras. Install only what a given task needs:
+#   pip install -e .[prep]   # structure/input generation (ASE)
+#   pip install -e .[post]   # analysis/plotting (MDAnalysis, scipy, pandas, matplotlib)
+#   pip install -e .[all]    # everything
+[project.optional-dependencies]
+prep = ["ase"]
+post = ["matplotlib", "scipy", "pandas", "MDAnalysis"]
+all = ["ase", "matplotlib", "scipy", "pandas", "MDAnalysis", "rich"]
+
+[project.scripts]
+lkpr = "lammpkeeper.cli:main"
+
+# Stage 1 keeps the original packages in place (no file moves). The legacy
+# entry points remain available unchanged:
+#   python -m lammps_pre ...   / python lammps-pre.py ...
+#   python -m lammps_post ...  / python lammps-post.py ...
+[tool.setuptools]
+packages = ["lammpkeeper", "lammps_pre", "lammps_post"]

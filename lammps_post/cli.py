@@ -20,7 +20,7 @@ from lammps_post import VERSION
 from lammps_post.display import C
 
 
-def main():
+def main(argv=None):
     """
     Main entry point: parse CLI arguments and start the interactive shell.
 
@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--batch', help='Execute commands from a script file (non-interactive)')
     parser.add_argument('--version', action='version', version=f'lammps-post {VERSION}')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Lazy import: only load the heavy shell module when needed
     from lammps_post.shell import LammpsPostShell
