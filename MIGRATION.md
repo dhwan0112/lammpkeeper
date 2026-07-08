@@ -93,6 +93,23 @@ post `ff_info`/`_guess_o_type`, RDF(Fe↑–O), MSD(O), MSD(Fe↑), and spin —
 the count heuristic (Rule 3) or slab z-PBC / 2D-MSD paths — those remain
 unverified and are out of scope for this value-preserving step.
 
+### Regression suite (`tests/`)
+
+The ad-hoc before/after checks are now a committed suite that locks in Stage 1+2
+behavior. Runs with **or without** pytest:
+
+```
+python tests/run.py          # dependency-free runner (numpy-only)
+LKPR_SLOW=1 python tests/run.py   # include RDF/MSD golden checks
+pytest tests/                # if pytest installed (pip install -e .[dev])
+```
+
+- `test_mapping.py`   — canonical tables + prep/post value preservation.
+- `test_display.py`   — single-source object identity + rendering.
+- `test_lkpr_cli.py`  — dispatcher routing + verbatim delegation (sub-versions).
+- `test_regression_numeric.py` — golden fingerprints (ff_info, spin, RDF, MSD)
+  on the ACE example trajectory; skips cleanly if numpy/fixture absent.
+
 ### Planned (still behavior-sensitive — flag before doing)
 
 - `forcefields.py` — reconcile FF naming (`prep`: ace/reaxff2010/reaxff2015 vs

@@ -21,9 +21,15 @@ dependencies = [
 prep = ["ase"]
 post = ["matplotlib", "scipy", "pandas", "MDAnalysis"]
 all = ["ase", "matplotlib", "scipy", "pandas", "MDAnalysis", "rich"]
+dev = ["pytest"]
 
 [project.scripts]
 lkpr = "lammpkeeper.cli:main"
+
+# Tests also run without pytest: `python tests/run.py` (numpy-only).
+# Slower RDF/MSD golden checks are opt-in: LKPR_SLOW=1.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 # Stage 1 keeps the original packages in place (no file moves). The legacy
 # entry points remain available unchanged:
