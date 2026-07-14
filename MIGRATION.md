@@ -110,6 +110,47 @@ pytest tests/                # if pytest installed (pip install -e .[dev])
 - `test_regression_numeric.py` — golden fingerprints (ff_info, spin, RDF, MSD)
   on the ACE example trajectory; skips cleanly if numpy/fixture absent.
 
+**Step C — deterministic type resolution.** Closes the reverse-map fragility the
+end-to-end run exposed. Three separate places were *guessing* which atom type is
+oxygen; all three now read the convention from `common/mapping.py`.
+
+*prep* (`135270f`) writes the convention into the trajectory instead of leaving
+it implicit in the input script:
+
+```
+dump        traj all custom N ... id type element x y z vx vy vz
+dump_modify traj sort id element Fe Mn O format float %12.6f
+```
+
+LAMMPS accepts this, and the dump now labels types 1/2/3 as Fe/Mn/O. The element
+list and `pair_coeff` both come from `mapping.element_order('ace')`, so they
+cannot drift apart.
+
+*post* (`45e7d73`) stops inferring:
+
+| was | now |
+|-----|-----|
+| Rule 3 guessed O = "the rarest type, if under 20% of the most common" | uses the fixed ACE type order (3-type case); heuristic kept only for 4+ types |
+| Rule 2 returned element-keyed `atom_types` | type-keyed, like every other rule |
+| element-only dumps numbered elements alphabetically | canonical element→type from `mapping` |
+
+Why the heuristic had to go: its premise — "O atoms are far fewer than Fe" — is
+false for the bulk magnetite these ACE runs target. Fe₃O₄ is Fe:O = 3:4, so **O
+is the most abundant species**; the committed example fixture is Fe 64 / Mn 128 /
+O 256. Under spin polarization the rarest type becomes the *minority Fe*, and the
+guess relabelled Fe_up as O — 400/3600/400 gave `{2:Fe_up, 3:Fe_down, 1:O}`,
+silently corrupting every O-based analysis. The element-keyed `atom_types` was
+the same class of bug: callers index by numeric type behind `isinstance(t, int)`
+guards, so element keys fell through to a "Fe is type 1" fallback that dropped
+Fe_down from surface detection.
+
+Verified: the generated data file is byte-identical, and an otherwise identical
+LAMMPS run produces byte-identical spin / RDF / MSD / O₂-dissociation
+fingerprints — the dump just gains a column. On the committed fixture every
+physics hash is unchanged; only `ff_info`'s hash moved (representation), and it
+was re-baselined with the reason noted at the golden. 16 tests pass in both the
+numpy-only and the full-dependency environment.
+
 ### End-to-end verification with a real LAMMPS run
 
 The regression suite above only replays a committed trajectory. This section
@@ -179,16 +220,8 @@ separate look but unrelated to the CLI integration.
    plausibly negligible physical effect. Flagged rather than fixed, because
    changing it changes every generated structure.
 
-2. **ACE reverse-map heuristic: concrete failure boundary (high).** prep emits
-   ACE dumps with no element column (`id type x y z vx vy vz`), so post's
-   deterministic Rule 2 can never fire and Rule 3 (atom-count heuristic) is
-   always used. It is correct for this run ({1:41, 2:87, 3:8} → right answer),
-   but it breaks once the minority spin population drops to about the O count:
-   e.g. 400 Fe_up / 3600 Fe_down / 400 O yields `{2:Fe_up, 3:Fe_down, 1:O}` —
-   Fe_up is misread as O and every O-based analysis silently becomes garbage.
-   Strong spin polarization is a physically reachable state (the MC swap is
-   semi-grand with µ=0), so this is not hypothetical. The already-planned fix
-   (`dump_modify element Fe Mn O`) removes the heuristic entirely.
+2. ~~**ACE reverse-map heuristic**~~ — **FIXED** (commits `135270f`, `45e7d73`).
+   See "Stage 2 step C" below.
 
 3. **The local LAMMPS cannot run prep's ACE script (medium).**
    `/home/kdh/chemistry/lammps/install/bin/lmp` is built without the **MC**
