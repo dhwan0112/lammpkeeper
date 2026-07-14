@@ -110,6 +110,95 @@ pytest tests/                # if pytest installed (pip install -e .[dev])
 - `test_regression_numeric.py` — golden fingerprints (ff_info, spin, RDF, MSD)
   on the ACE example trajectory; skips cleanly if numpy/fixture absent.
 
+### End-to-end verification with a real LAMMPS run
+
+The regression suite above only replays a committed trajectory. This section
+records an actual `lkpr prep` → **LAMMPS** → `lkpr post` cycle, run to check
+that the unified entry point produces inputs LAMMPS accepts and output `post`
+reads back correctly.
+
+**Setup.** LAMMPS 22 Jul 2025 (`REAXFF`, `ML-PACE`, `ML-HDNNP` built in);
+`lkpr` installed as a real console script (`pip install -e .`) into a venv over
+the conda `mlff` env (ase, scipy, pandas, matplotlib, MDAnalysis, rich present).
+Fe(100) 4×4×8 slab, 4 O₂, 800 K, `p p f`, seed 12345 — same defaults as
+production, only smaller and shorter.
+
+| Check | Result |
+|-------|--------|
+| `lkpr prep` → LAMMPS-valid inputs (ReaxFF-2010) | ✅ ran to completion, 12 ps oxidation, 502 frames |
+| `lkpr prep` → LAMMPS-valid inputs (ACE) | ✅ data/regions/script accepted; stages 0–2 ran (see MC note below) |
+| `lkpr post --analyze all --plot all` (ReaxFF) | ✅ 14 analyses, 16 figures |
+| `lkpr post --analyze all --plot all` (ACE) | ✅ 12 analyses, 14 figures |
+| units / atom_style per FF, read back from the generated script | ✅ reaxff = real+charge, ace = metal+atomic |
+| prep forward map == post reverse map (real dumps) | ✅ reaxff `{1:Fe,2:O}`, ace `{1:Fe_up,2:Fe_down,3:O}` |
+| dt / time axis agreement (prep preset vs post detection) | ✅ 0.25 fs both, units agree |
+| Legacy entry points still work | ✅ `python -m lammps_pre/-post`, `lammps-pre.py`, `lammps-post.py` |
+| Regression suite under the **full** dependency set | ✅ 13 passed (same golden hashes as numpy-only) |
+
+**LAMMPS confirms the ACE spin convention.** The `pace` pair style echoed
+`type #1(Fe) → ACE species #1`, `#2(Mn) → #2`, `#3(O) → #3`, and the runtime
+`set … type/fraction` produced real type-2 atoms (counts `{1:41, 2:87, 3:8}`).
+`post` read that label-less dump back as `{1:Fe_up, 2:Fe_down, 3:O}` and
+reported an Fe_up fraction of 0.320 = 41/128 exactly.
+
+**Physics checks on the real ReaxFF oxidation** (not just "no exception"):
+O₂ dissociation 4 → 1 (6 O atoms dissociated) — matched atom-by-atom against
+raw O–O distances; QEq total charge conserved to 0.000000 e; Fe positive
+(max +0.455 e) / O negative (mean −0.738 e); Fe⁰=124 / Fe²⁺=4 / Fe³⁺=0,
+consistent with the reported "oxidized Fe (q>0.3) = 4". `compute_rdf` was
+validated against Fe–O distances computed directly from the coordinates
+(RDF peak 1.57 Å vs true bonded mean 1.53 Å) — **the RDF code is faithful.**
+
+*Observation (pre-existing, not caused by this work):* those Fe–O bonds are
+short versus the literature (~1.9–2.1 Å). The repo's own production result
+(`lammps/Runs/reaxff2010/o2_100/800K/final_reaxff2010_800K.data`, 2000 Fe +
+200 O) shows the same thing — Fe–O mean 1.600 Å, Fe–Fe 2.379 Å — against
+1.571 Å / 2.371 Å here. So this run **reproduces the existing production
+physics**; the short bond is a property of the ReaxFF-2010 setup, worth a
+separate look but unrelated to the CLI integration.
+
+### Issues found by the end-to-end run (open — need a decision)
+
+1. **Fair-comparison invariant is broken for O₂ (high).** The brief states all
+   force fields must use *identical coordinates, differing only in format*.
+   The Fe slab does satisfy this (coordinates bit-identical between the ReaxFF
+   and ACE builds), but **the O₂ layer does not**: it sits exactly 2.0 Å higher
+   in the ACE build, and the box is 2.0 Å taller. Cause: `builders.py`
+   `z_wall_lower = z_nve_top + rc + 0.9`, and *both* the O₂ placement band
+   (`z_lo = z_wall_lower + 1.0`) and the box top (`zhi = z_wall_lower + vacuum`)
+   are anchored to it — so the FF-specific cutoff (ACE 7.0 Å vs ReaxFF 5.0 Å)
+   leaks into the initial geometry. The initial O₂–surface separation, i.e. the
+   starting condition of the oxidation reaction, therefore differs per force
+   field. Fixing this changes generated structures → needs sign-off.
+
+2. **ACE reverse-map heuristic: concrete failure boundary (high).** prep emits
+   ACE dumps with no element column (`id type x y z vx vy vz`), so post's
+   deterministic Rule 2 can never fire and Rule 3 (atom-count heuristic) is
+   always used. It is correct for this run ({1:41, 2:87, 3:8} → right answer),
+   but it breaks once the minority spin population drops to about the O count:
+   e.g. 400 Fe_up / 3600 Fe_down / 400 O yields `{2:Fe_up, 3:Fe_down, 1:O}` —
+   Fe_up is misread as O and every O-based analysis silently becomes garbage.
+   Strong spin polarization is a physically reachable state (the MC swap is
+   semi-grand with µ=0), so this is not hypothetical. The already-planned fix
+   (`dump_modify element Fe Mn O`) removes the heuristic entirely.
+
+3. **The local LAMMPS cannot run prep's ACE script (medium).**
+   `/home/kdh/chemistry/lammps/install/bin/lmp` is built without the **MC**
+   package, so `fix atom/swap` (the spin-swap MC in the ACE template) aborts the
+   run. Everything before it is fine. Rebuild with `-D PKG_MC=on` to run ACE
+   locally; the HPC binary evidently has it. (Verification here used a copy with
+   only that one `fix` line commented out.)
+
+4. **ACE template cannot produce a short oxidation run (low).**
+   `ox_dense = round(50.0/dt)` is hardcoded and `ox_remain = round((OX_PS-50)/dt)`,
+   so any `OX_PS < 50` emits a negative `run` count and LAMMPS errors out. The
+   oxidation stage is therefore always ≥ 200 000 steps — fine for production,
+   impossible for a smoke test.
+
+5. **prep has no HDNNP/CHGNet preset (question).** post can detect `hdnnp`
+   (Rule 4), but prep only generates `ace` / `reaxff2010` / `reaxff2015`. If the
+   4-force-field comparison is the goal, prep is missing two.
+
 ### Planned (still behavior-sensitive — flag before doing)
 
 - `forcefields.py` — reconcile FF naming (`prep`: ace/reaxff2010/reaxff2015 vs
