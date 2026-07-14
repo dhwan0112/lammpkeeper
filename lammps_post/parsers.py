@@ -20,7 +20,7 @@ import os
 import re
 import numpy as np
 
-from lammpkeeper.common.mapping import type_to_label, element_to_label
+from lammpkeeper.common.mapping import type_to_label
 
 def parse_dump(filepath, max_frames=None, stride=1):
     """
@@ -773,6 +773,11 @@ def detect_forcefield(columns, col_idx, frames):
         if 'Mn' in elements:
             # 'Mn' is used as a proxy for spin-down Fe in ACE magnetite simulations.
             # Real Mn is NOT present — it's a labeling convention from the potential.
+            # atom_types is keyed by type NUMBER, like every other rule: callers
+            # (state._guess_o_type, state._guess_surface_z, shell's type labels)
+            # index it with the numeric type column. Element-keyed entries used to
+            # slip past their `isinstance(t, int)` guards and silently degrade to
+            # a "Fe is type 1 only" fallback, which drops Fe_down.
             return {
                 'forcefield': 'ace',
                 'unit_system': 'metal',   # eV, Angstrom, ps
@@ -780,7 +785,7 @@ def detect_forcefield(columns, col_idx, frames):
                 'has_charge': False,
                 'has_velocity': 'vx' in cols_set,
                 'has_element': True,
-                'atom_types': element_to_label('ace'),
+                'atom_types': type_to_label('ace'),
             }
 
     # --- Detection Rule 3: ≥ 3 atom types → ACE (spin-resolved) ---
@@ -789,38 +794,48 @@ def detect_forcefield(columns, col_idx, frames):
         max_type = int(types.max())
 
         if max_type >= 3:
-            # ACE with spin-resolved types. Detect O by atom count:
-            # O atoms are far fewer than Fe atoms in slab+gas systems.
-            # The type with the fewest atoms (and significantly fewer
-            # than the majority) is assigned as O.
             unique_types = sorted(set(int(t) for t in types))
-            type_counts = {int(t): int(np.sum(types == t)) for t in unique_types}
 
-            # Sort types by count (ascending) — rarest type is likely O
-            sorted_by_count = sorted(type_counts.items(), key=lambda x: x[1])
-
-            # Heuristic: if the rarest type has < 20% of the most common, it's O
-            rarest_type, rarest_count = sorted_by_count[0]
-            most_count = sorted_by_count[-1][1]
-
-            if rarest_count < most_count * 0.2:
-                o_type = rarest_type
+            if len(unique_types) == 3:
+                # The ACE type order is fixed by the potential:
+                #   pair_coeff * * ACE_Fe-O.yace Fe Mn O  ->  1=Fe_up, 2=Fe_down, 3=O
+                # so read it from the shared convention rather than guessing.
+                #
+                # This used to guess O as "the rarest type, if it has < 20% of the
+                # most common". That premise ("O is far fewer than Fe") holds for a
+                # slab + O2 gas, but is false for the bulk magnetite these ACE runs
+                # actually target — Fe3O4 is Fe:O = 3:4, so O is the MOST abundant
+                # species. Combined with ferromagnetic spin ordering (the MC swap is
+                # semi-grand with mu=0, so the minority spin population can get
+                # small), the rarest type becomes the minority Fe rather than O, and
+                # the guess silently relabelled Fe_up as O — corrupting every
+                # O-based analysis. Newly generated trajectories carry an element
+                # column and never reach this branch at all.
+                type_map = type_to_label('ace')
             else:
-                # Can't determine — fall back to highest type number
-                o_type = max(unique_types)
+                # 4+ spin-resolved types: no fixed convention to fall back on, so
+                # keep the original count heuristic.
+                type_counts = {int(t): int(np.sum(types == t)) for t in unique_types}
+                sorted_by_count = sorted(type_counts.items(), key=lambda x: x[1])
+                rarest_type, rarest_count = sorted_by_count[0]
+                most_count = sorted_by_count[-1][1]
 
-            # Build type map: all non-O types are Fe variants
-            fe_types = [t for t in unique_types if t != o_type]
-            type_map = {}
-            if len(fe_types) >= 1:
-                type_map[fe_types[0]] = 'Fe_up'
-            if len(fe_types) >= 2:
-                type_map[fe_types[1]] = 'Fe_down'
-            if len(fe_types) >= 3:
-                type_map[fe_types[2]] = 'Fe_NM'
-            for ft in fe_types[3:]:
-                type_map[ft] = f'Fe_type{ft}'
-            type_map[o_type] = 'O'
+                if rarest_count < most_count * 0.2:
+                    o_type = rarest_type
+                else:
+                    o_type = max(unique_types)
+
+                fe_types = [t for t in unique_types if t != o_type]
+                type_map = {}
+                if len(fe_types) >= 1:
+                    type_map[fe_types[0]] = 'Fe_up'
+                if len(fe_types) >= 2:
+                    type_map[fe_types[1]] = 'Fe_down'
+                if len(fe_types) >= 3:
+                    type_map[fe_types[2]] = 'Fe_NM'
+                for ft in fe_types[3:]:
+                    type_map[ft] = f'Fe_type{ft}'
+                type_map[o_type] = 'O'
 
             return {
                 'forcefield': 'ace',

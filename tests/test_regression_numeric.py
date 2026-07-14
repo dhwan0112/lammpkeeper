@@ -11,8 +11,13 @@ import _util  # noqa: F401  (path bootstrap)
 from _util import FIXTURE, have_numpy, noninteractive, section_hash
 
 # sha256[:16] of the canonical fingerprints (baseline commit bb6c634).
+#
+# post_ff_info was re-baselined when atom_types became type-keyed everywhere
+# (detect_forcefield Rule 2 used to return element keys: {'Fe':'Fe_up', ...}).
+# Representation only — the physics fingerprints below are byte-identical
+# across that change, and _guess_o_type still returns 3.
 GOLDEN_FAST = {
-   'post_ff_info': '3d930e1e9042eda7',
+   'post_ff_info': 'a89e3dee6928721b',
    'post_guess_o_type': '4e07408562bedb8b',
    'spin': 'bf7fa759103f2883',
 }

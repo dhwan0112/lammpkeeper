@@ -32,6 +32,8 @@ from lammps_post.display import C, print_table, print_kv, progress_msg, HAS_RICH
 
 from lammps_post.parsers import parse_dump, parse_log, parse_data_file, detect_forcefield, parse_input
 
+from lammpkeeper.common.mapping import element_to_type as ff_element_to_type
+
 from lammps_post.analysis import (
     analyze_charge_evolution, analyze_charge_z, compute_rdf, compute_oar,
     compute_or, analyze_penetration, analyze_penetration_trend,
@@ -351,9 +353,21 @@ class LammpsPostShell(cmd.Cmd):
             # synthesize a numeric 'type' column from element labels.
             # This ensures all analysis functions can use col_idx['type'].
             if 'type' not in col_idx and frames and frames[0].get('elements') is not None:
-                # Build element -> type_id mapping from unique elements
                 unique_elems = sorted(set(frames[0]['elements']))
-                elem_to_type = {e: i + 1 for i, e in enumerate(unique_elems)}
+                # Prefer the canonical element -> type numbering of whichever force
+                # field owns these elements. Numbering them alphabetically instead
+                # only works when every element is present in frame 0: a spin-
+                # equilibration run that starts fully polarized has no 'Fe' yet, so
+                # Mn and O would be numbered 1 and 2, and O (really type 3) would be
+                # read as Fe_down by every type-based analysis.
+                elem_to_type = None
+                for ff_name in ('ace', 'reaxff'):
+                    canonical = ff_element_to_type(ff_name)
+                    if set(unique_elems) <= set(canonical):
+                        elem_to_type = {e: canonical[e] for e in unique_elems}
+                        break
+                if elem_to_type is None:
+                    elem_to_type = {e: i + 1 for i, e in enumerate(unique_elems)}
                 progress_msg(f"Synthesizing 'type' column from elements: {elem_to_type}")
 
                 # Add type column to each frame's atoms array
