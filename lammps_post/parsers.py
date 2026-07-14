@@ -801,6 +801,11 @@ def detect_forcefield(columns, col_idx, frames):
                 #   pair_coeff * * ACE_Fe-O.yace Fe Mn O  ->  1=Fe_up, 2=Fe_down, 3=O
                 # so read it from the shared convention rather than guessing.
                 #
+                # Assumes the three types ARE 1/2/3 — true for every ACE dump,
+                # since the pair_coeff line fixes the order. A second 3-type
+                # chargeless force field with a different order would land here
+                # and be mislabelled; give it its own branch when one appears.
+                #
                 # This used to guess O as "the rarest type, if it has < 20% of the
                 # most common". That premise ("O is far fewer than Fe") holds for a
                 # slab + O2 gas, but is false for the bulk magnetite these ACE runs
