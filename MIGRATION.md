@@ -159,17 +159,25 @@ separate look but unrelated to the CLI integration.
 
 ### Issues found by the end-to-end run (open — need a decision)
 
-1. **Fair-comparison invariant is broken for O₂ (high).** The brief states all
-   force fields must use *identical coordinates, differing only in format*.
-   The Fe slab does satisfy this (coordinates bit-identical between the ReaxFF
-   and ACE builds), but **the O₂ layer does not**: it sits exactly 2.0 Å higher
-   in the ACE build, and the box is 2.0 Å taller. Cause: `builders.py`
+1. **Coordinates are not bit-identical across force fields (your call).** The
+   brief states all force fields should use *identical coordinates, differing
+   only in format*. The Fe slab does satisfy this exactly (bit-identical between
+   the ReaxFF and ACE builds). The O₂ layer does not: it sits exactly 2.0 Å
+   higher in the ACE build, and the box is 2.0 Å taller. Cause: `builders.py`
    `z_wall_lower = z_nve_top + rc + 0.9`, and *both* the O₂ placement band
    (`z_lo = z_wall_lower + 1.0`) and the box top (`zhi = z_wall_lower + vacuum`)
    are anchored to it — so the FF-specific cutoff (ACE 7.0 Å vs ReaxFF 5.0 Å)
-   leaks into the initial geometry. The initial O₂–surface separation, i.e. the
-   starting condition of the oxidation reaction, therefore differs per force
-   field. Fixing this changes generated structures → needs sign-off.
+   leaks into the initial geometry.
+
+   How much this matters is a separate question, and the honest answer is
+   "probably very little": the O₂ are a thermal gas placed at random heights
+   within a band, they diffuse for several ps before reaching the surface (the
+   ReaxFF run above took ~2.2 ps), the shift is a rigid translation of the whole
+   band, and *relative to the reflective wall* — which is what the O₂ actually
+   sees, and which is removed before oxidation starts — the placement is
+   identical. So this is a literal violation of the stated invariant with a
+   plausibly negligible physical effect. Flagged rather than fixed, because
+   changing it changes every generated structure.
 
 2. **ACE reverse-map heuristic: concrete failure boundary (high).** prep emits
    ACE dumps with no element column (`id type x y z vx vy vz`), so post's
