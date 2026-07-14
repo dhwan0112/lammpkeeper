@@ -4,10 +4,12 @@ Works both under pytest (`pytest tests/`) and with the dependency-free runner
 (`python tests/run.py`). Importing this module puts the repo root on sys.path
 so `lammpkeeper`, `lammps_pre`, `lammps_post` import cleanly.
 """
+import io
 import os
 import sys
 import json
 import hashlib
+import contextlib
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -25,6 +27,24 @@ def have_numpy():
       return True
    except ImportError:
       return False
+
+
+@contextlib.contextmanager
+def noninteractive():
+   """Silence stdout and make stdin look empty.
+
+   `LammpsPostShell.do_load` calls `_suggest_output_dir`, which prompts via
+   `input()`. `_ask` treats EOF as "use the default", so an empty stdin keeps
+   the shell on its default path. pytest replaces sys.stdin with an object that
+   raises OSError instead of EOFError, so the tests must supply their own.
+   """
+   saved = sys.stdin
+   sys.stdin = io.StringIO('')
+   try:
+      with contextlib.redirect_stdout(io.StringIO()):
+         yield
+   finally:
+      sys.stdin = saved
 
 
 def canon(o):

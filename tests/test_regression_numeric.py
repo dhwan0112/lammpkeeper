@@ -7,8 +7,8 @@ Skips cleanly when numpy or the fixture is unavailable.
 """
 import os
 
-import _util
-from _util import FIXTURE, have_numpy, section_hash
+import _util  # noqa: F401  (path bootstrap)
+from _util import FIXTURE, have_numpy, noninteractive, section_hash
 
 # sha256[:16] of the canonical fingerprints (baseline commit bb6c634).
 GOLDEN_FAST = {
@@ -28,11 +28,9 @@ def _available():
 
 
 def _load_state():
-   import io
-   import contextlib
    from lammps_post.shell import LammpsPostShell
    sh = LammpsPostShell()
-   with contextlib.redirect_stdout(io.StringIO()):
+   with noninteractive():
       sh.do_load(f'dump {FIXTURE}')
    return sh.state
 
