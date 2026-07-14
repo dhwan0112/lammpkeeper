@@ -7,6 +7,7 @@ Templates reproduce the exact structure of the production atlas scripts.
 
 from lammps_pre import VERSION
 from lammps_pre.writers import get_filenames
+from lammpkeeper.common.mapping import element_order
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -29,6 +30,9 @@ def _render_ace(build, state):
     s = state
     ff = s.ff
     names = get_filenames(s)
+    # Same element order as pair_coeff, straight from the shared mapping. Written
+    # into every dump so the Fe_up/Fe_down/O convention travels with the file.
+    elements = ' '.join(element_order('ace'))
 
     return f"""\
 # ===================================================================
@@ -138,7 +142,7 @@ log             ${{label}}.log
 
 dump            traj all custom {s.get_dump_interval()} traj_${{label}}.lammpstrj &
                 {ff['dump_fields']}
-dump_modify     traj sort id format float %12.6f
+dump_modify     traj sort id element {elements} format float %12.6f
 
 # ===================================================================
 # Stage 0: Spin Equilibration (${{SPIN_PS}} ps)
@@ -188,7 +192,7 @@ print "========== Stage 3: Oxidation (${{OX_PS}} ps at ${{T}} K) =========="
 undump          traj
 dump            traj_ox all custom {s.dump_dense_interval} traj_oxidation_${{label}}.lammpstrj &
                 {ff['dump_fields']}
-dump_modify     traj_ox sort id format float %12.6f
+dump_modify     traj_ox sort id element {elements} format float %12.6f
 
 unfix           wall_lower_o
 run             ${{ox_dense}}
@@ -197,7 +201,7 @@ run             ${{ox_dense}}
 undump          traj_ox
 dump            traj_ox2 all custom {s.get_dump_interval()} traj_oxidation_${{label}}.lammpstrj &
                 {ff['dump_fields']}
-dump_modify     traj_ox2 sort id format float %12.6f append yes
+dump_modify     traj_ox2 sort id element {elements} format float %12.6f append yes
 
 run             ${{ox_remain}}
 

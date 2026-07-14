@@ -7,7 +7,12 @@ timestep, and output fields when the user selects a force field.
 """
 
 from lammps_pre import A_FE_BCC, O2_BOND_LENGTH
-from lammpkeeper.common.mapping import type_to_label
+from lammpkeeper.common.mapping import type_to_label, element_order
+
+# Element symbols in atom-type order, as LAMMPS wants them in `pair_coeff` and
+# `dump_modify ... element`. Sourced from the shared mapping so the convention
+# prep writes can never drift from the one post reads back.
+ACE_ELEMENTS = ' '.join(element_order('ace'))       # 'Fe Mn O'
 
 # ═══════════════════════════════════════════════════════════════
 # Force Field Presets
@@ -21,7 +26,7 @@ FF_PRESETS = {
         'atom_style': 'atomic',
         'pair_style': 'pace product',
         'potential_file': 'ACE_Fe-O.yace',
-        'pair_coeff': '* * ACE_Fe-O.yace Fe Mn O',
+        'pair_coeff': f'* * ACE_Fe-O.yace {ACE_ELEMENTS}',
         'dt': 0.00025,                 # ps (metal units) = 0.25 fs
         'dt_display_fs': 0.25,
         'T_damp': 0.1,                 # ps = 100 fs
@@ -34,7 +39,11 @@ FF_PRESETS = {
         'thermo_interval': 50,
         'dump_interval': 2000,
         'thermo_fields': 'step c_temp_mobile pe ke etotal pxx pyy pzz c_o_z_min c_o_z_max',
-        'dump_fields': 'id type x y z vx vy vz',
+        # 'element' makes the trajectory self-describing: paired with
+        # `dump_modify ... element Fe Mn O` it records the spin convention in the
+        # file itself, so post reads the types back deterministically instead of
+        # inferring them from atom counts.
+        'dump_fields': 'id type element x y z vx vy vz',
         # Simulation time defaults (ps)
         'eq_ps': 100,
         'ox_ps': 500,
