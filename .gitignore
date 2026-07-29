@@ -1,25 +1,20 @@
-# 대용량 시뮬레이션 산출물 (재생성 가능) — git 추적 제외
-*.log
-*.cube
-*.dump
-*.tar.gz
-*.tgz
-*.lammpstrj
-
-# 단, 아래는 산출물이 아니라 배포된 참조 예제이므로 추적한다.
-# 위 *.dump 규칙에 휩쓸려 함께 제거됐던 파일들 — tests/의 RDF·MSD 골든 회귀
-# 검증이 이 궤적을 입력으로 쓰므로, 없으면 수치 검증이 조용히 skip된다.
-!lammps/Runs/Archived/ACE/resources/ACE_Fe-O_examples/examples/**/*.dump
-
-# === Large presentation files ===
-*.odp
-
-# === QE output files (too large for GitHub) ===
-pw.out
-
-# === Python cache ===
+# Python
 __pycache__/
 *.pyc
-
-# === Packaging (pip install -e .) ===
 *.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+venv/
+
+# LAMMPS run outputs the tool generates (never in the repo tree, but just in case)
+*.lammpstrj
+*.restart
+log.lammps
+lammps-post_output/
+
+# ...except the ACE reference example bundle shipped as test fixtures.
+# The RDF/MSD/spin golden regression in tests/ reads tests/fixtures/.../traj.dump;
+# without it the numeric checks silently skip.
+!tests/fixtures/**

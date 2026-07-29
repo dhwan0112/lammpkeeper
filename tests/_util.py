@@ -16,9 +16,9 @@ if REPO_ROOT not in sys.path:
    sys.path.insert(0, REPO_ROOT)
 
 # Git-tracked ACE example trajectory (element column: Fe/Mn/O, bulk pp pp pp).
+# Shipped under tests/fixtures/ from the ACE Fe-O potential's own examples.
 FIXTURE = os.path.join(
-   REPO_ROOT, 'lammps', 'Runs', 'Archived', 'ACE', 'resources',
-   'ACE_Fe-O_examples', 'examples', 'regular_MD', 'traj.dump')
+   REPO_ROOT, 'tests', 'fixtures', 'ace_examples', 'regular_MD', 'traj.dump')
 
 
 def have_numpy():
