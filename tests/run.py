@@ -13,7 +13,8 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if TESTS_DIR not in sys.path:
    sys.path.insert(0, TESTS_DIR)
 
-MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_regression_numeric']
+MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_comparison',
+           'test_regression_numeric']
 
 
 def main():

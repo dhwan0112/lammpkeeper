@@ -206,7 +206,11 @@ class LammpsPreShell(cmd.Cmd):
                 progress_msg(f"NVT thermostat layers: {s.n_thermostat_layers}")
 
             elif key == 'wall':
-                progress_msg(f"Wall position is auto-computed from slab + cutoff. "
+                from lammps_pre.state import WALL_CUTOFF
+                progress_msg(f"Wall position is auto-computed: slab top + "
+                             f"{WALL_CUTOFF} A + 0.9. That cutoff is shared by every "
+                             f"force field on purpose, so all of them start from "
+                             f"identical coordinates. "
                              f"Use 'set fixed_layers' or 'set nvt_layers' to adjust.")
 
             elif key == 'thermo':

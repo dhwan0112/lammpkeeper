@@ -121,7 +121,10 @@ def compute_regions(slab_data, state):
 
     n_fix = state.n_fixed_layers
     n_nvt = state.n_thermostat_layers
-    rc = state.rc
+    # Shared across force fields on purpose — using this force field's own rc
+    # would make the O2 layer and the box height force-field dependent, and the
+    # comparison assumes identical coordinates. See state.WALL_CUTOFF.
+    rc = state.wall_cutoff
 
     if n_fix + n_nvt >= n_layers:
         print(C.err(f"  Error: fixed({n_fix}) + NVT({n_nvt}) >= total layers({n_layers})"))

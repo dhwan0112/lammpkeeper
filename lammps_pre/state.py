@@ -132,6 +132,28 @@ FF_PRESETS = {
 
 
 # ═══════════════════════════════════════════════════════════════
+# Wall cutoff — shared by every force field on purpose
+# ═══════════════════════════════════════════════════════════════
+#
+# The reflective wall (`fix wall_lower_o`) has to sit at least one interaction
+# cutoff above the slab, so the O2 gas cannot feel the Fe until the oxidation
+# stage lifts the wall. The obvious way to do that is to use each force field's
+# own cutoff — which is what this used to do, and it quietly broke the invariant
+# the whole study rests on: *all force fields must start from identical
+# coordinates, differing only in file format.*
+#
+# The wall anchors both the O2 placement band and the box height, so a 2 A
+# difference in cutoff (ACE 7.0 vs ReaxFF 5.0) put the O2 layer 2 A higher and
+# the box 2 A taller for ACE. The Fe slab matched; the gas did not.
+#
+# Using the LARGEST cutoff for every force field satisfies all of them at once
+# (7.0 >= 5.0, so the ReaxFF gas is still beyond its own cutoff) and makes the
+# geometry force-field independent. ACE output is unchanged; ReaxFF now matches
+# it exactly.
+WALL_CUTOFF = max(p['rc'] for p in FF_PRESETS.values())     # 7.0 A (ACE)
+
+
+# ═══════════════════════════════════════════════════════════════
 # PreState
 # ═══════════════════════════════════════════════════════════════
 
@@ -225,7 +247,18 @@ class PreState:
 
     @property
     def rc(self):
+        """This force field's own interaction cutoff (informational)."""
         return self._ff_preset.get('rc', 5.0)
+
+    @property
+    def wall_cutoff(self):
+        """Cutoff used to place the O2 wall — the same for every force field.
+
+        Deliberately NOT self.rc: see WALL_CUTOFF above. Keeping the geometry
+        force-field independent is what makes the cross-force-field comparison
+        fair.
+        """
+        return WALL_CUTOFF
 
     @property
     def dt_display_fs(self):
