@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lammpkeeper"
 version = "0.1.0"
 description = "LammpKeeper (lkpr): unified LAMMPS pre/post-processing CLI for iron-redox MLFF studies"
-readme = "MIGRATION.md"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
