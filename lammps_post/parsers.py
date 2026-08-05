@@ -292,10 +292,38 @@ def parse_log(filepath):
     if not blocks:
         return None  # No thermo data found in the entire log file
 
-    # Select the LARGEST thermo block — this is typically the production
-    # MD run, while smaller blocks come from minimization or equilibration.
-    headers, data_list, stages = max(blocks, key=lambda x: len(x[1]))
-    arr = np.array(data_list)
+    # Reassemble the FULL run rather than only the largest thermo block.
+    #
+    # A multi-stage simulation writes one thermo block per run/minimize
+    # (spin-eq, minimize, equilibrate, oxidation, ...). Keeping only the
+    # largest block silently dropped every other stage — the ACE runs, for
+    # instance, lost the first ~170 ps (spin equilibration + thermalization)
+    # from every thermo/pressure plot. Concatenate all blocks that share the
+    # production block's column layout, ordered by step with duplicated
+    # boundary steps removed. Blocks printed with a different thermo_style
+    # (mismatched headers, e.g. a minimization block) are left out because
+    # their columns do not align.
+    headers = max(blocks, key=lambda x: len(x[1]))[0]
+    merged_data, stages = [], []
+    for hdr, data, stg in blocks:
+        if hdr == headers:
+            merged_data.extend(data)
+            stages.extend(stg if len(stg) == len(data) else [''] * len(data))
+    arr = np.array(merged_data)
+
+    # Order by step and drop rows whose step repeats (block boundaries print
+    # the same step twice). These templates use one monotonic step counter, so
+    # this never collapses distinct data; a restart that reset the counter would.
+    step_cols = [i for i, h in enumerate(headers) if h.lower() == 'step']
+    if step_cols and len(arr):
+        si = step_cols[0]
+        order = np.argsort(arr[:, si], kind='stable')
+        arr = arr[order]
+        stages = [stages[k] for k in order]
+        _, first = np.unique(arr[:, si], return_index=True)
+        keep = np.sort(first)
+        arr = arr[keep]
+        stages = [stages[k] for k in keep]
 
     # Build the result dict with normalized column keys
     result = {'headers': headers, 'stages': stages, 'stage_times': stage_times,
