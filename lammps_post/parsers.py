@@ -61,7 +61,7 @@ def parse_dump(filepath, max_frames=None, stride=1):
                    'natoms'   (int)     — Number of atoms in this frame
                    'box'      (ndarray) — Shape (3, 2): [[xlo,xhi], [ylo,yhi], [zlo,zhi]]
                    'atoms'    (ndarray) — Shape (N, n_cols): all numeric atom data
-                   'elements' (list[str] or None) — Element symbols if 'element' column exists
+                   'elements' (ndarray[str] or None) — Element symbols if 'element' column exists
         columns: list[str]  — Names of numeric columns in order (e.g., ['id','type','x','y','z','q'])
         col_idx: dict[str, int] — Mapping from column name to index in the atoms array.
                    Example: col_idx['z'] = 4 means atoms[:, 4] gives z-coordinates.
@@ -117,21 +117,25 @@ def parse_dump(filepath, max_frames=None, stride=1):
                 continue
 
             # --- Read atom data for this frame ---
-            atom_data = np.empty((natoms, len(col_idx)), dtype=np.float64)
-            elements = [] if element_col is not None else None
+            n_raw = len(columns)
+            tokens = ''.join([f.readline() for _ in range(natoms)]).split()
+            if len(tokens) != natoms * n_raw:
+                raise ValueError(
+                    f"{filepath}: frame at step {timestep} has {len(tokens)} values, "
+                    f"expected {natoms} atoms x {n_raw} columns (truncated dump?)")
 
-            for ai in range(natoms):
-                parts = f.readline().split()
-                # Extract element symbol string if present (e.g., 'Fe', 'Mn', 'O')
-                if element_col is not None:
-                    elements.append(parts[element_col])
-                # Extract all numeric values, skipping the 'element' string column
-                ni = 0
-                for ci, c in enumerate(columns):
-                    if c == 'element':
-                        continue
-                    atom_data[ai, ni] = float(parts[ci])
-                    ni += 1
+            if element_col is None:
+                atom_data = np.array(tokens, dtype=np.float64).reshape(natoms, n_raw)
+                elements = None
+            else:
+                grid = np.array(tokens, dtype=object).reshape(natoms, n_raw)
+                # Fixed-width str array (e.g. '<U2'): ~8 bytes/atom instead of a
+                # Python str object per atom, and still compares/hashes like str.
+                elements = grid[:, element_col].astype(str)
+                numeric_pos = [i for i in range(n_raw) if i != element_col]
+                atom_data = grid[:, numeric_pos].astype(np.float64)
+                del grid
+            del tokens
 
             frames.append({
                 'timestep': timestep,
@@ -205,7 +209,11 @@ def parse_log(filepath):
         'density': 'density',
     }
 
-    blocks = []              # Accumulated thermo blocks: [(headers, data, stages), ...]
+    def _as_block(headers, rows, stages):
+        # Nested float lists cost ~32 bytes/value; keep finished blocks as ndarrays.
+        return (headers, np.array(rows, dtype=np.float64), stages)
+
+    blocks = []              # Accumulated thermo blocks: [(headers, ndarray, stages), ...]
     current_headers = None   # Column names for the current thermo block
     current_data = []        # Rows of numeric data for the current block
     current_stages = []      # Stage label for each row in the current block
@@ -248,7 +256,7 @@ def parse_log(filepath):
                 any(k in line for k in ('Temp', 'PotEng', 'TotEng', 'KinEng', 'pe', 'ke'))):
                 if reading and current_data:
                     # Save the previous thermo block before starting a new one
-                    blocks.append((current_headers, current_data, current_stages))
+                    blocks.append(_as_block(current_headers, current_data, current_stages))
                 # Start a new thermo block with the detected column headers
                 current_headers = line.split()
                 current_data = []
@@ -263,7 +271,7 @@ def parse_log(filepath):
                             line.startswith('WARNING') or 'cg style' in low or
                             'minimize' in low):
                 if current_data:
-                    blocks.append((current_headers, current_data, current_stages))
+                    blocks.append(_as_block(current_headers, current_data, current_stages))
                 reading = False
                 current_headers = None
                 continue
@@ -281,13 +289,13 @@ def parse_log(filepath):
                     except ValueError:
                         # Non-numeric line encountered — end this thermo block
                         if current_data:
-                            blocks.append((current_headers, current_data, current_stages))
+                            blocks.append(_as_block(current_headers, current_data, current_stages))
                         reading = False
                         current_headers = None
 
     # Capture the last thermo block if the file ends during data reading
     if reading and current_data:
-        blocks.append((current_headers, current_data, current_stages))
+        blocks.append(_as_block(current_headers, current_data, current_stages))
 
     if not blocks:
         return None  # No thermo data found in the entire log file
@@ -307,9 +315,9 @@ def parse_log(filepath):
     merged_data, stages = [], []
     for hdr, data, stg in blocks:
         if hdr == headers:
-            merged_data.extend(data)
+            merged_data.append(data)
             stages.extend(stg if len(stg) == len(data) else [''] * len(data))
-    arr = np.array(merged_data)
+    arr = np.concatenate(merged_data)
 
     # Order by step and drop rows whose step repeats (block boundaries print
     # the same step twice). These templates use one monotonic step counter, so

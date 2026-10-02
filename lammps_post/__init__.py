@@ -47,11 +47,8 @@ VERSION = "1.2.0"
 # Density conversion: amu/A^3 -> g/cm^3
 # Factor = (1 amu in kg) * (1e3 g/kg) / (1 A^3 in cm^3)
 #        = 1.660539e-27 * 1e3 / 1e-24 = 1.660539
-try:
-    from scipy.constants import u as _AMU_KG
-    DENSITY_CONVERSION = (_AMU_KG * 1e3) / 1e-24   # amu/A^3 -> g/cm^3
-except ImportError:
-    DENSITY_CONVERSION = 1.660539  # fallback value
+_AMU_KG = 1.66053906660e-27                    # CODATA 2018 atomic mass constant
+DENSITY_CONVERSION = (_AMU_KG * 1e3) / 1e-24   # amu/A^3 -> g/cm^3
 
 # Pressure unit conversions (from LAMMPS native units)
 BAR_TO_GPA = 1e-4           # bar -> GPa (metal units)

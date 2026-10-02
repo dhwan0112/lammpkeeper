@@ -22,6 +22,7 @@ import os
 import sys
 import shlex
 import glob as globmod
+import importlib.util
 import readline
 import atexit
 
@@ -58,23 +59,17 @@ from lammps_post.plotting import (
 from lammps_post.state import SessionState
 
 # ── Optional dependency detection (for banner and export commands) ──
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
+# find_spec only locates the package; importing pandas/scipy/MDAnalysis here
+# would keep hundreds of MB resident for a banner line. Import at point of use.
+def _has_module(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
-try:
-    from scipy.spatial import cKDTree
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-
-try:
-    import MDAnalysis as mda
-    HAS_MDA = True
-except ImportError:
-    HAS_MDA = False
+HAS_PANDAS = _has_module('pandas')
+HAS_SCIPY = _has_module('scipy')
+HAS_MDA = _has_module('MDAnalysis')
 
 # Lazy import: only need plt if HAS_MPL is True
 if HAS_MPL:
@@ -2550,6 +2545,7 @@ class LammpsPostShell(cmd.Cmd):
             if isinstance(v, np.ndarray) and v.ndim == 1:
                 df_data[k] = v
         if df_data:
+            import pandas as pd
             df = pd.DataFrame(df_data)
             df.to_csv(fname, index=False)
             progress_msg(f"Exported: {C.ok(fname)}")
@@ -2576,6 +2572,7 @@ class LammpsPostShell(cmd.Cmd):
             if isinstance(v, np.ndarray) and v.ndim == 1:
                 df_data[k] = v
         if df_data:
+            import pandas as pd
             df = pd.DataFrame(df_data)
             with open(fname, 'w') as f:
                 f.write(df.to_latex(index=False, float_format='%.4f'))
