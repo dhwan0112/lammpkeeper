@@ -144,6 +144,89 @@ def test_partial_last_line_raises():
       os.remove(path)
 
 
+def _frames_equal(a, b):
+   import numpy as np
+   assert a['timestep'] == b['timestep'] and a['natoms'] == b['natoms']
+   assert np.array_equal(a['box'], b['box'])
+   assert a['atoms'].dtype == b['atoms'].dtype and np.array_equal(a['atoms'], b['atoms'])
+   if a['elements'] is None:
+      assert b['elements'] is None
+   else:
+      assert list(a['elements']) == list(b['elements'])
+
+
+def test_lazy_frames_match_parse_dump_at_any_cache_size():
+   if not have_numpy():
+      return
+   import numpy as np
+   from lammps_post.parsers import parse_dump, DumpReader, LazyFrames
+   path = _write(''.join(_frame(s, REAX_ROWS[: 1 + s % 3]) for s in range(9)))
+   try:
+      for kw in ({}, {'stride': 2}, {'max_frames': 4}, {'stride': 3, 'max_frames': 2}):
+         ref, _, _ = parse_dump(path, **kw)
+         for cache_bytes in (0, 200, 10 ** 9):   # stream / evicting / fully cached
+            lf = LazyFrames(DumpReader(path), cache_bytes=cache_bytes, **kw)
+            assert len(lf) == len(ref) and bool(lf)
+            for a, b in zip(ref, lf):
+               _frames_equal(a, b)
+            _frames_equal(ref[-1], lf[-1])
+            for a, b in zip(ref[1:], lf[1:]):
+               _frames_equal(a, b)
+            assert np.array_equal(lf.boxes, [f['box'] for f in ref])
+            assert list(lf.timesteps) == [f['timestep'] for f in ref]
+   finally:
+      os.remove(path)
+
+
+def test_lazy_frames_transform_survives_eviction():
+   if not have_numpy():
+      return
+   from lammps_post.parsers import DumpReader, LazyFrames
+   path = _write(''.join(_frame(s, REAX_ROWS) for s in range(4)))
+   try:
+      lf = LazyFrames(DumpReader(path), cache_bytes=0)
+      lf.set_transform(lambda fr: dict(fr, atoms=fr['atoms'] * 2))
+      assert all(fr['atoms'][0, 0] == 2.0 for fr in lf)
+      assert lf[0]['atoms'][0, 0] == 2.0
+   finally:
+      os.remove(path)
+
+
+def test_lazy_frames_raise_on_truncated_frame_access():
+   if not have_numpy():
+      return
+   from lammps_post.parsers import DumpReader, LazyFrames
+   text = _frame(0, REAX_ROWS) + _frame(100, REAX_ROWS)
+   path = _write(text.rsplit('\n', 2)[0] + '\n')
+   try:
+      lf = LazyFrames(DumpReader(path))
+      assert len(lf) == 2 and lf[0]['natoms'] == 3
+      _expect_value_error(lambda: lf[-1], 'step 100')
+   finally:
+      os.remove(path)
+
+
+def test_shell_streaming_load_matches_golden():
+   """--cache-mb 0 re-parses every frame from disk; physics must not change."""
+   if not have_numpy():
+      return
+   from _util import FIXTURE, noninteractive, section_hash
+   if not os.path.exists(FIXTURE):
+      return
+   from test_regression_numeric import GOLDEN_FAST
+   from lammps_post import analysis as A
+   from lammps_post.shell import LammpsPostShell
+   sh = LammpsPostShell()
+   with noninteractive():
+      sh.do_load(f'dump {FIXTURE} --cache-mb 0')
+   s = sh.state
+   assert s.dump_frames.cache_bytes == 0
+   assert section_hash(dict(s.ff_info)) == GOLDEN_FAST['post_ff_info']
+   assert section_hash(s._guess_o_type()) == GOLDEN_FAST['post_guess_o_type']
+   spin = A.analyze_spin_evolution(s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs)
+   assert section_hash(spin) == GOLDEN_FAST['spin']
+
+
 def test_layout_change_raises():
    if not have_numpy():
       return

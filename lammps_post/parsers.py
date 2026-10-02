@@ -16,8 +16,11 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 ═══════════════════════════════════════════════════════════════
 """
 
+import mmap
 import os
 import re
+from collections.abc import Sequence
+
 import numpy as np
 
 from lammpkeeper.common.mapping import type_to_label
@@ -88,6 +91,9 @@ ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
 # Parse width for element labels; shrunk to the longest label afterwards.
 _ELEMENT_PARSE_DTYPE = 'U16'
 
+# DumpReader.index() returns scanned mmap pages to the OS every this many bytes.
+_INDEX_RELEASE_BYTES = 32 * 1024 ** 2
+
 
 class DumpReader:
     """
@@ -142,6 +148,72 @@ class DumpReader:
                 if line.startswith('ITEM: ATOMS'):
                     return line.split()[2:]
         return []
+
+    def index(self):
+        """
+        Scan the file once for frame headers without parsing atom data.
+
+        The search for each next 'ITEM: TIMESTEP' runs inside mmap.find (C
+        speed), so indexing costs about one sequential read of the file.
+        Returns a DumpIndex with per-frame timestep, natoms, box and the byte
+        span of the atom block, which read_frame() uses for random access.
+        """
+        idx = DumpIndex()
+        if os.path.getsize(self.filepath) == 0:
+            return idx.finalize()
+        marker = b'ITEM: TIMESTEP'
+        can_release = hasattr(mmap, 'MADV_DONTNEED')
+        with open(self.filepath, 'rb') as f, \
+                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            size = mm.size()
+            released = 0
+            pos = mm.find(marker)
+            while pos != -1:
+                # Scanned pages count toward RSS until dropped; release them in
+                # page-aligned steps so indexing a multi-GB dump stays small.
+                if can_release and pos - released >= _INDEX_RELEASE_BYTES:
+                    upto = pos - pos % mmap.PAGESIZE
+                    mm.madvise(mmap.MADV_DONTNEED, released, upto - released)
+                    released = upto
+                mm.seek(pos)
+                mm.readline()                   # ITEM: TIMESTEP
+                timestep = int(mm.readline())
+                mm.readline()                   # ITEM: NUMBER OF ATOMS
+                natoms = int(mm.readline())
+                mm.readline()                   # ITEM: BOX BOUNDS ...
+                box = [[float(v) for v in mm.readline().split()[:2]] for _ in range(3)]
+                header = mm.readline().decode().split()[2:]
+                if header != self.raw_columns:
+                    raise ValueError(
+                        f"{self.filepath}: column layout changes at step {timestep}: "
+                        f"{header} != {self.raw_columns}")
+                start = mm.tell()
+                pos = mm.find(marker, start)
+                idx.add(timestep, natoms, box, start, size if pos == -1 else pos)
+        return idx.finalize()
+
+    def read_frame(self, index, k):
+        """Parse frame k of `index` (from self.index()) with one seek + read."""
+        start, end = int(index.block_start[k]), int(index.block_end[k])
+        natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
+        with open(self.filepath, 'rb') as f:
+            f.seek(start)
+            text = f.read(end - start).decode()
+        # Only the first natoms lines belong to the frame, as with readline().
+        lines = text.split('\n', natoms)[:natoms] if natoms else []
+        atoms, elements = self._parse_block(lines, natoms, timestep)
+        return {
+            'timestep': timestep,
+            'natoms': natoms,
+            'box': index.boxes[k].copy(),
+            'atoms': atoms,
+            'elements': elements,
+        }
+
+    def frame_nbytes(self, natoms):
+        """Estimated memory of one parsed frame (atoms + 2-letter elements)."""
+        per_atom = len(self.columns) * self.dtype.itemsize + (8 if self.has_elements else 0)
+        return natoms * per_atom
 
     def __iter__(self):
         n_seen = 0
@@ -217,6 +289,151 @@ class DumpReader:
                 f"{self.filepath}: frame at step {timestep} has {len(atoms)} atom lines, "
                 f"expected {natoms} (truncated dump?)")
         return atoms, elements
+
+
+class DumpIndex:
+    """Per-frame metadata from DumpReader.index(): arrays of length n_frames."""
+
+    def __init__(self):
+        self._rows = []
+
+    def add(self, timestep, natoms, box, block_start, block_end):
+        self._rows.append((timestep, natoms, box, block_start, block_end))
+
+    def finalize(self):
+        rows = self._rows
+        self.timesteps = np.array([r[0] for r in rows], dtype=np.int64)
+        self.natoms = np.array([r[1] for r in rows], dtype=np.int64)
+        self.boxes = np.array([r[2] for r in rows], dtype=np.float64).reshape(-1, 3, 2)
+        self.block_start = np.array([r[3] for r in rows], dtype=np.int64)
+        self.block_end = np.array([r[4] for r in rows], dtype=np.int64)
+        del self._rows
+        return self
+
+    def __len__(self):
+        return len(self.timesteps)
+
+
+# Default memory budget for LazyFrames' parsed-frame cache.
+DEFAULT_CACHE_BYTES = 1024 * 1024 ** 2
+
+
+class _FrameStore:
+    """
+    Parsed-frame cache shared by a LazyFrames and all of its slices.
+
+    Fill-then-keep rather than LRU: analyses scan the whole trajectory in
+    order, and LRU over a scan longer than the budget never hits while still
+    holding a full budget of frames. Keeping the first frames that fit gives
+    every later scan that many hits, at the same memory ceiling.
+    """
+
+    def __init__(self, reader, index, cache_bytes, transform):
+        self.reader = reader
+        self.index = index
+        self.cache_bytes = cache_bytes
+        self.transform = transform
+        self.cache = {}
+        self.cached_bytes = 0
+
+    def get(self, k):
+        fr = self.cache.get(k)
+        if fr is not None:
+            return fr
+        fr = self.reader.read_frame(self.index, k)
+        if self.transform is not None:
+            fr = self.transform(fr)
+        nbytes = fr['atoms'].nbytes + (fr['elements'].nbytes if fr['elements'] is not None else 0)
+        if self.cached_bytes + nbytes <= self.cache_bytes:
+            self.cache[k] = fr
+            self.cached_bytes += nbytes
+        return fr
+
+    def clear(self):
+        self.cache.clear()
+        self.cached_bytes = 0
+
+
+class LazyFrames(Sequence):
+    """
+    Read-only list of dump frames that parses each frame from disk on access.
+
+    Drop-in for parse_dump's frame list: supports len(), integer (incl.
+    negative) indexing, slicing (returns another LazyFrames), iteration and
+    truthiness. Parsed frames are cached up to `cache_bytes`: a trajectory
+    that fits is parsed once and then served from memory; for a larger one
+    the frames that fit stay cached and the rest stream from disk, one
+    frame at a time.
+
+    Frame dicts are shared with the cache and must be treated as read-only;
+    use set_transform() to derive per-frame data (e.g. a synthesized type
+    column) so it survives cache eviction.
+
+    Args:
+        reader:      DumpReader — decides columns and dtype.
+        index:       DumpIndex or None — from reader.index() (scanned if None).
+        cache_bytes: int — Parsed-frame cache budget (0 = always stream).
+        stride:      int — Keep every Nth frame, starting with the first.
+        max_frames:  int or None — Keep at most this many frames (None/0 = all).
+    """
+
+    def __init__(self, reader, index=None, cache_bytes=DEFAULT_CACHE_BYTES,
+                 stride=1, max_frames=None, transform=None, _store=None, _positions=None):
+        if _store is None:
+            if stride < 1:
+                raise ValueError(f"stride must be >= 1, got {stride}")
+            index = reader.index() if index is None else index
+            _store = _FrameStore(reader, index, cache_bytes, transform)
+            _positions = range(0, len(index), stride)
+            if max_frames:
+                _positions = _positions[:max_frames]
+        self._store = _store
+        self._positions = _positions
+
+    def __len__(self):
+        return len(self._positions)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return LazyFrames(None, _store=self._store, _positions=self._positions[i])
+        return self._store.get(self._positions[i])
+
+    def __iter__(self):
+        get = self._store.get
+        for k in self._positions:
+            yield get(k)
+
+    def set_transform(self, transform):
+        """Apply transform(frame) -> frame to every frame on load; clears the cache."""
+        self._store.transform = transform
+        self._store.clear()
+
+    @property
+    def reader(self):
+        return self._store.reader
+
+    @property
+    def timesteps(self):
+        return self._store.index.timesteps[list(self._positions)]
+
+    @property
+    def boxes(self):
+        """(n_frames, 3, 2) box bounds, from the index (no atom parsing)."""
+        return self._store.index.boxes[list(self._positions)]
+
+    @property
+    def estimated_bytes(self):
+        """Memory needed to hold every frame in this view in the cache."""
+        natoms = self._store.index.natoms[list(self._positions)]
+        return int(self._store.reader.frame_nbytes(int(natoms.sum())))
+
+    @property
+    def cache_bytes(self):
+        return self._store.cache_bytes
+
+    @property
+    def fits_in_cache(self):
+        return self.estimated_bytes <= self._store.cache_bytes
 
 
 def parse_log(filepath):

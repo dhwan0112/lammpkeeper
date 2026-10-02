@@ -547,8 +547,12 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     ti = col_idx['type']
 
     if z_range is None and frames:
-        zlo = min(fr['box'][2][0] for fr in frames)
-        zhi = max(fr['box'][2][1] for fr in frames)
+        boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
+        if boxes is not None:
+            zlo, zhi = float(boxes[:, 2, 0].min()), float(boxes[:, 2, 1].max())
+        else:
+            zlo = min(fr['box'][2][0] for fr in frames)
+            zhi = max(fr['box'][2][1] for fr in frames)
         z_range = (zlo, zhi)
 
     dz = (z_range[1] - z_range[0]) / n_bins

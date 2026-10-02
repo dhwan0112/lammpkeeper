@@ -31,7 +31,10 @@ import numpy as np
 from lammps_post import VERSION, CM_PER_INCH, WONG_PALETTE
 from lammps_post.display import C, print_table, print_kv, progress_msg, HAS_RICH
 
-from lammps_post.parsers import parse_dump, parse_log, parse_data_file, detect_forcefield, parse_input
+from lammps_post.parsers import (
+    parse_log, parse_data_file, detect_forcefield, parse_input,
+    DumpReader, LazyFrames, ANALYSIS_COLUMNS, DEFAULT_CACHE_BYTES,
+)
 
 from lammpkeeper.common.mapping import element_to_type as ff_element_to_type
 
@@ -273,6 +276,9 @@ class LammpsPostShell(cmd.Cmd):
     def do_load(self, arg):
         """
         Load a file: load dump|log|data|input <filepath> [--max N] [--stride N]
+                     dump only: [--lite] [--cache-mb N]
+          --lite        keep only analysis columns (id type element x y z q), as float32
+          --cache-mb N  parsed-frame memory budget (default 1024); larger dumps stream
         Multiple files: load dump f1.dump, log f2.log, data f3.data
         Auto-detect:    load <filepath>  (detects type from extension)
         """
@@ -324,12 +330,18 @@ class LammpsPostShell(cmd.Cmd):
         # Parse optional args
         max_frames = None
         stride = 1
+        lite = False
+        cache_mb = DEFAULT_CACHE_BYTES / 1024 ** 2
         i = 2
         while i < len(parts):
             if parts[i] == '--max' and i + 1 < len(parts):
                 max_frames = int(parts[i + 1]); i += 2
             elif parts[i] == '--stride' and i + 1 < len(parts):
                 stride = int(parts[i + 1]); i += 2
+            elif parts[i] == '--cache-mb' and i + 1 < len(parts):
+                cache_mb = float(parts[i + 1]); i += 2
+            elif parts[i] == '--lite':
+                lite = True; i += 1
             else:
                 i += 1
 
@@ -339,10 +351,22 @@ class LammpsPostShell(cmd.Cmd):
 
         if ftype == 'dump':
             progress_msg(f"Loading dump: {fpath} ...")
-            frames, columns, col_idx = parse_dump(fpath, max_frames=max_frames, stride=stride)
+            try:
+                if lite:
+                    reader = DumpReader(fpath, columns=ANALYSIS_COLUMNS, dtype=np.float32)
+                else:
+                    reader = DumpReader(fpath)
+                frames = LazyFrames(reader, cache_bytes=int(cache_mb * 1024 ** 2),
+                                    stride=stride, max_frames=max_frames)
+                if frames:
+                    frames[-1]   # parse the last frame now so a truncated dump fails at load
+            except (ValueError, OSError) as e:
+                print(C.err(f"  {e}"))
+                return
             if not frames:
                 print(C.err("  No frames found in dump file."))
                 return
+            columns, col_idx = list(reader.columns), dict(reader.col_idx)
 
             # If the dump has 'element' column but no 'type' column,
             # synthesize a numeric 'type' column from element labels.
@@ -356,23 +380,32 @@ class LammpsPostShell(cmd.Cmd):
                 # Mn and O would be numbered 1 and 2, and O (really type 3) would be
                 # read as Fe_down by every type-based analysis.
                 elem_to_type = None
+                lookup = None   # full mapping, so elements absent from frame 0 still resolve
                 for ff_name in ('ace', 'reaxff'):
                     canonical = ff_element_to_type(ff_name)
                     if set(unique_elems) <= set(canonical):
                         elem_to_type = {e: canonical[e] for e in unique_elems}
+                        lookup = dict(canonical)
                         break
                 if elem_to_type is None:
                     elem_to_type = {e: i + 1 for i, e in enumerate(unique_elems)}
+                    lookup = elem_to_type
                 progress_msg(f"Synthesizing 'type' column from elements: {elem_to_type}")
 
-                # Add type column to each frame's atoms array
-                type_col_idx = len(col_idx)
-                for fr in frames:
-                    type_arr = np.array([elem_to_type[e] for e in fr['elements']],
-                                        dtype=np.float64).reshape(-1, 1)
-                    fr['atoms'] = np.hstack([fr['atoms'], type_arr])
+                def add_type_column(fr, lookup=lookup):
+                    elements = fr['elements']
+                    type_arr = np.zeros((len(elements), 1), dtype=fr['atoms'].dtype)
+                    for e, t in lookup.items():
+                        type_arr[elements == e, 0] = t
+                    unknown = set(elements[type_arr[:, 0] == 0].tolist())
+                    if unknown:
+                        raise ValueError(
+                            f"step {fr['timestep']}: element(s) {sorted(unknown)} have no "
+                            f"type mapping {lookup}")
+                    return dict(fr, atoms=np.hstack([fr['atoms'], type_arr]))
 
-                col_idx['type'] = type_col_idx
+                frames.set_transform(add_type_column)
+                col_idx['type'] = len(col_idx)
                 columns.append('type')
 
             self.state.dump_path = fpath
@@ -394,6 +427,13 @@ class LammpsPostShell(cmd.Cmd):
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
                          f"({ff_info['unit_system']} units, dt={ff_info['dt_fs']} fs)")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
+            est_mb = frames.estimated_bytes / 1024 ** 2
+            if frames.fits_in_cache:
+                progress_msg(f"Frames cached in memory on first use (~{est_mb:.0f} MB)")
+            else:
+                progress_msg(C.warn(
+                    f"Streaming from disk: ~{est_mb:.0f} MB of frames exceeds the "
+                    f"{cache_mb:.0f} MB cache (raise with --cache-mb, shrink with --lite)"))
             progress_msg(f"Types: {ff_info['atom_types']}")
             if self.state.surface_z:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
@@ -2853,6 +2893,7 @@ class LammpsPostShell(cmd.Cmd):
         help_text = f"""
 {C.bold('FILE I/O')}
   load dump <path> [--max N] [--stride N]   Load trajectory file
+            [--lite] [--cache-mb N]         float32 analysis columns / frame cache budget
   load log <path>                           Load LAMMPS log file
   load data <path>                          Load LAMMPS data file
   unload dump|log|data                      Unload a file
