@@ -22,7 +22,7 @@ import numpy as np
 
 from lammpkeeper.common.mapping import type_to_label
 
-def parse_dump(filepath, max_frames=None, stride=1):
+def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float64):
     """
     Universal LAMMPS dump / lammpstrj trajectory file parser.
 
@@ -54,6 +54,12 @@ def parse_dump(filepath, max_frames=None, stride=1):
         stride:     int — Read every Nth frame (default: 1 = all frames).
                     stride=10 reads frames 1, 11, 21, ... to reduce
                     memory usage for long trajectories.
+        columns:    iterable[str] or None — Keep only these columns
+                    (e.g. ANALYSIS_COLUMNS). None keeps every column.
+        dtype:      numpy dtype of the 'atoms' arrays (float32 halves memory).
+
+    All frames are held in memory; iterate a DumpReader instead to process
+    one frame at a time.
 
     Returns:
         frames:  list[dict] — One dict per frame with keys:
@@ -66,93 +72,151 @@ def parse_dump(filepath, max_frames=None, stride=1):
         col_idx: dict[str, int] — Mapping from column name to index in the atoms array.
                    Example: col_idx['z'] = 4 means atoms[:, 4] gives z-coordinates.
     """
-    frames = []
-    columns = None
-    col_idx = None
-    element_col = None  # Column index of 'element' in raw line (string, not stored in atoms array)
-    n_read = 0          # Total frames encountered (before stride filtering)
+    reader = DumpReader(filepath, columns=columns, dtype=dtype,
+                        stride=stride, max_frames=max_frames)
+    frames = list(reader)
+    col_idx = dict(reader.col_idx) if reader.raw_columns else None
+    return frames, list(reader.columns), col_idx
 
-    with open(filepath, 'r') as f:
-        while True:
-            line = f.readline()
-            if not line:
-                break  # End of file
-            if 'ITEM: TIMESTEP' not in line:
-                continue  # Skip until we find the start of a new frame
 
-            # --- Parse frame header ---
-            timestep = int(f.readline().strip())
-            f.readline()  # Skip "ITEM: NUMBER OF ATOMS" label line
-            natoms = int(f.readline().strip())
-            f.readline()  # Skip "ITEM: BOX BOUNDS" label line
-            # Read 3 box dimension lines: each has "lo hi" values
-            box = np.array([list(map(float, f.readline().split()[:2])) for _ in range(3)])
+# Non-numeric dump columns, kept out of the numeric 'atoms' array.
+STRING_COLUMNS = ('element',)
 
-            # Read the column header line: "ITEM: ATOMS id type x y z ..."
-            header_line = f.readline().strip()
+# Every column the analysis and plotting code reads, for DumpReader(columns=...).
+ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
 
-            # --- First frame only: detect column layout ---
-            if columns is None:
-                raw_cols = header_line.replace('ITEM: ATOMS ', '').split()
-                columns = raw_cols
-                # Separate numeric columns from string columns ('element').
-                # Build col_idx mapping: column_name -> index in numeric array.
-                numeric_cols = []
-                col_idx = {}
-                ni = 0  # Running index for numeric columns
-                for i, c in enumerate(raw_cols):
-                    if c == 'element':
-                        element_col = i  # Remember position for string extraction
-                    else:
-                        col_idx[c] = ni
-                        numeric_cols.append(c)
-                        ni += 1
+# Parse width for element labels; shrunk to the longest label afterwards.
+_ELEMENT_PARSE_DTYPE = 'U16'
 
-            # --- Apply stride: skip frames not matching the stride pattern ---
-            n_read += 1
-            if stride > 1 and (n_read - 1) % stride != 0:
-                # Fast-skip: read and discard all atom lines for this frame
-                for _ in range(natoms):
-                    f.readline()
-                continue
 
-            # --- Read atom data for this frame ---
-            n_raw = len(columns)
-            tokens = ''.join([f.readline() for _ in range(natoms)]).split()
-            if len(tokens) != natoms * n_raw:
-                raise ValueError(
-                    f"{filepath}: frame at step {timestep} has {len(tokens)} values, "
-                    f"expected {natoms} atoms x {n_raw} columns (truncated dump?)")
+class DumpReader:
+    """
+    Lazy LAMMPS dump reader: iterating yields one frame dict at a time, so a
+    trajectory can be analyzed in memory proportional to one frame.
 
-            if element_col is None:
-                atom_data = np.array(tokens, dtype=np.float64).reshape(natoms, n_raw)
+    Frame dicts have the same keys as parse_dump's (timestep, natoms, box,
+    atoms, elements). The column layout is read from the first frame on
+    construction and exposed as `raw_columns` (file order, all columns),
+    `columns` (kept numeric columns) and `col_idx` (name -> atoms column).
+
+    Args:
+        filepath:   str — Path to the dump or lammpstrj file.
+        columns:    iterable[str] or None — Keep only these columns (names not
+                    in the file are ignored). None keeps every column. Skipped
+                    columns are never converted, which also speeds parsing.
+        dtype:      numpy dtype for the 'atoms' array. float32 halves memory;
+                    ids/types stay exact below 2**24 (16.7M).
+        stride:     int — Yield every Nth frame, starting with the first.
+        max_frames: int or None — Stop after yielding this many frames
+                    (None or 0 = no limit).
+
+    Raises ValueError on a malformed or truncated atom block, or when a later
+    frame changes the column layout.
+    """
+
+    def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None):
+        if stride < 1:
+            raise ValueError(f"stride must be >= 1, got {stride}")
+        self.filepath = filepath
+        self.dtype = np.dtype(dtype)
+        self.stride = stride
+        self.max_frames = max_frames
+        self.raw_columns = self._read_layout()
+
+        keep = None if columns is None else set(columns)
+        self._usecols = [i for i, c in enumerate(self.raw_columns) if keep is None or c in keep]
+        kept = [self.raw_columns[i] for i in self._usecols]
+        self.columns = [c for c in kept if c not in STRING_COLUMNS]
+        self.col_idx = {c: i for i, c in enumerate(self.columns)}
+        self.has_elements = 'element' in kept
+
+        # Positions within `kept`, used to split the structured record array.
+        self._numeric_pos = [k for k, c in enumerate(kept) if c not in STRING_COLUMNS]
+        self._element_pos = kept.index('element') if self.has_elements else None
+        self._row_dtype = [(f'c{k}', _ELEMENT_PARSE_DTYPE if c in STRING_COLUMNS else self.dtype)
+                           for k, c in enumerate(kept)]
+
+    def _read_layout(self):
+        with open(self.filepath, 'r') as f:
+            for line in f:
+                if line.startswith('ITEM: ATOMS'):
+                    return line.split()[2:]
+        return []
+
+    def __iter__(self):
+        n_seen = 0
+        n_yielded = 0
+        with open(self.filepath, 'r') as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    return
+                if 'ITEM: TIMESTEP' not in line:
+                    continue
+
+                timestep = int(f.readline())
+                f.readline()                    # ITEM: NUMBER OF ATOMS
+                natoms = int(f.readline())
+                f.readline()                    # ITEM: BOX BOUNDS ...
+                # lo/hi per axis; a triclinic tilt factor (3rd value) is ignored.
+                box = np.array([[float(v) for v in f.readline().split()[:2]]
+                                for _ in range(3)])
+                header = f.readline().split()[2:]
+                if header != self.raw_columns:
+                    raise ValueError(
+                        f"{self.filepath}: column layout changes at step {timestep}: "
+                        f"{header} != {self.raw_columns}")
+
+                n_seen += 1
+                if (n_seen - 1) % self.stride:
+                    for _ in range(natoms):
+                        f.readline()
+                    continue
+
+                lines = [f.readline() for _ in range(natoms)]
+                atoms, elements = self._parse_block(lines, natoms, timestep)
+                yield {
+                    'timestep': timestep,
+                    'natoms': natoms,
+                    'box': box,
+                    'atoms': atoms,
+                    'elements': elements,
+                }
+
+                n_yielded += 1
+                if self.max_frames and n_yielded >= self.max_frames:
+                    return
+
+    def _parse_block(self, lines, natoms, timestep):
+        n_numeric = len(self._numeric_pos)
+        if natoms == 0:
+            empty_elements = np.empty(0, dtype='U1') if self.has_elements else None
+            return np.empty((0, n_numeric), dtype=self.dtype), empty_elements
+
+        try:
+            if not self.has_elements:
+                atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2)
                 elements = None
             else:
-                grid = np.array(tokens, dtype=object).reshape(natoms, n_raw)
-                # Fixed-width str array (e.g. '<U2'): ~8 bytes/atom instead of a
-                # Python str object per atom, and still compares/hashes like str.
-                elements = grid[:, element_col].astype(str)
-                numeric_pos = [i for i in range(n_raw) if i != element_col]
-                atom_data = grid[:, numeric_pos].astype(np.float64)
-                del grid
-            del tokens
+                rec = np.loadtxt(lines, dtype=self._row_dtype, usecols=self._usecols, ndmin=1)
+                names = rec.dtype.names
+                elements = rec[names[self._element_pos]]
+                # Fixed-width str array: ~8 bytes/atom for 2-letter symbols,
+                # and elements still compare/hash like Python str.
+                width = max(1, int(np.char.str_len(elements).max()))
+                elements = elements.astype(f'U{width}')
+                atoms = np.empty((len(rec), n_numeric), dtype=self.dtype)
+                for j, k in enumerate(self._numeric_pos):
+                    atoms[:, j] = rec[names[k]]
+        except ValueError as e:
+            raise ValueError(
+                f"{self.filepath}: malformed atom block at step {timestep}: {e}") from None
 
-            frames.append({
-                'timestep': timestep,
-                'natoms': natoms,
-                'box': box,
-                'atoms': atom_data,
-                'elements': elements,
-            })
-
-            # Stop early if max_frames limit reached
-            if max_frames and len(frames) >= max_frames:
-                break
-
-    # Build the final numeric column list (excluding 'element')
-    numeric_columns = [c for c in columns if c != 'element'] if columns else []
-
-    return frames, numeric_columns, col_idx
+        if len(atoms) != natoms:
+            raise ValueError(
+                f"{self.filepath}: frame at step {timestep} has {len(atoms)} atom lines, "
+                f"expected {natoms} (truncated dump?)")
+        return atoms, elements
 
 
 def parse_log(filepath):
