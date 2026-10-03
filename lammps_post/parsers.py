@@ -342,23 +342,23 @@ class DumpIndex:
 
 
 # Default memory budget for LazyFrames' parsed-frame cache.
-DEFAULT_CACHE_BYTES = 1024 * 1024 ** 2
+DEFAULT_CACHE_BYTES = 128 * 1024 ** 2
 
 
 class _FrameStore:
     """
     Parsed-frame cache shared by a LazyFrames and all of its slices.
 
-    Fill-then-keep rather than LRU: analyses scan the whole trajectory in
-    order, and LRU over a scan longer than the budget never hits while still
-    holding a full budget of frames. Keeping the first frames that fit gives
-    every later scan that many hits, at the same memory ceiling.
+    All or nothing: LazyFrames turns caching off (`keep`) when its frames do
+    not all fit. A partial cache would hold a full budget of memory to save
+    re-parsing only some frames, and analyze-all already shares one pass.
     """
 
     def __init__(self, reader, index, cache_bytes, transform):
         self.reader = reader
         self.index = index
         self.cache_bytes = cache_bytes
+        self.keep = True
         self.transform = transform
         self.cache = {}
         self.cached_bytes = 0
@@ -373,7 +373,7 @@ class _FrameStore:
             fr = self.transform(fr)
         nbytes = fr['atoms'].nbytes + (fr['elements'].nbytes if fr['elements'] is not None else 0)
         with self._lock:
-            if k not in self.cache and self.cached_bytes + nbytes <= self.cache_bytes:
+            if self.keep and k not in self.cache and self.cached_bytes + nbytes <= self.cache_bytes:
                 self.cache[k] = fr
                 self.cached_bytes += nbytes
         return fr
@@ -389,10 +389,9 @@ class LazyFrames(Sequence):
 
     Drop-in for parse_dump's frame list: supports len(), integer (incl.
     negative) indexing, slicing (returns another LazyFrames), iteration and
-    truthiness. Parsed frames are cached up to `cache_bytes`: a trajectory
-    that fits is parsed once and then served from memory; for a larger one
-    the frames that fit stay cached and the rest stream from disk, one
-    frame at a time.
+    truthiness. A trajectory whose parsed frames fit in `cache_bytes` is
+    parsed once and then served from memory; a larger one streams from disk
+    one frame at a time and keeps no frames.
 
     Frame dicts are shared with the cache and must be treated as read-only;
     use set_transform() to derive per-frame data (e.g. a synthesized type
@@ -408,7 +407,8 @@ class LazyFrames(Sequence):
 
     def __init__(self, reader, index=None, cache_bytes=DEFAULT_CACHE_BYTES,
                  stride=1, max_frames=None, transform=None, _store=None, _positions=None):
-        if _store is None:
+        new_store = _store is None
+        if new_store:
             if stride < 1:
                 raise ValueError(f"stride must be >= 1, got {stride}")
             index = reader.index() if index is None else index
@@ -419,6 +419,8 @@ class LazyFrames(Sequence):
         self._store = _store
         self._positions = _positions
         self._shared = None
+        if new_store:
+            _store.keep = self.fits_in_cache
 
     def __len__(self):
         return len(self._positions)

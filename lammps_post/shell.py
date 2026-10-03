@@ -299,9 +299,11 @@ class LammpsPostShell(cmd.Cmd):
     def do_load(self, arg):
         """
         Load a file: load dump|log|data|input <filepath> [--max N] [--stride N]
-                     dump only: [--lite] [--cache-mb N]
-          --lite        keep only analysis columns (id type element x y z q), as float32
-          --cache-mb N  parsed-frame memory budget (default 1024); larger dumps stream
+                     dump only: [--lite] [--all-columns] [--cache-mb N]
+          Only the columns analyses read (id type element x y z q) are kept.
+          --lite         store them as float32 (half the memory, approximate)
+          --all-columns  keep every dump column (e.g. vx vy vz)
+          --cache-mb N   parsed-frame memory budget (default 128); larger dumps stream
         Multiple files: load dump f1.dump, log f2.log, data f3.data
         Auto-detect:    load <filepath>  (detects type from extension)
         """
@@ -354,6 +356,7 @@ class LammpsPostShell(cmd.Cmd):
         max_frames = None
         stride = 1
         lite = False
+        all_columns = False
         cache_mb = DEFAULT_CACHE_BYTES / 1024 ** 2
         i = 2
         while i < len(parts):
@@ -365,6 +368,8 @@ class LammpsPostShell(cmd.Cmd):
                 cache_mb = float(parts[i + 1]); i += 2
             elif parts[i] == '--lite':
                 lite = True; i += 1
+            elif parts[i] == '--all-columns':
+                all_columns = True; i += 1
             else:
                 i += 1
 
@@ -375,10 +380,9 @@ class LammpsPostShell(cmd.Cmd):
         if ftype == 'dump':
             progress_msg(f"Loading dump: {fpath} ...")
             try:
-                if lite:
-                    reader = DumpReader(fpath, columns=ANALYSIS_COLUMNS, dtype=np.float32)
-                else:
-                    reader = DumpReader(fpath)
+                reader = DumpReader(fpath,
+                                    columns=None if all_columns else ANALYSIS_COLUMNS,
+                                    dtype=np.float32 if lite else np.float64)
                 frames = LazyFrames(reader, cache_bytes=int(cache_mb * 1024 ** 2),
                                     stride=stride, max_frames=max_frames)
                 if frames:
@@ -439,6 +443,7 @@ class LammpsPostShell(cmd.Cmd):
 
             # Auto-detect force field
             ff_info = detect_forcefield(columns, col_idx, frames)
+            ff_info['has_velocity'] = 'vx' in reader.raw_columns
             self.state.ff_info = ff_info
 
             # Auto-detect surface z
@@ -447,6 +452,11 @@ class LammpsPostShell(cmd.Cmd):
             n_atoms = frames[0]['natoms']
             n_frames = len(frames)
             progress_msg(f"Columns: {C.info(', '.join(columns))}")
+            skipped = [c for c in reader.raw_columns
+                       if c not in columns and c != 'element']
+            if skipped:
+                progress_msg(f"Not loaded (unused by analyses): {', '.join(skipped)} "
+                             f"(--all-columns keeps them)")
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
                          f"({ff_info['unit_system']} units, dt={ff_info['dt_fs']} fs)")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
@@ -454,9 +464,9 @@ class LammpsPostShell(cmd.Cmd):
             if frames.fits_in_cache:
                 progress_msg(f"Frames cached in memory on first use (~{est_mb:.0f} MB)")
             else:
-                progress_msg(C.warn(
+                progress_msg(
                     f"Streaming from disk: ~{est_mb:.0f} MB of frames exceeds the "
-                    f"{cache_mb:.0f} MB cache (raise with --cache-mb, shrink with --lite)"))
+                    f"{cache_mb:.0f} MB cache (--cache-mb N to keep them in memory)")
             progress_msg(f"Types: {ff_info['atom_types']}")
             if self.state.surface_z:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
@@ -2998,7 +3008,8 @@ class LammpsPostShell(cmd.Cmd):
         help_text = f"""
 {C.bold('FILE I/O')}
   load dump <path> [--max N] [--stride N]   Load trajectory file
-            [--lite] [--cache-mb N]         float32 analysis columns / frame cache budget
+            [--lite] [--all-columns]        float32 columns / keep unused columns
+            [--cache-mb N]                  frame cache budget (default 128 MB)
   load log <path>                           Load LAMMPS log file
   load data <path>                          Load LAMMPS data file
   unload dump|log|data                      Unload a file

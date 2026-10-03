@@ -271,6 +271,31 @@ def test_native_parser_matches_loadtxt():
          os.remove(path)
 
 
+def test_shell_load_skips_unused_columns_unless_asked():
+   if not have_numpy():
+      return
+   import numpy as np
+   from _util import noninteractive
+   from lammps_post.shell import LammpsPostShell
+   rows = [r + (0.5, -0.5, 0.25) for r in REAX_ROWS]
+   path = _write(_frame(0, rows, cols='id type q x y z vx vy vz'))
+   try:
+      for opts, cols in (('', ['id', 'type', 'q', 'x', 'y', 'z']),
+                         ('--all-columns', ['id', 'type', 'q', 'x', 'y', 'z', 'vx', 'vy', 'vz'])):
+         sh = LammpsPostShell()
+         sh.state.output_dir = tempfile.mkdtemp(prefix='lkpr_test_')
+         with noninteractive():
+            sh.do_load(f'dump {path} {opts}')
+         s = sh.state
+         assert s.dump_columns == cols, s.dump_columns
+         assert s.ff_info['has_velocity'] is True
+         fr = s.dump_frames[0]
+         assert fr['atoms'].dtype == np.float64
+         assert np.array_equal(fr['atoms'][:, s.dump_col_idx['z']], [r[5] for r in rows])
+   finally:
+      os.remove(path)
+
+
 def test_layout_change_raises():
    if not have_numpy():
       return
