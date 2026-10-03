@@ -14,7 +14,8 @@ if TESTS_DIR not in sys.path:
    sys.path.insert(0, TESTS_DIR)
 
 MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_comparison',
-           'test_regression_numeric', 'test_parse_log_merge', 'test_dump_reader']
+           'test_regression_numeric', 'test_parse_log_merge', 'test_dump_reader',
+           'test_engine']
 
 
 def main():

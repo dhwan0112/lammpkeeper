@@ -18,6 +18,7 @@ The shell provides:
 """
 
 import cmd
+import io
 import os
 import sys
 import shlex
@@ -25,6 +26,8 @@ import glob as globmod
 import importlib.util
 import readline
 import atexit
+import threading
+import traceback
 
 import numpy as np
 
@@ -73,6 +76,26 @@ def _has_module(name):
 HAS_PANDAS = _has_module('pandas')
 HAS_SCIPY = _has_module('scipy')
 HAS_MDA = _has_module('MDAnalysis')
+
+
+class _PerThreadStdout:
+    """sys.stdout stand-in that sends each thread's writes to its own buffer."""
+
+    def __init__(self, real):
+        self._real = real
+        self._local = threading.local()
+
+    def redirect(self, buf):
+        self._local.buf = buf
+
+    def write(self, s):
+        return getattr(self._local, 'buf', self._real).write(s)
+
+    def flush(self):
+        getattr(self._local, 'buf', self._real).flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 # Lazy import: only need plt if HAS_MPL is True
 if HAS_MPL:
@@ -1092,29 +1115,28 @@ class LammpsPostShell(cmd.Cmd):
 
         print(f"\n  {C.bold('Running all applicable analyses...')}\n")
 
+        # A trajectory larger than the frame cache would be re-read from disk
+        # by every analysis; run them concurrently over one shared read instead.
+        # Needs surface_z up front: the RDF z_pbc default depends on whether it
+        # was known before the auto-detect below, so that case stays sequential.
+        shared = (bool(s.dump_frames) and not s.dump_frames.fits_in_cache
+                  and s.surface_z is not None)
+
         if s.dump_frames:
+            jobs = []
             if s.has_charge:
-                self._analyze_charge([])
-                self._analyze_charge_z([], _batch=True)
-                self._analyze_or([])
-            self._analyze_rdf([], _batch=True)
-            # For surface-dependent analyses, try auto-detect if not set
-            if s.surface_z is None:
-                s._guess_surface_z()
-                if s.surface_z:
-                    progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
-            if s.surface_z:
-                self._analyze_oar([])
-                self._analyze_penetration([])
-                self._analyze_penetration_trend([])
+                jobs.append(lambda: self._analyze_charge([]))
+                jobs.append(lambda: self._analyze_charge_z([], _batch=True))
+                jobs.append(lambda: self._analyze_or([]))
+            jobs.append(lambda: self._analyze_rdf([], _batch=True))
+            if shared:
+                jobs += self._dump_jobs_after_rdf(split_density=True)
+                self._run_jobs_shared(jobs)
             else:
-                print(C.warn("  Skipping OAR/penetration (surface_z unknown). "
-                             "Use 'set surface_z <value>' to enable."))
-            self._analyze_density([], _batch=True)
-            self._analyze_dissociation([])
-            if s.ff == 'ace':
-                self._analyze_spin([])
-            self._analyze_msd([], _batch=True)
+                for job in jobs:
+                    job()
+                for job in self._dump_jobs_after_rdf(split_density=False):
+                    job()
 
         if s.log_data:
             self._analyze_performance([])
@@ -1125,6 +1147,89 @@ class LammpsPostShell(cmd.Cmd):
         print(f"\n  {C.ok('All analyses complete.')}")
         print(f"  Cached results: {', '.join(s.cache.keys())}")
         print(f"  Use 'plot <name>' or 'plot all' to generate figures.")
+
+    def _dump_jobs_after_rdf(self, split_density):
+        """
+        Remaining dump analyses of 'analyze all', in order, as callables.
+        Building the list runs the surface auto-detect, which must happen
+        after the RDF job when running sequentially.
+        """
+        s = self.state
+        jobs = []
+        if s.surface_z is None:
+            s._guess_surface_z()
+            if s.surface_z:
+                progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
+        if s.surface_z:
+            jobs.append(lambda: self._analyze_oar([]))
+            jobs.append(lambda: self._analyze_penetration([]))
+            jobs.append(lambda: self._analyze_penetration_trend([]))
+        else:
+            jobs.append(lambda: print(C.warn(
+                "  Skipping OAR/penetration (surface_z unknown). "
+                "Use 'set surface_z <value>' to enable.")))
+        if split_density:
+            # One job per profile, so each joins the shared read instead of
+            # three profiles reading the trajectory one after another.
+            jobs.append(lambda: self._density_one(None, 'all'))
+            for name, type_id in self._density_species().items():
+                jobs.append(lambda n=name, t=type_id: self._density_one(t, n))
+        else:
+            jobs.append(lambda: self._analyze_density([], _batch=True))
+        jobs.append(lambda: self._analyze_dissociation([]))
+        if s.ff == 'ace':
+            jobs.append(lambda: self._analyze_spin([]))
+        jobs.append(lambda: self._analyze_msd([], _batch=True))
+        return jobs
+
+    def _run_jobs_shared(self, jobs):
+        """Run analysis jobs in threads over one shared trajectory read.
+
+        Each job's output is buffered and printed afterwards in job order, so
+        the transcript reads the same as a sequential run.
+        """
+        frames = self.state.dump_frames
+        progress_msg(f"Trajectory exceeds the {frames.cache_bytes / 1024 ** 2:.0f} MB frame "
+                     f"cache: running {len(jobs)} analyses over one shared read...")
+        outputs = [io.StringIO() for _ in jobs]
+        errors = [None] * len(jobs)
+        proxy = _PerThreadStdout(sys.stdout)
+
+        def run(i, job):
+            proxy.redirect(outputs[i])
+            try:
+                job()
+            except Exception:
+                errors[i] = traceback.format_exc()
+
+        saved = sys.stdout
+        sys.stdout = proxy
+        try:
+            with frames.shared_pass() as shared:
+                threads = [threading.Thread(target=run, args=(i, job), daemon=True)
+                           for i, job in enumerate(jobs)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+        finally:
+            sys.stdout = saved
+        for out, err in zip(outputs, errors):
+            sys.stdout.write(out.getvalue())
+            if err:
+                print(C.err(f"  Analysis failed: {err.strip().splitlines()[-1]}"))
+        progress_msg(f"Shared read parsed {shared.frames_parsed} of {len(frames)} frames once "
+                     f"for all analyses")
+
+    def _density_species(self):
+        return {str(v): k for k, v in self.state.atom_types.items() if isinstance(k, int)}
+
+    def _density_one(self, species_type, species_name):
+        s = self.state
+        progress_msg(f"Computing density profile (species: {species_name})...")
+        s.cache[f'density_{species_name}'] = compute_density_profile(
+            s.dump_frames, s.dump_col_idx,
+            species_type=species_type, species_name=species_name)
 
     def _analyze_charge(self, opts):
         if not self._require_dump() or not self._require_charge():

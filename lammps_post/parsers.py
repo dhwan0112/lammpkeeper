@@ -18,8 +18,11 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 
 import mmap
 import os
+import queue
 import re
+import threading
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -335,6 +338,7 @@ class _FrameStore:
         self.transform = transform
         self.cache = {}
         self.cached_bytes = 0
+        self._lock = threading.Lock()
 
     def get(self, k):
         fr = self.cache.get(k)
@@ -344,9 +348,10 @@ class _FrameStore:
         if self.transform is not None:
             fr = self.transform(fr)
         nbytes = fr['atoms'].nbytes + (fr['elements'].nbytes if fr['elements'] is not None else 0)
-        if self.cached_bytes + nbytes <= self.cache_bytes:
-            self.cache[k] = fr
-            self.cached_bytes += nbytes
+        with self._lock:
+            if k not in self.cache and self.cached_bytes + nbytes <= self.cache_bytes:
+                self.cache[k] = fr
+                self.cached_bytes += nbytes
         return fr
 
     def clear(self):
@@ -389,6 +394,7 @@ class LazyFrames(Sequence):
                 _positions = _positions[:max_frames]
         self._store = _store
         self._positions = _positions
+        self._shared = None
 
     def __len__(self):
         return len(self._positions)
@@ -399,9 +405,35 @@ class LazyFrames(Sequence):
         return self._store.get(self._positions[i])
 
     def __iter__(self):
+        shared = self._shared
+        if shared is not None:
+            return shared.subscribe()
+        return self._iter_range(0, len(self._positions))
+
+    def _iter_range(self, begin, end):
         get = self._store.get
-        for k in self._positions:
+        for k in self._positions[begin:end]:
             yield get(k)
+
+    @contextmanager
+    def shared_pass(self, depth=4):
+        """
+        While active, every iteration over this view (from any thread) is fed
+        by one producer that parses each frame once and hands it to all
+        iterators, so N concurrent analyses cost one read of the trajectory.
+
+        An iterator opened after the producer has moved on reads the frames it
+        missed on its own, then joins; each iterator still sees every frame in
+        order. `depth` frames may queue per iterator, so memory stays bounded.
+        Random access and slices are unaffected.
+        """
+        shared = _SharedPass(self, depth)
+        self._shared = shared
+        try:
+            yield shared
+        finally:
+            self._shared = None
+            shared.shutdown()
 
     def set_transform(self, transform):
         """Apply transform(frame) -> frame to every frame on load; clears the cache."""
@@ -434,6 +466,119 @@ class LazyFrames(Sequence):
     @property
     def fits_in_cache(self):
         return self.estimated_bytes <= self._store.cache_bytes
+
+
+_END = object()
+
+
+class _Failure:
+    def __init__(self, exc):
+        self.exc = exc
+
+
+class _Subscriber:
+    def __init__(self, depth):
+        self.queue = queue.Queue(maxsize=depth)
+        self.closed = False
+
+    def put(self, item, stop):
+        # Poll so a subscriber that stopped iterating cannot block the producer.
+        while not self.closed and not stop.is_set():
+            try:
+                self.queue.put(item, timeout=0.05)
+                return
+            except queue.Full:
+                continue
+
+    def close(self):
+        self.closed = True
+        try:
+            while True:
+                self.queue.get_nowait()
+        except queue.Empty:
+            pass
+
+
+class _SharedPass:
+    """Producer/subscriber state behind LazyFrames.shared_pass()."""
+
+    def __init__(self, view, depth):
+        self._view = view
+        self._depth = depth
+        self._lock = threading.Lock()
+        self._subs = []
+        self._next = 0              # position the producer parses next
+        self._producer = None
+        self._stop = threading.Event()
+        self.frames_parsed = 0
+
+    def subscribe(self):
+        n = len(self._view)
+        with self._lock:
+            start = self._next
+            if start >= n or self._stop.is_set():
+                sub = None
+            else:
+                sub = _Subscriber(self._depth)
+                self._subs.append(sub)
+                if self._producer is None:
+                    self._producer = threading.Thread(target=self._produce, daemon=True)
+                    self._producer.start()
+        if sub is None:
+            return self._view._iter_range(0, n)
+        return self._consume(sub, start)
+
+    def _consume(self, sub, start):
+        try:
+            # Frames parsed before this iterator joined are read independently.
+            yield from self._view._iter_range(0, start)
+            while True:
+                item = sub.queue.get()
+                if item is _END:
+                    return
+                if isinstance(item, _Failure):
+                    raise item.exc
+                yield item
+        finally:
+            sub.close()
+
+    def _produce(self):
+        get = self._view._store.get
+        positions = self._view._positions
+        n = len(positions)
+        try:
+            while True:
+                with self._lock:
+                    self._subs = [s for s in self._subs if not s.closed]
+                    i = self._next
+                    if self._stop.is_set() or not self._subs:
+                        self._producer = None   # a later subscriber restarts from _next
+                        return
+                    if i >= n:
+                        finished, self._subs, self._producer = self._subs, [], None
+                        break
+                fr = get(positions[i])
+                self.frames_parsed += 1
+                with self._lock:
+                    # Advancing _next and snapshotting under one lock: a subscriber
+                    # either joined in time to receive frame i here, or starts at i+1.
+                    self._next = i + 1
+                    targets = [s for s in self._subs if not s.closed]
+                for s in targets:
+                    s.put(fr, self._stop)
+            for s in finished:
+                s.put(_END, self._stop)
+        except BaseException as e:
+            with self._lock:
+                failed, self._subs, self._producer = self._subs, [], None
+            for s in failed:
+                s.put(_Failure(e), self._stop)
+
+    def shutdown(self):
+        self._stop.set()
+        producer = self._producer
+        if producer is not None:
+            producer.join(timeout=5)
 
 
 def parse_log(filepath):
