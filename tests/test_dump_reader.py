@@ -227,6 +227,50 @@ def test_shell_streaming_load_matches_golden():
    assert section_hash(spin) == GOLDEN_FAST['spin']
 
 
+def test_native_parser_matches_loadtxt():
+   """The Rust parser must return what the np.loadtxt path returns, bit for bit."""
+   if not have_numpy():
+      return
+   import numpy as np
+   from lammps_post import parsers
+   if parsers._native is None:
+      return
+   from _util import FIXTURE
+   rows = [(7, 'Fe', 1.5e-3, -2.5, 3.0000000000000004, '0.1'),
+           (9, 'O', 4.5, 'inf', 6.5, '-1e-300'),
+           (11, 'Fe', 0.1, 0.2, 0.30000000000000004, '7')]
+   text = (_frame(0, rows, cols='id element x y z q')
+           + _frame(1, rows[:1], cols='id element x y z q')
+           + _frame(2, [], cols='id element x y z q'))
+   path = _write(text)
+   paths = [path] + ([FIXTURE] if os.path.exists(FIXTURE) else [])
+   try:
+      for p in paths:
+         for columns in (None, ('element', 'x', 'z'), ('x', 'q')):
+            for dtype in (np.float64, np.float32):
+               r = parsers.DumpReader(p, columns=columns, dtype=dtype, max_frames=5)
+               native = list(r)
+               r._native = None
+               ref = list(r)
+               assert len(native) == len(ref)
+               for a, b in zip(ref, native):
+                  _frames_equal(a, b)
+                  if a['elements'] is not None:
+                     assert a['elements'].dtype == b['elements'].dtype
+   finally:
+      os.remove(path)
+
+   # Malformed blocks fall back to loadtxt, which reports the error.
+   bad = _frame(0, REAX_ROWS[:2] + [(3, 1, 'x0.4', 7.0, 8.0, 9.5)])
+   blank = _frame(0, REAX_ROWS).replace('\n2 2', '\n\n2 2')
+   for text, needle in ((bad, 'malformed'), (blank, 'atom lines')):
+      path = _write(text)
+      try:
+         _expect_value_error(lambda: parsers.parse_dump(path), needle)
+      finally:
+         os.remove(path)
+
+
 def test_layout_change_raises():
    if not have_numpy():
       return

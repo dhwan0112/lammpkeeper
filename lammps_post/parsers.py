@@ -28,6 +28,14 @@ import numpy as np
 
 from lammpkeeper.common.mapping import type_to_label
 
+# Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
+_native = None
+if not os.environ.get('LKPR_NO_NATIVE'):
+    try:
+        from . import _dumpparse as _native
+    except ImportError:
+        pass
+
 def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float64):
     """
     Universal LAMMPS dump / lammpstrj trajectory file parser.
@@ -144,6 +152,8 @@ class DumpReader:
         self._element_pos = kept.index('element') if self.has_elements else None
         self._row_dtype = [(f'c{k}', _ELEMENT_PARSE_DTYPE if c in STRING_COLUMNS else self.dtype)
                            for k, c in enumerate(kept)]
+        self._element_col = self._usecols[self._element_pos] if self.has_elements else None
+        self._native = _native if self.dtype in (np.float64, np.float32) else None
 
     def _read_layout(self):
         with open(self.filepath, 'r') as f:
@@ -201,10 +211,8 @@ class DumpReader:
         natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
         with open(self.filepath, 'rb') as f:
             f.seek(start)
-            text = f.read(end - start).decode()
-        # Only the first natoms lines belong to the frame, as with readline().
-        lines = text.split('\n', natoms)[:natoms] if natoms else []
-        atoms, elements = self._parse_block(lines, natoms, timestep)
+            block = f.read(end - start)
+        atoms, elements = self._parse_block(block, natoms, timestep)
         return {
             'timestep': timestep,
             'natoms': natoms,
@@ -248,8 +256,8 @@ class DumpReader:
                         f.readline()
                     continue
 
-                lines = [f.readline() for _ in range(natoms)]
-                atoms, elements = self._parse_block(lines, natoms, timestep)
+                block = ''.join([f.readline() for _ in range(natoms)]).encode()
+                atoms, elements = self._parse_block(block, natoms, timestep)
                 yield {
                     'timestep': timestep,
                     'natoms': natoms,
@@ -262,12 +270,28 @@ class DumpReader:
                 if self.max_frames and n_yielded >= self.max_frames:
                     return
 
-    def _parse_block(self, lines, natoms, timestep):
+    def _parse_block(self, block, natoms, timestep):
+        """Parse the first natoms lines of the atom block `block` (bytes)."""
         n_numeric = len(self._numeric_pos)
         if natoms == 0:
             empty_elements = np.empty(0, dtype='U1') if self.has_elements else None
             return np.empty((0, n_numeric), dtype=self.dtype), empty_elements
 
+        if self._native is not None:
+            try:
+                values, elements, rows = self._native.parse_block(
+                    block, natoms, self._usecols, self._element_col,
+                    self.dtype == np.float32)
+            except ValueError:
+                rows = -1
+            if rows == natoms:
+                atoms = np.frombuffer(values, dtype=self.dtype).reshape(natoms, n_numeric)
+                if elements is not None:
+                    elements = np.array(elements)
+                return atoms, elements
+
+        # Reference path; the native parser defers here for every error case.
+        lines = block.decode().split('\n', natoms)[:natoms]
         try:
             if not self.has_elements:
                 atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2)
