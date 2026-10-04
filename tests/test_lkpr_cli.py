@@ -49,3 +49,41 @@ def test_post_delegation_preserves_subversion():
    code, out, _ = _run(['post', '--version'])
    assert code == 0
    assert 'lammps-post' in out
+
+
+def test_unified_session_switches_and_keeps_state():
+   import os
+   import tempfile
+   import lammpkeeper.shell as lk
+   tmp = tempfile.mkdtemp(prefix='lkpr_hist_')
+   saved = lk._HISTFILE
+   lk._HISTFILE = os.path.join(tmp, 'lkpr')
+   try:
+      out = io.StringIO()
+      with contextlib.redirect_stdout(out):
+         sh = lk.LkprShell()
+         pre, post = sh._shell('prep'), sh._shell('post')
+         pre.histfile = os.path.join(tmp, 'pre')
+         post.histfile = os.path.join(tmp, 'post')
+         pre.cmdqueue = ['set temperature 500', 'post', 'back']
+         post.cmdqueue = ['set dpi 300', 'prep']
+         assert sh._run('prep') is False          # back -> menu
+         assert pre.state.temperature == 500 and post.state.dpi == 300
+         assert sh._shell('post') is post          # same instance, state kept
+         sh.onecmd('post set dpi 200')            # one-shot command from the menu
+         assert post.state.dpi == 200
+         post.cmdqueue = ['prep']
+         pre.cmdqueue = ['quit']
+         assert sh.onecmd('post') is True          # quit inside a shell ends lkpr
+      text = out.getvalue()
+      assert 'LAMMPS-PRE' in text and 'LAMMPS-POST' in text
+   finally:
+      lk._HISTFILE = saved
+
+
+def test_switch_commands_need_unified_session():
+   from lammps_pre.shell import LammpsPreShell
+   out = io.StringIO()
+   with contextlib.redirect_stdout(out):
+      assert not LammpsPreShell().onecmd('post')
+   assert 'lkpr' in out.getvalue()

@@ -24,8 +24,7 @@ import sys
 import shlex
 import glob as globmod
 import importlib.util
-import readline
-import atexit
+import readline  # noqa: F401  (line editing for input())
 import threading
 import traceback
 
@@ -33,6 +32,8 @@ import numpy as np
 
 from lammps_post import VERSION, CM_PER_INCH, WONG_PALETTE
 from lammps_post.display import C, print_table, print_kv, progress_msg, HAS_RICH
+from lammpkeeper.common.display import banner
+from lammpkeeper.common.hosted import HostedShellMixin
 
 from lammps_post.parsers import (
     parse_log, parse_data_file, detect_forcefield, parse_input,
@@ -102,12 +103,10 @@ if HAS_MPL:
     import matplotlib.pyplot as plt
 
 
-BANNER = f"""
-{C.CYAN}╔══════════════════════════════════════════════════════════════╗
-║  {C.BOLD}LAMMPS-POST:{C.RESET}{C.CYAN} Post-Processing Interactive CLI  v{VERSION}        ║
-║  Type 'help' for commands, 'quit' to exit                    ║
-╚══════════════════════════════════════════════════════════════╝{C.RESET}
-"""
+BANNER = '\n' + banner([
+    f"{C.BOLD}LAMMPS-POST:{C.RESET} Post-Processing Interactive CLI  v{VERSION}",
+    "Type 'help' for commands, 'quit' to exit",
+]) + '\n'
 
 DEPS_INFO = []
 for name, flag in [('rich', HAS_RICH), ('pandas', HAS_PANDAS),
@@ -116,26 +115,18 @@ for name, flag in [('rich', HAS_RICH), ('pandas', HAS_PANDAS),
     DEPS_INFO.append(f"  {name}: {status}")
 
 
-class LammpsPostShell(cmd.Cmd):
+class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # Wrap ANSI escape codes in \x01..\x02 so readline correctly computes
     # the visible prompt length. Without this, history navigation (up/down)
     # corrupts the displayed line because readline miscounts cursor position.
     prompt = f"\x01{C.BLUE}\x02lammps-post>\x01{C.RESET}\x02 "
     intro = BANNER + '\n'.join(DEPS_INFO) + '\n'
+    shell_name = 'post'
 
     def __init__(self):
         super().__init__()
         self.state = SessionState()
-        self._setup_readline()
-
-    def _setup_readline(self):
-        readline.set_completer_delims(' \t\n')
-        histfile = os.path.expanduser('~/.lammps-post_history')
-        try:
-            readline.read_history_file(histfile)
-        except FileNotFoundError:
-            pass
-        atexit.register(readline.write_history_file, histfile)
+        self._setup_history('~/.lammps-post_history')
 
     # ─── Interactive prompt helper ───
     def _ask(self, prompt, default=None):
@@ -2987,6 +2978,7 @@ class LammpsPostShell(cmd.Cmd):
     def do_quit(self, arg):
         """Exit the tool."""
         print(f"\n  {C.dim('Goodbye!')}\n")
+        self._next = 'quit'
         return True
 
     do_exit = do_quit
@@ -3076,7 +3068,7 @@ class LammpsPostShell(cmd.Cmd):
   clear                                     Clear screen
   quit / exit / q                           Exit
 """
-        print(help_text)
+        print(help_text + self._hosted_help())
 
     # ─── Path completion helper ───
 

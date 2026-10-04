@@ -8,6 +8,9 @@ library integration for prettier output when available.
 ═══════════════════════════════════════════════════════════════
 """
 
+import re
+import unicodedata
+
 # ── Optional rich library ──
 # Provides beautiful tables (RichTable), panels, and progress bars.
 # Falls back to plain ANSI-colored text output when not available.
@@ -15,12 +18,53 @@ try:
     from rich.console import Console
     from rich.table import Table as RichTable
     from rich.panel import Panel
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    from rich.text import Text
     from rich import box as rich_box
     _console = Console()
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
+
+# ANSI SGR sequences plus the \x01/\x02 readline markers used in prompts.
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|[\x01\x02]')
+
+
+def visible_width(text):
+    """Terminal columns `text` occupies: ANSI codes count 0, CJK/fullwidth 2."""
+    width = 0
+    for ch in _ANSI_RE.sub('', str(text)):
+        if unicodedata.combining(ch) or unicodedata.category(ch) in ('Mn', 'Me', 'Cf'):
+            continue
+        width += 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+    return width
+
+
+def pad(text, width):
+    """Left-align `text` in `width` terminal columns (ANSI/CJK aware)."""
+    return f"{text}{' ' * max(0, width - visible_width(text))}"
+
+
+def banner(lines, min_width=62, color=None):
+    """
+    Double-line box around `lines` (which may contain ANSI codes and CJK
+    text); the right border always lines up because padding is computed
+    from visible width, not len().
+    """
+    color = C.CYAN if color is None else color
+    inner = max(min_width, *(visible_width(l) + 4 for l in lines))
+    out = [f"{color}╔{'═' * inner}╗{C.RESET}"]
+    for l in lines:
+        out.append(f"{color}║{C.RESET}  {pad(l, inner - 2)}{color}║{C.RESET}")
+    out.append(f"{color}╚{'═' * inner}╝{C.RESET}")
+    return '\n'.join(out)
+
+
+def _rich_text(value):
+    # Text.from_ansi turns our own C.* colour codes into styles, so rich
+    # measures the visible text; raw escapes would be counted as columns and
+    # push the right border out of line. It also stops '[...]' in values
+    # from being parsed as rich markup.
+    return Text.from_ansi(str(value))
 
 
 class C:
@@ -76,22 +120,22 @@ def print_table(headers, rows, title=None):
     if HAS_RICH:
         t = RichTable(title=title, box=rich_box.ROUNDED)
         for h in headers:
-            t.add_column(h, style="cyan")
+            t.add_column(_rich_text(h), style="cyan")
         for row in rows:
-            t.add_row(*[str(x) for x in row])
+            t.add_row(*[_rich_text(x) for x in row])
         _console.print(t)
     else:
         # Plain-text fallback: compute column widths from headers and data,
         # then format each row with left-aligned, padded columns.
         if title:
             print(f"\n  {C.bold(title)}")
-        widths = [max(len(str(h)), *(len(str(r[i])) for r in rows)) + 2
+        widths = [max(visible_width(h), *(visible_width(r[i]) for r in rows)) + 2
                   for i, h in enumerate(headers)]
-        hdr = "  ".join(f"{h:<{widths[i]}}" for i, h in enumerate(headers))
+        hdr = "  ".join(pad(h, widths[i]) for i, h in enumerate(headers))
         print(f"  {C.BOLD}{hdr}{C.RESET}")
-        print(f"  {'─' * len(hdr)}")
+        print(f"  {'─' * visible_width(hdr)}")
         for row in rows:
-            line = "  ".join(f"{str(row[i]):<{widths[i]}}" for i in range(len(headers)))
+            line = "  ".join(pad(row[i], widths[i]) for i in range(len(headers)))
             print(f"  {line}")
         print()
 
@@ -108,8 +152,12 @@ def print_kv(pairs, title=None):
         title: str or None — Optional panel/section title.
     """
     if HAS_RICH:
-        lines = "\n".join(f"[cyan]{k}:[/cyan]  {v}" for k, v in pairs)
-        _console.print(Panel(lines, title=title, border_style="blue"))
+        rows = []
+        for k, v in pairs:
+            key = _rich_text(f"{k}:")
+            key.stylize("cyan")
+            rows.append(Text.assemble(key, "  ", _rich_text(v)))
+        _console.print(Panel(Text("\n").join(rows), title=title, border_style="blue"))
     else:
         if title:
             print(f"\n  {'─' * 50}")

@@ -8,6 +8,10 @@ This preserves every existing flag, help text, and numeric output; the only
 change to those packages is that each sub-`main()` now accepts an optional
 `argv` list (defaulting to None -> sys.argv, i.e. unchanged when called bare).
 
+`lkpr` with no arguments (in a terminal) or `lkpr shell` opens the unified
+interactive session (lammpkeeper.shell), where prep and post are chosen and
+switched from one prompt.
+
 Backwards-compatible entry points remain fully functional and are untouched:
     python -m lammps_pre ...    /  python lammps-pre.py ...
     python -m lammps_post ...   /  python lammps-post.py ...
@@ -40,6 +44,9 @@ def _build_parser():
    sub.add_parser('post', add_help=False,
                   help='post-processing: analyze & plot trajectories '
                        '(delegates to lammps-post)')
+   sub.add_parser('shell', add_help=False,
+                  help='interactive session: choose prep or post, switch '
+                       'between them (default when run in a terminal)')
    return parser
 
 
@@ -47,12 +54,19 @@ def main(argv=None):
    """Dispatch to the prep/post sub-CLIs, forwarding remaining args verbatim."""
    argv = list(sys.argv[1:]) if argv is None else list(argv)
 
-   # No subcommand -> show top-level help (exit 0).
+   # No subcommand: interactive session in a terminal, help otherwise (exit 0).
    if not argv:
-      _build_parser().print_help()
-      return 0
+      if sys.stdin.isatty() and sys.stdout.isatty():
+         argv = ['shell']
+      else:
+         _build_parser().print_help()
+         return 0
 
    command, rest = argv[0], argv[1:]
+
+   if command == 'shell':
+      from lammpkeeper.shell import main as shell_main
+      return shell_main()
 
    if command == 'prep':
       from lammps_pre.cli import main as prep_main

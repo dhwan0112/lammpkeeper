@@ -8,49 +8,32 @@ persistent command history, and colored terminal output.
 import cmd
 import os
 import shlex
-import atexit
 
 from lammps_pre import VERSION
 from lammps_pre.display import C, progress_msg, print_table, print_kv
+from lammpkeeper.common.display import banner
+from lammpkeeper.common.hosted import HostedShellMixin
 from lammps_pre.state import PreState, FF_PRESETS
 from lammps_pre.builders import build_all
 from lammps_pre.writers import (write_all, write_data_file, write_regions_inc,
                                 write_input_script, write_run_script, write_xyz,
                                 get_filenames)
 
-try:
-    import readline
-except ImportError:
-    readline = None
+BANNER = '\n' + banner([
+    f"{C.BOLD}LAMMPS-PRE:{C.RESET} Pre-Processing Interactive CLI  v{VERSION}",
+    "Type 'help' for commands, 'quit' to exit",
+]) + '\n'
 
 
-BANNER = f"""
-{C.CYAN}╔══════════════════════════════════════════════════════════════╗
-║  {C.BOLD}LAMMPS-PRE:{C.RESET}{C.CYAN} Pre-Processing Interactive CLI  v{VERSION}        ║
-║  Type 'help' for commands, 'quit' to exit                    ║
-╚══════════════════════════════════════════════════════════════╝{C.RESET}
-"""
-
-
-class LammpsPreShell(cmd.Cmd):
+class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     prompt = f"\x01{C.BLUE}\x02lammps-pre>\x01{C.RESET}\x02 "
     intro = BANNER
+    shell_name = 'prep'
 
     def __init__(self):
         super().__init__()
         self.state = PreState()
-        self._setup_readline()
-
-    def _setup_readline(self):
-        if readline is None:
-            return
-        readline.set_completer_delims(' \t\n')
-        histfile = os.path.expanduser('~/.lammps-pre_history')
-        try:
-            readline.read_history_file(histfile)
-        except FileNotFoundError:
-            pass
-        atexit.register(readline.write_history_file, histfile)
+        self._setup_history('~/.lammps-pre_history')
 
     # ── Helper: interactive prompt ──
 
@@ -710,6 +693,7 @@ class LammpsPreShell(cmd.Cmd):
     def do_quit(self, arg):
         """Exit lammps-pre."""
         print(f"\n  {C.dim('Goodbye!')}\n")
+        self._next = 'quit'
         return True
 
     do_exit = do_quit
@@ -774,4 +758,4 @@ class LammpsPreShell(cmd.Cmd):
   help [cmd]                Show help
   quit / exit / q           Exit
 """
-        print(help_text)
+        print(help_text + self._hosted_help())
