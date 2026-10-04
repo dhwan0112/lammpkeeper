@@ -192,16 +192,18 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         print()
         print(f"  {C.bold('Output directory for plots/exports:')}")
-        print(f"    1. {suggestion}")
-        print(f"    2. ./lammps-post_output {C.dim('(current dir)')}")
+        print(f"    1. ./lammps-post_output {C.dim('(current dir)')}")
+        print(f"    2. {suggestion} {C.dim('(next to the data)')}")
         print(f"    3. Custom path")
         print()
+        # Default to the working directory: data folders may be shared or
+        # synced (e.g. Dropbox) and should not collect plots by accident.
         choice = self._ask("Choose output directory (1/2/3)", '1')
 
         if choice == '1':
-            s.output_dir = suggestion
-        elif choice == '2':
             s.output_dir = './lammps-post_output'
+        elif choice == '2':
+            s.output_dir = suggestion
         elif choice == '3':
             custom = self._ask("Enter output directory path")
             if custom:
