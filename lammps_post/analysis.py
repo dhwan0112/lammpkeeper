@@ -23,8 +23,10 @@ import itertools
 import numpy as np
 
 from lammpkeeper.common.mapping import label_to_type
+from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
+                         O2_BOND_CUTOFF_A)
 
-def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=0.3):
+def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E):
     """
     Track the evolution of Fe atomic partial charges over time.
     ReaxFF-only analysis — requires the 'q' column in dump data.
@@ -380,7 +382,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
             'n_absorbed': np.array(n_abs), 'n_total': np.array(n_total)}
 
 
-def compute_or(frames, col_idx, dt_fs=0.25, q_thr=0.3, z_range=None):
+def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None):
     """
     Compute the Oxidation Rate (OR) over time. ReaxFF-only.
 
@@ -429,8 +431,9 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     Monitors three quantities:
     1. Maximum penetration depth: (surface_z - min_O_z), measuring how
        deep the deepest O atom has reached into the Fe bulk.
-    2. Adsorbed O count: number of O atoms below the surface z-coordinate.
-    3. Near-surface O count: O atoms within 3.0 A of the surface
+    2. Adsorbed O count: O atoms more than NEAR_SURFACE_A (3.0 A) below
+       the surface z-coordinate.
+    3. Near-surface O count: O atoms within NEAR_SURFACE_A of the surface
        (in the reaction zone but not yet fully absorbed).
 
     Args:
@@ -465,8 +468,9 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
 
         time.append(fr['timestep'] * dt_fs / 1000)
         o_min_z.append(np.min(o_z))
-        n_ads.append(int(np.sum(o_z < (surface_z - 3.0))))
-        n_near.append(int(np.sum((o_z >= (surface_z - 3.0)) & (o_z < (surface_z + 3.0)))))
+        n_ads.append(int(np.sum(o_z < (surface_z - NEAR_SURFACE_A))))
+        n_near.append(int(np.sum((o_z >= (surface_z - NEAR_SURFACE_A))
+                                 & (o_z < (surface_z + NEAR_SURFACE_A)))))
         n_total.append(len(o_z))
 
     n_ads = np.array(n_ads)
@@ -644,7 +648,7 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
             'n_frames': n_used}
 
 
-def detect_o2_dissociation(frames, col_idx, bond_cutoff=1.8, dt_fs=1.0, o_type=2):
+def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=1.0, o_type=2):
     """
     Track O₂ molecule dissociation over time by detecting O-O bonds.
 
@@ -1079,9 +1083,7 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
             o_z = o_atoms[:, zi]
 
         fe_z = atoms[fe_mask, zi]
-        # Surface = Fe max z - 1.4 Å (half BCC lattice constant)
-        # Places the surface plane between topmost Fe layer and gas phase
-        surface = float(np.max(fe_z) - 1.4) if len(fe_z) > 0 else 0.0
+        surface = float(np.max(fe_z) - SURFACE_OFFSET_A) if len(fe_z) > 0 else 0.0
 
         time_arr.append((fr['timestep'] - t0) * dt_fs / 1000.0)
         o_z_traj.append(o_z)

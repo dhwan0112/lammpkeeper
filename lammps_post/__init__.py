@@ -54,6 +54,19 @@ DENSITY_CONVERSION = (_AMU_KG * 1e3) / 1e-24   # amu/A^3 -> g/cm^3
 BAR_TO_GPA = 1e-4           # bar -> GPa (metal units)
 ATM_TO_GPA = 1.01325e-4     # atm -> GPa (real units)
 
+# ── Analysis thresholds (Fe-O oxidation) ──
+# Partial charge above which an Fe atom counts as oxidized: metallic Fe sits
+# near 0 e, Fe2+ at ~0.8-1.2 e and Fe3+ at ~1.2-1.8 e (ReaxFF QEq charges).
+Q_OXIDIZED_E = 0.3
+# Surface plane = topmost Fe z minus about half the BCC Fe lattice constant
+# (2.87 A / 2), i.e. between the top Fe layer and the gas phase.
+SURFACE_OFFSET_A = 1.4
+# Half-width of the near-surface reaction zone; O deeper than this below
+# the surface counts as absorbed.
+NEAR_SURFACE_A = 3.0
+# O-O distance below which two O atoms count as bonded (O2 bond ~1.21 A).
+O2_BOND_CUTOFF_A = 1.8
+
 # ── Wong 2011 Color-Blind Friendly Palette ──
 # (Nature Methods 8, 441, 2011) — recommended for publication figures.
 # 8 colors distinguishable by all common forms of color vision deficiency.
