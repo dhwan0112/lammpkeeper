@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lammpkeeper"
-version = "0.1.0"
+dynamic = ["version"]
 description = "LammpKeeper (lkpr): unified LAMMPS pre/post-processing CLI for iron-redox MLFF studies"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,5 +35,8 @@ testpaths = ["tests"]
 # entry points remain available unchanged:
 #   python -m lammps_pre ...   / python lammps-pre.py ...
 #   python -m lammps_post ...  / python lammps-post.py ...
+[tool.setuptools.dynamic]
+version = {attr = "lammpkeeper.VERSION"}
+
 [tool.setuptools]
 packages = ["lammpkeeper", "lammpkeeper.common", "lammps_pre", "lammps_post"]

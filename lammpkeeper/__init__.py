@@ -14,4 +14,5 @@ Subcommands:
     lkpr post ...   -> lammps_post.cli.main   (trajectory analysis & plotting)
 """
 
-VERSION = "0.1.0"
+# Single source of the version: lammps_pre, lammps_post and pyproject.toml read it.
+VERSION = "1.2.0"

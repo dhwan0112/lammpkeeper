@@ -40,7 +40,7 @@ Dependencies:
                MDAnalysis (alternative MSD/RDF computation)
 """
 
-VERSION = "1.2.0"
+from lammpkeeper import VERSION  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════
 # ── Physical Constants & Unit Conversions ──
