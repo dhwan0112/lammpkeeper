@@ -5,7 +5,6 @@ Generates LAMMPS data files, region include files, and XYZ visualization files.
 """
 
 import os
-import numpy as np
 
 from lammps_pre import VERSION
 from lammps_pre.display import progress_msg, C

@@ -6,7 +6,6 @@ Logic adapted from lammps/templates/generate_slab_o2.py.
 """
 
 import numpy as np
-import sys
 from dataclasses import dataclass, field
 
 try:

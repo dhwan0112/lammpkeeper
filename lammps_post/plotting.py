@@ -1280,7 +1280,7 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     _save_fig(fig, os.path.join(output_dir, 'o_adsorption_timeline.png'), dpi)
 
     # ── 5. 3D surface plot ──
-    from mpl_toolkits.mplot3d import Axes3D
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers '3d' on matplotlib < 3.2)
 
     fig = plt.figure(figsize=figsize or (12, 8))
     ax = fig.add_subplot(111, projection='3d')

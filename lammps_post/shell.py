@@ -30,7 +30,7 @@ import traceback
 
 import numpy as np
 
-from lammps_post import VERSION, CM_PER_INCH, WONG_PALETTE
+from lammps_post import VERSION, CM_PER_INCH
 from lammps_post.display import C, print_table, print_kv, progress_msg, HAS_RICH
 from lammpkeeper.common.display import banner
 from lammpkeeper.common.hosted import HostedShellMixin
@@ -52,7 +52,7 @@ from lammps_post.analysis import (
 )
 
 from lammps_post.plotting import (
-    HAS_MPL, _setup_plot_style, _save_fig,
+    HAS_MPL,
     plot_thermo, plot_thermostat_summary, plot_pressure,
     plot_charge_evolution, plot_charge_z,
     plot_rdf, plot_oar, plot_or,
