@@ -15,7 +15,7 @@ Package structure:
     └── cli.py            — Entry point, argparse
 """
 
-VERSION = "0.1.0"
+from lammpkeeper import VERSION  # noqa: F401
 
 # ── Physical Constants ──
 A_FE_BCC = 2.87          # BCC Fe lattice constant (Angstrom)

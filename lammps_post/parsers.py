@@ -16,13 +16,27 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 ═══════════════════════════════════════════════════════════════
 """
 
+import mmap
 import os
+import queue
 import re
+import threading
+from collections.abc import Sequence
+from contextlib import contextmanager
+
 import numpy as np
 
 from lammpkeeper.common.mapping import type_to_label
 
-def parse_dump(filepath, max_frames=None, stride=1):
+# Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
+_native = None
+if not os.environ.get('LKPR_NO_NATIVE'):
+    try:
+        from . import _dumpparse as _native
+    except ImportError:
+        pass
+
+def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float64):
     """
     Universal LAMMPS dump / lammpstrj trajectory file parser.
 
@@ -54,6 +68,12 @@ def parse_dump(filepath, max_frames=None, stride=1):
         stride:     int — Read every Nth frame (default: 1 = all frames).
                     stride=10 reads frames 1, 11, 21, ... to reduce
                     memory usage for long trajectories.
+        columns:    iterable[str] or None — Keep only these columns
+                    (e.g. ANALYSIS_COLUMNS). None keeps every column.
+        dtype:      numpy dtype of the 'atoms' arrays (float32 halves memory).
+
+    All frames are held in memory; iterate a DumpReader instead to process
+    one frame at a time.
 
     Returns:
         frames:  list[dict] — One dict per frame with keys:
@@ -61,94 +81,530 @@ def parse_dump(filepath, max_frames=None, stride=1):
                    'natoms'   (int)     — Number of atoms in this frame
                    'box'      (ndarray) — Shape (3, 2): [[xlo,xhi], [ylo,yhi], [zlo,zhi]]
                    'atoms'    (ndarray) — Shape (N, n_cols): all numeric atom data
-                   'elements' (list[str] or None) — Element symbols if 'element' column exists
+                   'elements' (ndarray[str] or None) — Element symbols if 'element' column exists
         columns: list[str]  — Names of numeric columns in order (e.g., ['id','type','x','y','z','q'])
         col_idx: dict[str, int] — Mapping from column name to index in the atoms array.
                    Example: col_idx['z'] = 4 means atoms[:, 4] gives z-coordinates.
     """
-    frames = []
-    columns = None
-    col_idx = None
-    element_col = None  # Column index of 'element' in raw line (string, not stored in atoms array)
-    n_read = 0          # Total frames encountered (before stride filtering)
+    reader = DumpReader(filepath, columns=columns, dtype=dtype,
+                        stride=stride, max_frames=max_frames)
+    frames = list(reader)
+    col_idx = dict(reader.col_idx) if reader.raw_columns else None
+    return frames, list(reader.columns), col_idx
 
-    with open(filepath, 'r') as f:
-        while True:
-            line = f.readline()
-            if not line:
-                break  # End of file
-            if 'ITEM: TIMESTEP' not in line:
-                continue  # Skip until we find the start of a new frame
 
-            # --- Parse frame header ---
-            timestep = int(f.readline().strip())
-            f.readline()  # Skip "ITEM: NUMBER OF ATOMS" label line
-            natoms = int(f.readline().strip())
-            f.readline()  # Skip "ITEM: BOX BOUNDS" label line
-            # Read 3 box dimension lines: each has "lo hi" values
-            box = np.array([list(map(float, f.readline().split()[:2])) for _ in range(3)])
+# Non-numeric dump columns, kept out of the numeric 'atoms' array.
+STRING_COLUMNS = ('element',)
 
-            # Read the column header line: "ITEM: ATOMS id type x y z ..."
-            header_line = f.readline().strip()
+# Every column the analysis and plotting code reads, for DumpReader(columns=...).
+ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
 
-            # --- First frame only: detect column layout ---
-            if columns is None:
-                raw_cols = header_line.replace('ITEM: ATOMS ', '').split()
-                columns = raw_cols
-                # Separate numeric columns from string columns ('element').
-                # Build col_idx mapping: column_name -> index in numeric array.
-                numeric_cols = []
-                col_idx = {}
-                ni = 0  # Running index for numeric columns
-                for i, c in enumerate(raw_cols):
-                    if c == 'element':
-                        element_col = i  # Remember position for string extraction
-                    else:
-                        col_idx[c] = ni
-                        numeric_cols.append(c)
-                        ni += 1
+# Parse width for element labels; shrunk to the longest label afterwards.
+_ELEMENT_PARSE_DTYPE = 'U16'
 
-            # --- Apply stride: skip frames not matching the stride pattern ---
-            n_read += 1
-            if stride > 1 and (n_read - 1) % stride != 0:
-                # Fast-skip: read and discard all atom lines for this frame
-                for _ in range(natoms):
-                    f.readline()
+# DumpReader.index() returns scanned mmap pages to the OS every this many bytes.
+_INDEX_RELEASE_BYTES = 32 * 1024 ** 2
+
+
+class DumpReader:
+    """
+    Lazy LAMMPS dump reader: iterating yields one frame dict at a time, so a
+    trajectory can be analyzed in memory proportional to one frame.
+
+    Frame dicts have the same keys as parse_dump's (timestep, natoms, box,
+    atoms, elements). The column layout is read from the first frame on
+    construction and exposed as `raw_columns` (file order, all columns),
+    `columns` (kept numeric columns) and `col_idx` (name -> atoms column).
+
+    Args:
+        filepath:   str — Path to the dump or lammpstrj file.
+        columns:    iterable[str] or None — Keep only these columns (names not
+                    in the file are ignored). None keeps every column. Skipped
+                    columns are never converted, which also speeds parsing.
+        dtype:      numpy dtype for the 'atoms' array. float32 halves memory;
+                    ids/types stay exact below 2**24 (16.7M).
+        stride:     int — Yield every Nth frame, starting with the first.
+        max_frames: int or None — Stop after yielding this many frames
+                    (None or 0 = no limit).
+
+    Raises ValueError on a malformed or truncated atom block, or when a later
+    frame changes the column layout.
+    """
+
+    def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None):
+        if stride < 1:
+            raise ValueError(f"stride must be >= 1, got {stride}")
+        self.filepath = filepath
+        self.dtype = np.dtype(dtype)
+        self.stride = stride
+        self.max_frames = max_frames
+        self.raw_columns = self._read_layout()
+
+        keep = None if columns is None else set(columns)
+        self._usecols = [i for i, c in enumerate(self.raw_columns) if keep is None or c in keep]
+        kept = [self.raw_columns[i] for i in self._usecols]
+        self.columns = [c for c in kept if c not in STRING_COLUMNS]
+        self.col_idx = {c: i for i, c in enumerate(self.columns)}
+        self.has_elements = 'element' in kept
+
+        # Positions within `kept`, used to split the structured record array.
+        self._numeric_pos = [k for k, c in enumerate(kept) if c not in STRING_COLUMNS]
+        self._element_pos = kept.index('element') if self.has_elements else None
+        self._row_dtype = [(f'c{k}', _ELEMENT_PARSE_DTYPE if c in STRING_COLUMNS else self.dtype)
+                           for k, c in enumerate(kept)]
+        self._element_col = self._usecols[self._element_pos] if self.has_elements else None
+        self._native = _native if self.dtype in (np.float64, np.float32) else None
+
+    def _read_layout(self):
+        with open(self.filepath, 'r') as f:
+            for line in f:
+                if line.startswith('ITEM: ATOMS'):
+                    return line.split()[2:]
+        return []
+
+    def index(self):
+        """
+        Scan the file once for frame headers without parsing atom data.
+
+        The search for each next 'ITEM: TIMESTEP' runs inside mmap.find (C
+        speed), so indexing costs about one sequential read of the file.
+        Returns a DumpIndex with per-frame timestep, natoms, box and the byte
+        span of the atom block, which read_frame() uses for random access.
+        """
+        idx = DumpIndex()
+        if os.path.getsize(self.filepath) == 0:
+            return idx.finalize()
+        marker = b'ITEM: TIMESTEP'
+        can_release = hasattr(mmap, 'MADV_DONTNEED')
+        with open(self.filepath, 'rb') as f, \
+                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            size = mm.size()
+            released = 0
+            pos = mm.find(marker)
+            while pos != -1:
+                # Scanned pages count toward RSS until dropped; release them in
+                # page-aligned steps so indexing a multi-GB dump stays small.
+                if can_release and pos - released >= _INDEX_RELEASE_BYTES:
+                    upto = pos - pos % mmap.PAGESIZE
+                    mm.madvise(mmap.MADV_DONTNEED, released, upto - released)
+                    released = upto
+                mm.seek(pos)
+                mm.readline()                   # ITEM: TIMESTEP
+                timestep = int(mm.readline())
+                mm.readline()                   # ITEM: NUMBER OF ATOMS
+                natoms = int(mm.readline())
+                mm.readline()                   # ITEM: BOX BOUNDS ...
+                box = [[float(v) for v in mm.readline().split()[:2]] for _ in range(3)]
+                header = mm.readline().decode().split()[2:]
+                if header != self.raw_columns:
+                    raise ValueError(
+                        f"{self.filepath}: column layout changes at step {timestep}: "
+                        f"{header} != {self.raw_columns}")
+                start = mm.tell()
+                pos = mm.find(marker, start)
+                idx.add(timestep, natoms, box, start, size if pos == -1 else pos)
+        return idx.finalize()
+
+    def read_frame(self, index, k):
+        """Parse frame k of `index` (from self.index()) with one seek + read."""
+        start, end = int(index.block_start[k]), int(index.block_end[k])
+        natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
+        with open(self.filepath, 'rb') as f:
+            f.seek(start)
+            block = f.read(end - start)
+        atoms, elements = self._parse_block(block, natoms, timestep)
+        return {
+            'timestep': timestep,
+            'natoms': natoms,
+            'box': index.boxes[k].copy(),
+            'atoms': atoms,
+            'elements': elements,
+        }
+
+    def frame_nbytes(self, natoms):
+        """Estimated memory of one parsed frame (atoms + 2-letter elements)."""
+        per_atom = len(self.columns) * self.dtype.itemsize + (8 if self.has_elements else 0)
+        return natoms * per_atom
+
+    def __iter__(self):
+        n_seen = 0
+        n_yielded = 0
+        with open(self.filepath, 'r') as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    return
+                if 'ITEM: TIMESTEP' not in line:
+                    continue
+
+                timestep = int(f.readline())
+                f.readline()                    # ITEM: NUMBER OF ATOMS
+                natoms = int(f.readline())
+                f.readline()                    # ITEM: BOX BOUNDS ...
+                # lo/hi per axis; a triclinic tilt factor (3rd value) is ignored.
+                box = np.array([[float(v) for v in f.readline().split()[:2]]
+                                for _ in range(3)])
+                header = f.readline().split()[2:]
+                if header != self.raw_columns:
+                    raise ValueError(
+                        f"{self.filepath}: column layout changes at step {timestep}: "
+                        f"{header} != {self.raw_columns}")
+
+                n_seen += 1
+                if (n_seen - 1) % self.stride:
+                    for _ in range(natoms):
+                        f.readline()
+                    continue
+
+                block = ''.join([f.readline() for _ in range(natoms)]).encode()
+                atoms, elements = self._parse_block(block, natoms, timestep)
+                yield {
+                    'timestep': timestep,
+                    'natoms': natoms,
+                    'box': box,
+                    'atoms': atoms,
+                    'elements': elements,
+                }
+
+                n_yielded += 1
+                if self.max_frames and n_yielded >= self.max_frames:
+                    return
+
+    def _parse_block(self, block, natoms, timestep):
+        """Parse the first natoms lines of the atom block `block` (bytes)."""
+        n_numeric = len(self._numeric_pos)
+        if natoms == 0:
+            empty_elements = np.empty(0, dtype='U1') if self.has_elements else None
+            return np.empty((0, n_numeric), dtype=self.dtype), empty_elements
+
+        if self._native is not None:
+            try:
+                values, elements, rows = self._native.parse_block(
+                    block, natoms, self._usecols, self._element_col,
+                    self.dtype == np.float32)
+            except ValueError:
+                rows = -1
+            if rows == natoms:
+                atoms = np.frombuffer(values, dtype=self.dtype).reshape(natoms, n_numeric)
+                if elements is not None:
+                    elements = np.array(elements)
+                return atoms, elements
+
+        # Reference path; the native parser defers here for every error case.
+        lines = block.decode().split('\n', natoms)[:natoms]
+        try:
+            if not self.has_elements:
+                atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2)
+                elements = None
+            else:
+                rec = np.loadtxt(lines, dtype=self._row_dtype, usecols=self._usecols, ndmin=1)
+                names = rec.dtype.names
+                elements = rec[names[self._element_pos]]
+                # Fixed-width str array: ~8 bytes/atom for 2-letter symbols,
+                # and elements still compare/hash like Python str.
+                width = max(1, int(np.char.str_len(elements).max()))
+                elements = elements.astype(f'U{width}')
+                atoms = np.empty((len(rec), n_numeric), dtype=self.dtype)
+                for j, k in enumerate(self._numeric_pos):
+                    atoms[:, j] = rec[names[k]]
+        except ValueError as e:
+            raise ValueError(
+                f"{self.filepath}: malformed atom block at step {timestep}: {e}") from None
+
+        if len(atoms) != natoms:
+            raise ValueError(
+                f"{self.filepath}: frame at step {timestep} has {len(atoms)} atom lines, "
+                f"expected {natoms} (truncated dump?)")
+        return atoms, elements
+
+
+class DumpIndex:
+    """Per-frame metadata from DumpReader.index(): arrays of length n_frames."""
+
+    def __init__(self):
+        self._rows = []
+
+    def add(self, timestep, natoms, box, block_start, block_end):
+        self._rows.append((timestep, natoms, box, block_start, block_end))
+
+    def finalize(self):
+        rows = self._rows
+        self.timesteps = np.array([r[0] for r in rows], dtype=np.int64)
+        self.natoms = np.array([r[1] for r in rows], dtype=np.int64)
+        self.boxes = np.array([r[2] for r in rows], dtype=np.float64).reshape(-1, 3, 2)
+        self.block_start = np.array([r[3] for r in rows], dtype=np.int64)
+        self.block_end = np.array([r[4] for r in rows], dtype=np.int64)
+        del self._rows
+        return self
+
+    def __len__(self):
+        return len(self.timesteps)
+
+
+# Default memory budget for LazyFrames' parsed-frame cache.
+DEFAULT_CACHE_BYTES = 128 * 1024 ** 2
+
+
+class _FrameStore:
+    """
+    Parsed-frame cache shared by a LazyFrames and all of its slices.
+
+    All or nothing: LazyFrames turns caching off (`keep`) when its frames do
+    not all fit. A partial cache would hold a full budget of memory to save
+    re-parsing only some frames, and analyze-all already shares one pass.
+    """
+
+    def __init__(self, reader, index, cache_bytes, transform):
+        self.reader = reader
+        self.index = index
+        self.cache_bytes = cache_bytes
+        self.keep = True
+        self.transform = transform
+        self.cache = {}
+        self.cached_bytes = 0
+        self._lock = threading.Lock()
+
+    def get(self, k):
+        fr = self.cache.get(k)
+        if fr is not None:
+            return fr
+        fr = self.reader.read_frame(self.index, k)
+        if self.transform is not None:
+            fr = self.transform(fr)
+        nbytes = fr['atoms'].nbytes + (fr['elements'].nbytes if fr['elements'] is not None else 0)
+        with self._lock:
+            if self.keep and k not in self.cache and self.cached_bytes + nbytes <= self.cache_bytes:
+                self.cache[k] = fr
+                self.cached_bytes += nbytes
+        return fr
+
+    def clear(self):
+        self.cache.clear()
+        self.cached_bytes = 0
+
+
+class LazyFrames(Sequence):
+    """
+    Read-only list of dump frames that parses each frame from disk on access.
+
+    Drop-in for parse_dump's frame list: supports len(), integer (incl.
+    negative) indexing, slicing (returns another LazyFrames), iteration and
+    truthiness. A trajectory whose parsed frames fit in `cache_bytes` is
+    parsed once and then served from memory; a larger one streams from disk
+    one frame at a time and keeps no frames.
+
+    Frame dicts are shared with the cache and must be treated as read-only;
+    use set_transform() to derive per-frame data (e.g. a synthesized type
+    column) so it survives cache eviction.
+
+    Args:
+        reader:      DumpReader — decides columns and dtype.
+        index:       DumpIndex or None — from reader.index() (scanned if None).
+        cache_bytes: int — Parsed-frame cache budget (0 = always stream).
+        stride:      int — Keep every Nth frame, starting with the first.
+        max_frames:  int or None — Keep at most this many frames (None/0 = all).
+    """
+
+    def __init__(self, reader, index=None, cache_bytes=DEFAULT_CACHE_BYTES,
+                 stride=1, max_frames=None, transform=None, _store=None, _positions=None):
+        new_store = _store is None
+        if new_store:
+            if stride < 1:
+                raise ValueError(f"stride must be >= 1, got {stride}")
+            index = reader.index() if index is None else index
+            _store = _FrameStore(reader, index, cache_bytes, transform)
+            _positions = range(0, len(index), stride)
+            if max_frames:
+                _positions = _positions[:max_frames]
+        self._store = _store
+        self._positions = _positions
+        self._shared = None
+        if new_store:
+            _store.keep = self.fits_in_cache
+
+    def __len__(self):
+        return len(self._positions)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return LazyFrames(None, _store=self._store, _positions=self._positions[i])
+        return self._store.get(self._positions[i])
+
+    def __iter__(self):
+        shared = self._shared
+        if shared is not None:
+            return shared.subscribe()
+        return self._iter_range(0, len(self._positions))
+
+    def _iter_range(self, begin, end):
+        get = self._store.get
+        for k in self._positions[begin:end]:
+            yield get(k)
+
+    @contextmanager
+    def shared_pass(self, depth=4):
+        """
+        While active, every iteration over this view (from any thread) is fed
+        by one producer that parses each frame once and hands it to all
+        iterators, so N concurrent analyses cost one read of the trajectory.
+
+        An iterator opened after the producer has moved on reads the frames it
+        missed on its own, then joins; each iterator still sees every frame in
+        order. `depth` frames may queue per iterator, so memory stays bounded.
+        Random access and slices are unaffected.
+        """
+        shared = _SharedPass(self, depth)
+        self._shared = shared
+        try:
+            yield shared
+        finally:
+            self._shared = None
+            shared.shutdown()
+
+    def set_transform(self, transform):
+        """Apply transform(frame) -> frame to every frame on load; clears the cache."""
+        self._store.transform = transform
+        self._store.clear()
+
+    @property
+    def reader(self):
+        return self._store.reader
+
+    @property
+    def timesteps(self):
+        return self._store.index.timesteps[list(self._positions)]
+
+    @property
+    def boxes(self):
+        """(n_frames, 3, 2) box bounds, from the index (no atom parsing)."""
+        return self._store.index.boxes[list(self._positions)]
+
+    @property
+    def estimated_bytes(self):
+        """Memory needed to hold every frame in this view in the cache."""
+        natoms = self._store.index.natoms[list(self._positions)]
+        return int(self._store.reader.frame_nbytes(int(natoms.sum())))
+
+    @property
+    def cache_bytes(self):
+        return self._store.cache_bytes
+
+    @property
+    def fits_in_cache(self):
+        return self.estimated_bytes <= self._store.cache_bytes
+
+
+_END = object()
+
+
+class _Failure:
+    def __init__(self, exc):
+        self.exc = exc
+
+
+class _Subscriber:
+    def __init__(self, depth):
+        self.queue = queue.Queue(maxsize=depth)
+        self.closed = False
+
+    def put(self, item, stop):
+        # Poll so a subscriber that stopped iterating cannot block the producer.
+        while not self.closed and not stop.is_set():
+            try:
+                self.queue.put(item, timeout=0.05)
+                return
+            except queue.Full:
                 continue
 
-            # --- Read atom data for this frame ---
-            atom_data = np.empty((natoms, len(col_idx)), dtype=np.float64)
-            elements = [] if element_col is not None else None
+    def close(self):
+        self.closed = True
+        try:
+            while True:
+                self.queue.get_nowait()
+        except queue.Empty:
+            pass
 
-            for ai in range(natoms):
-                parts = f.readline().split()
-                # Extract element symbol string if present (e.g., 'Fe', 'Mn', 'O')
-                if element_col is not None:
-                    elements.append(parts[element_col])
-                # Extract all numeric values, skipping the 'element' string column
-                ni = 0
-                for ci, c in enumerate(columns):
-                    if c == 'element':
-                        continue
-                    atom_data[ai, ni] = float(parts[ci])
-                    ni += 1
 
-            frames.append({
-                'timestep': timestep,
-                'natoms': natoms,
-                'box': box,
-                'atoms': atom_data,
-                'elements': elements,
-            })
+class _SharedPass:
+    """Producer/subscriber state behind LazyFrames.shared_pass()."""
 
-            # Stop early if max_frames limit reached
-            if max_frames and len(frames) >= max_frames:
-                break
+    def __init__(self, view, depth):
+        self._view = view
+        self._depth = depth
+        self._lock = threading.Lock()
+        self._subs = []
+        self._next = 0              # position the producer parses next
+        self._producer = None
+        self._stop = threading.Event()
+        self.frames_parsed = 0
 
-    # Build the final numeric column list (excluding 'element')
-    numeric_columns = [c for c in columns if c != 'element'] if columns else []
+    def subscribe(self):
+        n = len(self._view)
+        with self._lock:
+            start = self._next
+            if start >= n or self._stop.is_set():
+                sub = None
+            else:
+                sub = _Subscriber(self._depth)
+                self._subs.append(sub)
+                if self._producer is None:
+                    self._producer = threading.Thread(target=self._produce, daemon=True)
+                    self._producer.start()
+        if sub is None:
+            return self._view._iter_range(0, n)
+        return self._consume(sub, start)
 
-    return frames, numeric_columns, col_idx
+    def _consume(self, sub, start):
+        try:
+            # Frames parsed before this iterator joined are read independently.
+            yield from self._view._iter_range(0, start)
+            while True:
+                item = sub.queue.get()
+                if item is _END:
+                    return
+                if isinstance(item, _Failure):
+                    raise item.exc
+                yield item
+        finally:
+            sub.close()
+
+    def _produce(self):
+        get = self._view._store.get
+        positions = self._view._positions
+        n = len(positions)
+        try:
+            while True:
+                with self._lock:
+                    self._subs = [s for s in self._subs if not s.closed]
+                    i = self._next
+                    if self._stop.is_set() or not self._subs:
+                        self._producer = None   # a later subscriber restarts from _next
+                        return
+                    if i >= n:
+                        finished, self._subs, self._producer = self._subs, [], None
+                        break
+                fr = get(positions[i])
+                self.frames_parsed += 1
+                with self._lock:
+                    # Advancing _next and snapshotting under one lock: a subscriber
+                    # either joined in time to receive frame i here, or starts at i+1.
+                    self._next = i + 1
+                    targets = [s for s in self._subs if not s.closed]
+                for s in targets:
+                    s.put(fr, self._stop)
+            for s in finished:
+                s.put(_END, self._stop)
+        except BaseException as e:
+            with self._lock:
+                failed, self._subs, self._producer = self._subs, [], None
+            for s in failed:
+                s.put(_Failure(e), self._stop)
+
+    def shutdown(self):
+        self._stop.set()
+        producer = self._producer
+        if producer is not None:
+            producer.join(timeout=5)
 
 
 def parse_log(filepath):
@@ -205,7 +661,11 @@ def parse_log(filepath):
         'density': 'density',
     }
 
-    blocks = []              # Accumulated thermo blocks: [(headers, data, stages), ...]
+    def _as_block(headers, rows, stages):
+        # Nested float lists cost ~32 bytes/value; keep finished blocks as ndarrays.
+        return (headers, np.array(rows, dtype=np.float64), stages)
+
+    blocks = []              # Accumulated thermo blocks: [(headers, ndarray, stages), ...]
     current_headers = None   # Column names for the current thermo block
     current_data = []        # Rows of numeric data for the current block
     current_stages = []      # Stage label for each row in the current block
@@ -248,7 +708,7 @@ def parse_log(filepath):
                 any(k in line for k in ('Temp', 'PotEng', 'TotEng', 'KinEng', 'pe', 'ke'))):
                 if reading and current_data:
                     # Save the previous thermo block before starting a new one
-                    blocks.append((current_headers, current_data, current_stages))
+                    blocks.append(_as_block(current_headers, current_data, current_stages))
                 # Start a new thermo block with the detected column headers
                 current_headers = line.split()
                 current_data = []
@@ -263,7 +723,7 @@ def parse_log(filepath):
                             line.startswith('WARNING') or 'cg style' in low or
                             'minimize' in low):
                 if current_data:
-                    blocks.append((current_headers, current_data, current_stages))
+                    blocks.append(_as_block(current_headers, current_data, current_stages))
                 reading = False
                 current_headers = None
                 continue
@@ -281,13 +741,13 @@ def parse_log(filepath):
                     except ValueError:
                         # Non-numeric line encountered — end this thermo block
                         if current_data:
-                            blocks.append((current_headers, current_data, current_stages))
+                            blocks.append(_as_block(current_headers, current_data, current_stages))
                         reading = False
                         current_headers = None
 
     # Capture the last thermo block if the file ends during data reading
     if reading and current_data:
-        blocks.append((current_headers, current_data, current_stages))
+        blocks.append(_as_block(current_headers, current_data, current_stages))
 
     if not blocks:
         return None  # No thermo data found in the entire log file
@@ -307,9 +767,9 @@ def parse_log(filepath):
     merged_data, stages = [], []
     for hdr, data, stg in blocks:
         if hdr == headers:
-            merged_data.extend(data)
+            merged_data.append(data)
             stages.extend(stg if len(stg) == len(data) else [''] * len(data))
-    arr = np.array(merged_data)
+    arr = np.concatenate(merged_data)
 
     # Order by step and drop rows whose step repeats (block boundaries print
     # the same step twice). These templates use one monotonic step counter, so

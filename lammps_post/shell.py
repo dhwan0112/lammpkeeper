@@ -18,19 +18,27 @@ The shell provides:
 """
 
 import cmd
+import io
 import os
 import sys
 import shlex
 import glob as globmod
-import readline
-import atexit
+import importlib.util
+import readline  # noqa: F401  (line editing for input())
+import threading
+import traceback
 
 import numpy as np
 
-from lammps_post import VERSION, CM_PER_INCH, WONG_PALETTE
+from lammps_post import VERSION, CM_PER_INCH
 from lammps_post.display import C, print_table, print_kv, progress_msg, HAS_RICH
+from lammpkeeper.common.display import banner
+from lammpkeeper.common.hosted import HostedShellMixin
 
-from lammps_post.parsers import parse_dump, parse_log, parse_data_file, detect_forcefield, parse_input
+from lammps_post.parsers import (
+    parse_log, parse_data_file, detect_forcefield, parse_input,
+    DumpReader, LazyFrames, ANALYSIS_COLUMNS, DEFAULT_CACHE_BYTES,
+)
 
 from lammpkeeper.common.mapping import element_to_type as ff_element_to_type
 
@@ -44,7 +52,7 @@ from lammps_post.analysis import (
 )
 
 from lammps_post.plotting import (
-    HAS_MPL, _setup_plot_style, _save_fig,
+    HAS_MPL,
     plot_thermo, plot_thermostat_summary, plot_pressure,
     plot_charge_evolution, plot_charge_z,
     plot_rdf, plot_oar, plot_or,
@@ -58,35 +66,47 @@ from lammps_post.plotting import (
 from lammps_post.state import SessionState
 
 # ── Optional dependency detection (for banner and export commands) ──
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
+# find_spec only locates the package; importing pandas/scipy/MDAnalysis here
+# would keep hundreds of MB resident for a banner line. Import at point of use.
+def _has_module(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
-try:
-    from scipy.spatial import cKDTree
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
+HAS_PANDAS = _has_module('pandas')
+HAS_SCIPY = _has_module('scipy')
+HAS_MDA = _has_module('MDAnalysis')
 
-try:
-    import MDAnalysis as mda
-    HAS_MDA = True
-except ImportError:
-    HAS_MDA = False
+
+class _PerThreadStdout:
+    """sys.stdout stand-in that sends each thread's writes to its own buffer."""
+
+    def __init__(self, real):
+        self._real = real
+        self._local = threading.local()
+
+    def redirect(self, buf):
+        self._local.buf = buf
+
+    def write(self, s):
+        return getattr(self._local, 'buf', self._real).write(s)
+
+    def flush(self):
+        getattr(self._local, 'buf', self._real).flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 # Lazy import: only need plt if HAS_MPL is True
 if HAS_MPL:
     import matplotlib.pyplot as plt
 
 
-BANNER = f"""
-{C.CYAN}╔══════════════════════════════════════════════════════════════╗
-║  {C.BOLD}LAMMPS-POST:{C.RESET}{C.CYAN} Post-Processing Interactive CLI  v{VERSION}        ║
-║  Type 'help' for commands, 'quit' to exit                    ║
-╚══════════════════════════════════════════════════════════════╝{C.RESET}
-"""
+BANNER = '\n' + banner([
+    f"{C.BOLD}LAMMPS-POST:{C.RESET} Post-Processing Interactive CLI  v{VERSION}",
+    "Type 'help' for commands, 'quit' to exit",
+]) + '\n'
 
 DEPS_INFO = []
 for name, flag in [('rich', HAS_RICH), ('pandas', HAS_PANDAS),
@@ -95,26 +115,18 @@ for name, flag in [('rich', HAS_RICH), ('pandas', HAS_PANDAS),
     DEPS_INFO.append(f"  {name}: {status}")
 
 
-class LammpsPostShell(cmd.Cmd):
+class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # Wrap ANSI escape codes in \x01..\x02 so readline correctly computes
     # the visible prompt length. Without this, history navigation (up/down)
     # corrupts the displayed line because readline miscounts cursor position.
     prompt = f"\x01{C.BLUE}\x02lammps-post>\x01{C.RESET}\x02 "
     intro = BANNER + '\n'.join(DEPS_INFO) + '\n'
+    shell_name = 'post'
 
     def __init__(self):
         super().__init__()
         self.state = SessionState()
-        self._setup_readline()
-
-    def _setup_readline(self):
-        readline.set_completer_delims(' \t\n')
-        histfile = os.path.expanduser('~/.lammps-post_history')
-        try:
-            readline.read_history_file(histfile)
-        except FileNotFoundError:
-            pass
-        atexit.register(readline.write_history_file, histfile)
+        self._setup_history('~/.lammps-post_history')
 
     # ─── Interactive prompt helper ───
     def _ask(self, prompt, default=None):
@@ -180,16 +192,18 @@ class LammpsPostShell(cmd.Cmd):
 
         print()
         print(f"  {C.bold('Output directory for plots/exports:')}")
-        print(f"    1. {suggestion}")
-        print(f"    2. ./lammps-post_output {C.dim('(current dir)')}")
+        print(f"    1. ./lammps-post_output {C.dim('(current dir)')}")
+        print(f"    2. {suggestion} {C.dim('(next to the data)')}")
         print(f"    3. Custom path")
         print()
+        # Default to the working directory: data folders may be shared or
+        # synced (e.g. Dropbox) and should not collect plots by accident.
         choice = self._ask("Choose output directory (1/2/3)", '1')
 
         if choice == '1':
-            s.output_dir = suggestion
-        elif choice == '2':
             s.output_dir = './lammps-post_output'
+        elif choice == '2':
+            s.output_dir = suggestion
         elif choice == '3':
             custom = self._ask("Enter output directory path")
             if custom:
@@ -278,6 +292,11 @@ class LammpsPostShell(cmd.Cmd):
     def do_load(self, arg):
         """
         Load a file: load dump|log|data|input <filepath> [--max N] [--stride N]
+                     dump only: [--lite] [--all-columns] [--cache-mb N]
+          Only the columns analyses read (id type element x y z q) are kept.
+          --lite         store them as float32 (half the memory, approximate)
+          --all-columns  keep every dump column (e.g. vx vy vz)
+          --cache-mb N   parsed-frame memory budget (default 128); larger dumps stream
         Multiple files: load dump f1.dump, log f2.log, data f3.data
         Auto-detect:    load <filepath>  (detects type from extension)
         """
@@ -329,12 +348,21 @@ class LammpsPostShell(cmd.Cmd):
         # Parse optional args
         max_frames = None
         stride = 1
+        lite = False
+        all_columns = False
+        cache_mb = DEFAULT_CACHE_BYTES / 1024 ** 2
         i = 2
         while i < len(parts):
             if parts[i] == '--max' and i + 1 < len(parts):
                 max_frames = int(parts[i + 1]); i += 2
             elif parts[i] == '--stride' and i + 1 < len(parts):
                 stride = int(parts[i + 1]); i += 2
+            elif parts[i] == '--cache-mb' and i + 1 < len(parts):
+                cache_mb = float(parts[i + 1]); i += 2
+            elif parts[i] == '--lite':
+                lite = True; i += 1
+            elif parts[i] == '--all-columns':
+                all_columns = True; i += 1
             else:
                 i += 1
 
@@ -344,10 +372,21 @@ class LammpsPostShell(cmd.Cmd):
 
         if ftype == 'dump':
             progress_msg(f"Loading dump: {fpath} ...")
-            frames, columns, col_idx = parse_dump(fpath, max_frames=max_frames, stride=stride)
+            try:
+                reader = DumpReader(fpath,
+                                    columns=None if all_columns else ANALYSIS_COLUMNS,
+                                    dtype=np.float32 if lite else np.float64)
+                frames = LazyFrames(reader, cache_bytes=int(cache_mb * 1024 ** 2),
+                                    stride=stride, max_frames=max_frames)
+                if frames:
+                    frames[-1]   # parse the last frame now so a truncated dump fails at load
+            except (ValueError, OSError) as e:
+                print(C.err(f"  {e}"))
+                return
             if not frames:
                 print(C.err("  No frames found in dump file."))
                 return
+            columns, col_idx = list(reader.columns), dict(reader.col_idx)
 
             # If the dump has 'element' column but no 'type' column,
             # synthesize a numeric 'type' column from element labels.
@@ -361,23 +400,32 @@ class LammpsPostShell(cmd.Cmd):
                 # Mn and O would be numbered 1 and 2, and O (really type 3) would be
                 # read as Fe_down by every type-based analysis.
                 elem_to_type = None
+                lookup = None   # full mapping, so elements absent from frame 0 still resolve
                 for ff_name in ('ace', 'reaxff'):
                     canonical = ff_element_to_type(ff_name)
                     if set(unique_elems) <= set(canonical):
                         elem_to_type = {e: canonical[e] for e in unique_elems}
+                        lookup = dict(canonical)
                         break
                 if elem_to_type is None:
                     elem_to_type = {e: i + 1 for i, e in enumerate(unique_elems)}
+                    lookup = elem_to_type
                 progress_msg(f"Synthesizing 'type' column from elements: {elem_to_type}")
 
-                # Add type column to each frame's atoms array
-                type_col_idx = len(col_idx)
-                for fr in frames:
-                    type_arr = np.array([elem_to_type[e] for e in fr['elements']],
-                                        dtype=np.float64).reshape(-1, 1)
-                    fr['atoms'] = np.hstack([fr['atoms'], type_arr])
+                def add_type_column(fr, lookup=lookup):
+                    elements = fr['elements']
+                    type_arr = np.zeros((len(elements), 1), dtype=fr['atoms'].dtype)
+                    for e, t in lookup.items():
+                        type_arr[elements == e, 0] = t
+                    unknown = set(elements[type_arr[:, 0] == 0].tolist())
+                    if unknown:
+                        raise ValueError(
+                            f"step {fr['timestep']}: element(s) {sorted(unknown)} have no "
+                            f"type mapping {lookup}")
+                    return dict(fr, atoms=np.hstack([fr['atoms'], type_arr]))
 
-                col_idx['type'] = type_col_idx
+                frames.set_transform(add_type_column)
+                col_idx['type'] = len(col_idx)
                 columns.append('type')
 
             self.state.dump_path = fpath
@@ -388,6 +436,7 @@ class LammpsPostShell(cmd.Cmd):
 
             # Auto-detect force field
             ff_info = detect_forcefield(columns, col_idx, frames)
+            ff_info['has_velocity'] = 'vx' in reader.raw_columns
             self.state.ff_info = ff_info
 
             # Auto-detect surface z
@@ -396,9 +445,21 @@ class LammpsPostShell(cmd.Cmd):
             n_atoms = frames[0]['natoms']
             n_frames = len(frames)
             progress_msg(f"Columns: {C.info(', '.join(columns))}")
+            skipped = [c for c in reader.raw_columns
+                       if c not in columns and c != 'element']
+            if skipped:
+                progress_msg(f"Not loaded (unused by analyses): {', '.join(skipped)} "
+                             f"(--all-columns keeps them)")
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
                          f"({ff_info['unit_system']} units, dt={ff_info['dt_fs']} fs)")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
+            est_mb = frames.estimated_bytes / 1024 ** 2
+            if frames.fits_in_cache:
+                progress_msg(f"Frames cached in memory on first use (~{est_mb:.0f} MB)")
+            else:
+                progress_msg(
+                    f"Streaming from disk: ~{est_mb:.0f} MB of frames exceeds the "
+                    f"{cache_mb:.0f} MB cache (--cache-mb N to keep them in memory)")
             progress_msg(f"Types: {ff_info['atom_types']}")
             if self.state.surface_z:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
@@ -1057,29 +1118,28 @@ class LammpsPostShell(cmd.Cmd):
 
         print(f"\n  {C.bold('Running all applicable analyses...')}\n")
 
+        # A trajectory larger than the frame cache would be re-read from disk
+        # by every analysis; run them concurrently over one shared read instead.
+        # Needs surface_z up front: the RDF z_pbc default depends on whether it
+        # was known before the auto-detect below, so that case stays sequential.
+        shared = (bool(s.dump_frames) and not s.dump_frames.fits_in_cache
+                  and s.surface_z is not None)
+
         if s.dump_frames:
+            jobs = []
             if s.has_charge:
-                self._analyze_charge([])
-                self._analyze_charge_z([], _batch=True)
-                self._analyze_or([])
-            self._analyze_rdf([], _batch=True)
-            # For surface-dependent analyses, try auto-detect if not set
-            if s.surface_z is None:
-                s._guess_surface_z()
-                if s.surface_z:
-                    progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
-            if s.surface_z:
-                self._analyze_oar([])
-                self._analyze_penetration([])
-                self._analyze_penetration_trend([])
+                jobs.append(lambda: self._analyze_charge([]))
+                jobs.append(lambda: self._analyze_charge_z([], _batch=True))
+                jobs.append(lambda: self._analyze_or([]))
+            jobs.append(lambda: self._analyze_rdf([], _batch=True))
+            if shared:
+                jobs += self._dump_jobs_after_rdf(split_density=True)
+                self._run_jobs_shared(jobs)
             else:
-                print(C.warn("  Skipping OAR/penetration (surface_z unknown). "
-                             "Use 'set surface_z <value>' to enable."))
-            self._analyze_density([], _batch=True)
-            self._analyze_dissociation([])
-            if s.ff == 'ace':
-                self._analyze_spin([])
-            self._analyze_msd([], _batch=True)
+                for job in jobs:
+                    job()
+                for job in self._dump_jobs_after_rdf(split_density=False):
+                    job()
 
         if s.log_data:
             self._analyze_performance([])
@@ -1090,6 +1150,89 @@ class LammpsPostShell(cmd.Cmd):
         print(f"\n  {C.ok('All analyses complete.')}")
         print(f"  Cached results: {', '.join(s.cache.keys())}")
         print(f"  Use 'plot <name>' or 'plot all' to generate figures.")
+
+    def _dump_jobs_after_rdf(self, split_density):
+        """
+        Remaining dump analyses of 'analyze all', in order, as callables.
+        Building the list runs the surface auto-detect, which must happen
+        after the RDF job when running sequentially.
+        """
+        s = self.state
+        jobs = []
+        if s.surface_z is None:
+            s._guess_surface_z()
+            if s.surface_z:
+                progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
+        if s.surface_z:
+            jobs.append(lambda: self._analyze_oar([]))
+            jobs.append(lambda: self._analyze_penetration([]))
+            jobs.append(lambda: self._analyze_penetration_trend([]))
+        else:
+            jobs.append(lambda: print(C.warn(
+                "  Skipping OAR/penetration (surface_z unknown). "
+                "Use 'set surface_z <value>' to enable.")))
+        if split_density:
+            # One job per profile, so each joins the shared read instead of
+            # three profiles reading the trajectory one after another.
+            jobs.append(lambda: self._density_one(None, 'all'))
+            for name, type_id in self._density_species().items():
+                jobs.append(lambda n=name, t=type_id: self._density_one(t, n))
+        else:
+            jobs.append(lambda: self._analyze_density([], _batch=True))
+        jobs.append(lambda: self._analyze_dissociation([]))
+        if s.ff == 'ace':
+            jobs.append(lambda: self._analyze_spin([]))
+        jobs.append(lambda: self._analyze_msd([], _batch=True))
+        return jobs
+
+    def _run_jobs_shared(self, jobs):
+        """Run analysis jobs in threads over one shared trajectory read.
+
+        Each job's output is buffered and printed afterwards in job order, so
+        the transcript reads the same as a sequential run.
+        """
+        frames = self.state.dump_frames
+        progress_msg(f"Trajectory exceeds the {frames.cache_bytes / 1024 ** 2:.0f} MB frame "
+                     f"cache: running {len(jobs)} analyses over one shared read...")
+        outputs = [io.StringIO() for _ in jobs]
+        errors = [None] * len(jobs)
+        proxy = _PerThreadStdout(sys.stdout)
+
+        def run(i, job):
+            proxy.redirect(outputs[i])
+            try:
+                job()
+            except Exception:
+                errors[i] = traceback.format_exc()
+
+        saved = sys.stdout
+        sys.stdout = proxy
+        try:
+            with frames.shared_pass() as shared:
+                threads = [threading.Thread(target=run, args=(i, job), daemon=True)
+                           for i, job in enumerate(jobs)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+        finally:
+            sys.stdout = saved
+        for out, err in zip(outputs, errors):
+            sys.stdout.write(out.getvalue())
+            if err:
+                print(C.err(f"  Analysis failed: {err.strip().splitlines()[-1]}"))
+        progress_msg(f"Shared read parsed {shared.frames_parsed} of {len(frames)} frames once "
+                     f"for all analyses")
+
+    def _density_species(self):
+        return {str(v): k for k, v in self.state.atom_types.items() if isinstance(k, int)}
+
+    def _density_one(self, species_type, species_name):
+        s = self.state
+        progress_msg(f"Computing density profile (species: {species_name})...")
+        s.cache[f'density_{species_name}'] = compute_density_profile(
+            s.dump_frames, s.dump_col_idx,
+            species_type=species_type, species_name=species_name)
 
     def _analyze_charge(self, opts):
         if not self._require_dump() or not self._require_charge():
@@ -2550,6 +2693,7 @@ class LammpsPostShell(cmd.Cmd):
             if isinstance(v, np.ndarray) and v.ndim == 1:
                 df_data[k] = v
         if df_data:
+            import pandas as pd
             df = pd.DataFrame(df_data)
             df.to_csv(fname, index=False)
             progress_msg(f"Exported: {C.ok(fname)}")
@@ -2576,6 +2720,7 @@ class LammpsPostShell(cmd.Cmd):
             if isinstance(v, np.ndarray) and v.ndim == 1:
                 df_data[k] = v
         if df_data:
+            import pandas as pd
             df = pd.DataFrame(df_data)
             with open(fname, 'w') as f:
                 f.write(df.to_latex(index=False, float_format='%.4f'))
@@ -2835,6 +2980,7 @@ class LammpsPostShell(cmd.Cmd):
     def do_quit(self, arg):
         """Exit the tool."""
         print(f"\n  {C.dim('Goodbye!')}\n")
+        self._next = 'quit'
         return True
 
     do_exit = do_quit
@@ -2856,6 +3002,8 @@ class LammpsPostShell(cmd.Cmd):
         help_text = f"""
 {C.bold('FILE I/O')}
   load dump <path> [--max N] [--stride N]   Load trajectory file
+            [--lite] [--all-columns]        float32 columns / keep unused columns
+            [--cache-mb N]                  frame cache budget (default 128 MB)
   load log <path>                           Load LAMMPS log file
   load data <path>                          Load LAMMPS data file
   unload dump|log|data                      Unload a file
@@ -2922,7 +3070,7 @@ class LammpsPostShell(cmd.Cmd):
   clear                                     Clear screen
   quit / exit / q                           Exit
 """
-        print(help_text)
+        print(help_text + self._hosted_help())
 
     # ─── Path completion helper ───
 

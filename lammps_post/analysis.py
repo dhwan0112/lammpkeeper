@@ -18,11 +18,15 @@ Dependencies:
 ═══════════════════════════════════════════════════════════════
 """
 
+import itertools
+
 import numpy as np
 
 from lammpkeeper.common.mapping import label_to_type
+from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
+                         O2_BOND_CUTOFF_A)
 
-def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=0.3):
+def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E):
     """
     Track the evolution of Fe atomic partial charges over time.
     ReaxFF-only analysis — requires the 'q' column in dump data.
@@ -150,6 +154,53 @@ def analyze_charge_z(frame, col_idx, z_bins=50):
     return {'z': ctr, 'fe_charge': fe_q_avg, 'fe_count': fe_n, 'o_count': o_n}
 
 
+def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False):
+    """
+    (ia, ib, weight) for every (a, b) pair whose minimum-image distance may be
+    below r_max, found with a periodic cKDTree; None without scipy.
+
+    The search radius carries a small margin, so the result is a superset of
+    the pairs the brute-force loop would bin. x and y are periodic; z is too
+    when z_pbc, otherwise it gets a box longer than the coordinate span plus
+    r_max, so no wrapped image can come within the cutoff.
+
+    For same_species, each unordered pair is returned once with weight 2: the
+    brute-force loop sees (i, j) and (j, i), whose minimum-image distances are
+    bitwise equal (the displacement only changes sign).
+    """
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        return None
+
+    lo = box[:, 0]
+    L = box[:, 1] - box[:, 0]
+    wa = pos_a - lo
+    wb = pos_b - lo
+    boxsize = L.astype(float)
+    periodic_dims = (0, 1, 2) if z_pbc else (0, 1)
+    for dim in periodic_dims:
+        for w in (wa, wb):
+            w[:, dim] %= L[dim]
+            w[w[:, dim] >= L[dim], dim] = 0.0   # x % L can round up to L
+    if not z_pbc:
+        zmin = min(wa[:, 2].min(), wb[:, 2].min())
+        wa[:, 2] -= zmin
+        wb[:, 2] -= zmin
+        boxsize[2] = max(wa[:, 2].max(), wb[:, 2].max()) + 2 * r_max + 1.0
+
+    radius = r_max * (1 + 1e-6) + 1e-6
+    tree_a = cKDTree(wa, boxsize=boxsize)
+    if same_species:
+        pairs = tree_a.query_pairs(radius, output_type='ndarray')
+        return pairs[:, 0], pairs[:, 1], 2
+    tree_b = cKDTree(wb, boxsize=boxsize)
+    # Zero-distance entries are dropped from the sparse result; the binning
+    # excludes r == 0 anyway.
+    near = tree_a.sparse_distance_matrix(tree_b, radius, output_type='ndarray')
+    return near['i'].astype(np.intp), near['j'].astype(np.intp), 1
+
+
 def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
                 max_frames=20, label_a='Fe', label_b='O', z_pbc=False):
     """
@@ -170,10 +221,9 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     3. Histogram the distances into radial bins
     4. Normalize by ideal gas density: g(r) = hist / (N_frames * N_a * shell_vol * rho_b)
 
-    Uses vectorized distance calculation (broadcasting over type_b atoms).
-    For very large systems, scipy.cKDTree could be used but PBC handling
-    makes it complex, so we use the vectorized brute-force approach which
-    is efficient enough for typical system sizes (< 10,000 atoms).
+    With scipy, a periodic cKDTree finds the candidate pairs within r_max and
+    their distances are recomputed with the same minimum-image formula as the
+    brute-force fallback (used without scipy), so both paths bin identically.
 
     Args:
         frames:     list[dict] — Trajectory frames
@@ -225,10 +275,24 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         n_b_last = len(pos_b)
         vol_last = L[0] * L[1] * L[2]  # Total box volume
 
-        # Placeholder for cKDTree acceleration. Currently unused because
-        # cKDTree doesn't natively handle periodic boundary conditions.
-        # The vectorized brute-force below is efficient enough for
-        # typical simulation sizes (< 5000 atoms per species).
+        pairs = _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
+                                     same_species=(type_a == type_b))
+        if pairs is not None:
+            # cKDTree only nominates pairs; distances are recomputed below with
+            # the brute-force formula so every r lands in the same bin as before.
+            ia, ib, weight = pairs
+            d = pos_b[ib] - pos_a[ia]
+            d[:, 0] -= L[0] * np.round(d[:, 0] / L[0])
+            d[:, 1] -= L[1] * np.round(d[:, 1] / L[1])
+            if z_pbc:
+                d[:, 2] -= L[2] * np.round(d[:, 2] / L[2])
+            r = np.linalg.norm(d, axis=1)
+            valid = (r > 0) & (r < r_max)
+            bi = (r[valid] / dr).astype(int)
+            bi = bi[bi < n_bins]
+            hist_total += weight * np.bincount(bi, minlength=n_bins)
+            n_frames_used += 1
+            continue
 
         # --- Vectorized brute-force with minimum image convention ---
         # For each type_a atom, compute distances to ALL type_b atoms
@@ -318,7 +382,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
             'n_absorbed': np.array(n_abs), 'n_total': np.array(n_total)}
 
 
-def compute_or(frames, col_idx, dt_fs=0.25, q_thr=0.3, z_range=None):
+def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None):
     """
     Compute the Oxidation Rate (OR) over time. ReaxFF-only.
 
@@ -367,8 +431,9 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     Monitors three quantities:
     1. Maximum penetration depth: (surface_z - min_O_z), measuring how
        deep the deepest O atom has reached into the Fe bulk.
-    2. Adsorbed O count: number of O atoms below the surface z-coordinate.
-    3. Near-surface O count: O atoms within 3.0 A of the surface
+    2. Adsorbed O count: O atoms more than NEAR_SURFACE_A (3.0 A) below
+       the surface z-coordinate.
+    3. Near-surface O count: O atoms within NEAR_SURFACE_A of the surface
        (in the reaction zone but not yet fully absorbed).
 
     Args:
@@ -403,8 +468,9 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
 
         time.append(fr['timestep'] * dt_fs / 1000)
         o_min_z.append(np.min(o_z))
-        n_ads.append(int(np.sum(o_z < (surface_z - 3.0))))
-        n_near.append(int(np.sum((o_z >= (surface_z - 3.0)) & (o_z < (surface_z + 3.0)))))
+        n_ads.append(int(np.sum(o_z < (surface_z - NEAR_SURFACE_A))))
+        n_near.append(int(np.sum((o_z >= (surface_z - NEAR_SURFACE_A))
+                                 & (o_z < (surface_z + NEAR_SURFACE_A)))))
         n_total.append(len(o_z))
 
     n_ads = np.array(n_ads)
@@ -547,8 +613,12 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     ti = col_idx['type']
 
     if z_range is None and frames:
-        zlo = min(fr['box'][2][0] for fr in frames)
-        zhi = max(fr['box'][2][1] for fr in frames)
+        boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
+        if boxes is not None:
+            zlo, zhi = float(boxes[:, 2, 0].min()), float(boxes[:, 2, 1].max())
+        else:
+            zlo = min(fr['box'][2][0] for fr in frames)
+            zhi = max(fr['box'][2][1] for fr in frames)
         z_range = (zlo, zhi)
 
     dz = (z_range[1] - z_range[0]) / n_bins
@@ -578,7 +648,7 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
             'n_frames': n_used}
 
 
-def detect_o2_dissociation(frames, col_idx, bond_cutoff=1.8, dt_fs=1.0, o_type=2):
+def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=1.0, o_type=2):
     """
     Track O₂ molecule dissociation over time by detecting O-O bonds.
 
@@ -840,8 +910,7 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
     t0 = frames[0]['timestep']
     time_arr, msd_arr = [0.0], [0.0]
 
-    for fi in range(1, len(frames)):
-        fr = frames[fi]
+    for fr in itertools.islice(frames, 1, None):
         atoms = fr['atoms']
         if species_type is not None:
             cur_mask = atoms[:, ti].astype(int) == species_type
@@ -1014,9 +1083,7 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
             o_z = o_atoms[:, zi]
 
         fe_z = atoms[fe_mask, zi]
-        # Surface = Fe max z - 1.4 Å (half BCC lattice constant)
-        # Places the surface plane between topmost Fe layer and gas phase
-        surface = float(np.max(fe_z) - 1.4) if len(fe_z) > 0 else 0.0
+        surface = float(np.max(fe_z) - SURFACE_OFFSET_A) if len(fe_z) > 0 else 0.0
 
         time_arr.append((fr['timestep'] - t0) * dt_fs / 1000.0)
         o_z_traj.append(o_z)

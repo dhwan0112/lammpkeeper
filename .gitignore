@@ -8,6 +8,10 @@ dist/
 .venv/
 venv/
 
+# Native parser build (native/build.sh)
+native/target/
+lammps_post/*.so
+
 # LAMMPS run outputs the tool generates (never in the repo tree, but just in case)
 *.lammpstrj
 *.restart

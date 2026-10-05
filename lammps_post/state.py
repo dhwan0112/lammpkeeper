@@ -18,6 +18,8 @@ Design philosophy:
 
 import numpy as np
 
+from lammps_post import Q_OXIDIZED_E, SURFACE_OFFSET_A
+
 class SessionState:
     """
     Central session state container for all loaded data, settings,
@@ -63,7 +65,7 @@ class SessionState:
 
         # ── User-settable analysis parameters ──
         self.surface_z = None       # Fe surface z-coordinate (A), auto-detected or manual
-        self.q_threshold = 0.3      # Charge threshold for "oxidized" Fe (e)
+        self.q_threshold = Q_OXIDIZED_E  # Charge threshold for "oxidized" Fe (e)
         self.normalize = False      # If True, plots show ratios/fractions instead of raw counts
         self.z_focus = None         # (zlo, zhi) tuple or None for full z-range in plots
 
@@ -155,10 +157,10 @@ class SessionState:
     def _guess_surface_z(self):
         """
         Auto-detect the Fe surface z-coordinate from the dump data.
-        Uses the maximum Fe z minus half a BCC lattice constant (1.4 Å)
-        as the surface plane. This places the surface between the topmost
-        Fe layer and the gas phase, so O atoms that enter the top Fe layer
-        are correctly counted as adsorbed.
+        Uses the maximum Fe z minus SURFACE_OFFSET_A (about half a BCC
+        lattice constant, 1.4 Å) as the surface plane. This places the
+        surface between the topmost Fe layer and the gas phase, so O atoms
+        that enter the top Fe layer are correctly counted as adsorbed.
 
         Previous: 95th percentile — too conservative, misses O atoms
         interstitially absorbed between the top 2-3 Fe layers.
@@ -185,9 +187,7 @@ class SessionState:
             fe_mask = np.isin(types, fe_type_nums)
             if np.any(fe_mask):
                 fe_max = float(np.max(atoms[fe_mask, zi]))
-                # Surface = Fe_max - half BCC lattice constant (1.4 Å)
-                # This sits between the topmost Fe layer and the gas phase
-                self.surface_z = fe_max - 1.4
+                self.surface_z = fe_max - SURFACE_OFFSET_A
                 return
 
         # Strategy 2: use 'element' column if available
@@ -196,11 +196,11 @@ class SessionState:
             fe_mask = np.array([e in ('Fe', 'Mn') for e in elements])
             if np.any(fe_mask):
                 fe_max = float(np.max(atoms[fe_mask, zi]))
-                self.surface_z = fe_max - 1.4
+                self.surface_z = fe_max - SURFACE_OFFSET_A
                 return
 
-        # Strategy 3: fallback — use max z minus 1.4 Å
-        self.surface_z = float(np.max(atoms[:, zi])) - 1.4
+        # Strategy 3: fallback — use max z of any atom
+        self.surface_z = float(np.max(atoms[:, zi])) - SURFACE_OFFSET_A
 
     def _guess_o_type(self):
         """
