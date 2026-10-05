@@ -10,11 +10,11 @@ unchanged. The single source of truth now lives in
 lammpkeeper/common/display.py.
 """
 from lammpkeeper.common.display import (  # noqa: F401
-   C,
-   HAS_RICH,
-   print_table,
-   print_kv,
-   progress_msg,
+    C,
+    HAS_RICH,
+    print_table,
+    print_kv,
+    progress_msg,
 )
 
 __all__ = ['C', 'HAS_RICH', 'print_table', 'print_kv', 'progress_msg']

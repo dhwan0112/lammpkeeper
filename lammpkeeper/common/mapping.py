@@ -28,30 +28,30 @@ FORCE_FIELDS = {
 
 
 def type_to_label(ff):
-   """{type_number: label}  e.g. 'ace' -> {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}."""
-   return {t: label for t, (_el, label) in FORCE_FIELDS[ff].items()}
+    """{type_number: label}  e.g. 'ace' -> {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}."""
+    return {t: label for t, (_el, label) in FORCE_FIELDS[ff].items()}
 
 
 def element_to_label(ff):
-   """{element_symbol: label}  e.g. 'ace' -> {'Fe':'Fe_up','Mn':'Fe_down','O':'O'}."""
-   return {el: label for _t, (el, label) in FORCE_FIELDS[ff].items()}
+    """{element_symbol: label}  e.g. 'ace' -> {'Fe':'Fe_up','Mn':'Fe_down','O':'O'}."""
+    return {el: label for _t, (el, label) in FORCE_FIELDS[ff].items()}
 
 
 def label_to_type(ff):
-   """{label: type_number}  e.g. 'ace' -> {'Fe_up':1,'Fe_down':2,'O':3}."""
-   return {label: t for t, (_el, label) in FORCE_FIELDS[ff].items()}
+    """{label: type_number}  e.g. 'ace' -> {'Fe_up':1,'Fe_down':2,'O':3}."""
+    return {label: t for t, (_el, label) in FORCE_FIELDS[ff].items()}
 
 
 def element_to_type(ff):
-   """{element_symbol: type_number}  e.g. 'ace' -> {'Fe':1,'Mn':2,'O':3}."""
-   return {el: t for t, (el, _label) in FORCE_FIELDS[ff].items()}
+    """{element_symbol: type_number}  e.g. 'ace' -> {'Fe':1,'Mn':2,'O':3}."""
+    return {el: t for t, (el, _label) in FORCE_FIELDS[ff].items()}
 
 
 def element_order(ff):
-   """Element symbols in atom-type order: 'ace' -> ['Fe', 'Mn', 'O'].
+    """Element symbols in atom-type order: 'ace' -> ['Fe', 'Mn', 'O'].
 
-   This is the order LAMMPS expects in `pair_coeff * * <potential> <elements>`
-   and in `dump_modify <id> element <elements>`. Sourcing both from here keeps
-   what prep writes and what post reads from ever drifting apart.
-   """
-   return [el for _t, (el, _label) in sorted(FORCE_FIELDS[ff].items())]
+    This is the order LAMMPS expects in `pair_coeff * * <potential> <elements>`
+    and in `dump_modify <id> element <elements>`. Sourcing both from here keeps
+    what prep writes and what post reads from ever drifting apart.
+    """
+    return [el for _t, (el, _label) in sorted(FORCE_FIELDS[ff].items())]
