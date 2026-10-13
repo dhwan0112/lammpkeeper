@@ -30,6 +30,11 @@ class HostedShellMixin:
         if readline is None:
             return
         readline.set_completer_delims(' \t\n')
+        # Start from this file alone, as lkpr's _load_history does. Without the
+        # clear, every shell created in one process (the test suite makes many)
+        # re-appends the file to the shared readline history, and the exit
+        # handler writes the sum back, so the file multiplies on every run.
+        readline.clear_history()
         try:
             readline.read_history_file(self.histfile)
         except (FileNotFoundError, OSError):
