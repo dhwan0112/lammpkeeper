@@ -12,7 +12,7 @@ import tempfile
 import threading
 
 import _util  # noqa: F401  (path bootstrap)
-from _util import FIXTURE, have_numpy, noninteractive, section_hash
+from _util import FIXTURE, have_numpy, noninteractive, section_hash, skip
 
 
 def _have_scipy():
@@ -29,8 +29,10 @@ def _lazy_fixture(**kw):
 
 
 def test_shared_pass_feeds_every_iterator_every_frame_once():
-    if not (have_numpy() and os.path.exists(FIXTURE)):
-        return
+    if not have_numpy():
+        skip('numpy not installed')
+    if not os.path.exists(FIXTURE):
+        skip(f'fixture not found: {FIXTURE}')
     frames = _lazy_fixture(cache_bytes=0, max_frames=60)
     expected = [f['timestep'] for f in frames]
     seen = {}
@@ -66,8 +68,10 @@ def test_shared_pass_feeds_every_iterator_every_frame_once():
 
 
 def test_shared_pass_propagates_parse_errors():
-    if not (have_numpy() and os.path.exists(FIXTURE)):
-        return
+    if not have_numpy():
+        skip('numpy not installed')
+    if not os.path.exists(FIXTURE):
+        skip(f'fixture not found: {FIXTURE}')
     frames = _lazy_fixture(cache_bytes=0, max_frames=10)
 
     def boom(fr):
@@ -96,8 +100,10 @@ def _analyze_all(load_opts):
 
 
 def test_shared_analyze_all_matches_sequential():
-    if not (have_numpy() and os.path.exists(FIXTURE)):
-        return
+    if not have_numpy():
+        skip('numpy not installed')
+    if not os.path.exists(FIXTURE):
+        skip(f'fixture not found: {FIXTURE}')
     seq = _analyze_all('')
     assert seq.dump_frames.fits_in_cache
     shared = _analyze_all('--cache-mb 0.01')
@@ -108,8 +114,12 @@ def test_shared_analyze_all_matches_sequential():
 
 
 def test_rdf_tree_path_bins_like_brute_force():
-    if not (have_numpy() and _have_scipy() and os.path.exists(FIXTURE)):
-        return
+    if not have_numpy():
+        skip('numpy not installed')
+    if not _have_scipy():
+        skip('scipy not installed')
+    if not os.path.exists(FIXTURE):
+        skip(f'fixture not found: {FIXTURE}')
     import numpy as np
     from lammps_post import analysis as A
     frames = _lazy_fixture()

@@ -29,6 +29,33 @@ def have_numpy():
         return False
 
 
+class Skip(Exception):
+    """A test cannot run in this environment (missing dependency/fixture).
+
+    Raised by skip()/require(); tests/run.py reports it as SKIP, pytest
+    reports it as skipped. Never use a bare `return` to skip: the runner
+    used to count that as PASS (BACKLOG TEST-1).
+    """
+
+
+def skip(reason):
+    """Skip the calling test with `reason` (pytest-aware)."""
+    if 'pytest' in sys.modules:
+        import pytest
+        pytest.skip(reason)
+    raise Skip(reason)
+
+
+def require(condition, reason):
+    """Skip the calling test unless `condition` holds."""
+    if not condition:
+        skip(reason)
+
+
+def require_numpy():
+    require(have_numpy(), 'numpy not installed')
+
+
 @contextlib.contextmanager
 def noninteractive():
     """Silence stdout and make stdin look empty.

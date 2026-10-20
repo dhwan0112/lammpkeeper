@@ -13,13 +13,15 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if TESTS_DIR not in sys.path:
     sys.path.insert(0, TESTS_DIR)
 
+from _util import Skip  # noqa: E402
+
 MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_comparison',
            'test_regression_numeric', 'test_parse_log_merge', 'test_dump_reader',
-           'test_engine']
+           'test_engine', 'test_skip_reporting']
 
 
 def main():
-    passed = failed = 0
+    passed = failed = skipped = 0
     for modname in MODULES:
         mod = importlib.import_module(modname)
         for name in sorted(dir(mod)):
@@ -32,11 +34,14 @@ def main():
                 fn()
                 print(f'PASS {modname}.{name}')
                 passed += 1
+            except Skip as e:
+                print(f'SKIP {modname}.{name}: {e}')
+                skipped += 1
             except Exception:
                 print(f'FAIL {modname}.{name}')
                 traceback.print_exc()
                 failed += 1
-    print(f'\n{passed} passed, {failed} failed')
+    print(f'\n{passed} passed, {failed} failed, {skipped} skipped')
     return 1 if failed else 0
 
 

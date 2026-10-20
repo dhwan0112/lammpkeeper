@@ -49,8 +49,7 @@ def test_post_detect_ace_element_path_is_type_keyed():
     state._guess_surface_z / _guess_o_type, which then fell back to "Fe is type 1"
     and dropped Fe_down entirely.
     """
-    if not _util.have_numpy():
-        return
+    _util.require_numpy()
     import numpy as np
     from lammps_post.parsers import detect_forcefield
     frames = [{'elements': ['Fe', 'Mn', 'O'], 'atoms': np.zeros((3, 3), dtype=float)}]
@@ -71,8 +70,7 @@ def test_post_detect_ace_labelless_uses_the_convention_not_atom_counts():
     spin polarization — the minority Fe became "O" and every O-based analysis
     silently went wrong. The last two cases below are the ones that used to fail.
     """
-    if not _util.have_numpy():
-        return
+    _util.require_numpy()
     import numpy as np
     from lammps_post.parsers import detect_forcefield
 
@@ -115,8 +113,7 @@ def test_type_synthesis_from_elements_is_canonical_not_alphabetical():
     yet, so Mn and O would be numbered 1 and 2 — and O, really type 3, would be
     read as Fe_down by every type-based analysis.
     """
-    if not _util.have_numpy():
-        return
+    _util.require_numpy()
     import os
     import tempfile
     import numpy as np

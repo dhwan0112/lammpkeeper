@@ -45,8 +45,8 @@ def _build(ff):
 
 
 def test_all_force_fields_build_identical_coordinates():
-    if not _have_ase() or not _util.have_numpy():
-        return  # skip
+    _util.require(_have_ase(), 'ase not installed')
+    _util.require_numpy()
     import numpy as np
 
     builds = {ff: _build(ff) for ff in FIELDS}
@@ -66,8 +66,8 @@ def test_all_force_fields_build_identical_coordinates():
 
 def test_wall_does_not_depend_on_the_force_field():
     """The regression guard proper: the wall must not track state.rc again."""
-    if not _have_ase() or not _util.have_numpy():
-        return
+    _util.require(_have_ase(), 'ase not installed')
+    _util.require_numpy()
     from lammps_pre.state import PreState, WALL_CUTOFF, FF_PRESETS
 
     # The shared cutoff must clear every force field's own cutoff, or the O2 gas
