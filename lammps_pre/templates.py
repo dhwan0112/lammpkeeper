@@ -428,24 +428,37 @@ if [ $MISSING -eq 1 ]; then echo "Error: required files missing"; exit 1; fi
 if [ -f "$PBS_NODEFILE" ]; then NPROCS=$(wc -l < "$PBS_NODEFILE"); else NPROCS=${{NCPUS:-{ncpus}}}; fi
 echo "Input: $lammps_input_script | Cores: $NPROCS"
 echo "=== 2. Scratch ==="
-tdir="/hpctmp/$USER/$JOBID"
-mkdir -p "$tdir"
-cp "$CurrDir/$lammps_input_script" "$tdir/"
-for file in $required_files; do cp "$CurrDir/$file" "$tdir/"; done
-cd "$tdir"
+tdir="${{LKPR_SCRATCH:-/hpctmp/$USER/$JOBID}}"
+mkdir -p "$tdir" || {{ echo "Error: cannot create scratch dir: $tdir"; exit 1; }}
+cp "$CurrDir/$lammps_input_script" "$tdir/" || {{ echo "Error: cannot copy input to scratch: $tdir"; exit 1; }}
+for file in $required_files; do
+    cp "$CurrDir/$file" "$tdir/" || {{ echo "Error: cannot copy $file to scratch: $tdir"; exit 1; }}
+done
+cd "$tdir" || {{ echo "Error: cannot enter scratch dir: $tdir"; exit 1; }}
 echo "=== 3. LAMMPS Run: $(date) ==="
 mpirun -np "$NPROCS" "$LAMMPS_EXECUTABLE" $LAMMPS_VARS -in "$lammps_input_script"
 EXIT_CODE=$?
 echo "=== LAMMPS Done: $(date) | exit=$EXIT_CODE ==="
 echo "=== 4. Copy Results ==="
 if [ $EXIT_CODE -eq 0 ]; then
-    cp -r "$tdir"/* "$CurrDir/"
+    DEST="$CurrDir"
+else
+    DEST="$CurrDir/failed_${{JOBID}}"
+fi
+COPY_OK=1
+mkdir -p "$DEST" || COPY_OK=0
+if [ $COPY_OK -eq 1 ]; then
+    cp -a "$tdir"/. "$DEST"/ || COPY_OK=0
+fi
+if [ $COPY_OK -eq 0 ]; then
+    echo "Error: failed to copy results to $DEST"
+    echo "Scratch kept for manual recovery: $tdir"
+    if [ $EXIT_CODE -eq 0 ]; then exit 1; else exit $EXIT_CODE; fi
+fi
+if [ $EXIT_CODE -eq 0 ]; then
     echo "Success: results copied to $CurrDir"
 else
-    FAILDIR="$CurrDir/failed_${{JOBID}}"
-    mkdir -p "$FAILDIR"
-    cp -r "$tdir"/* "$FAILDIR/"
-    echo "Failed: results copied to $FAILDIR"
+    echo "Failed: results copied to $DEST"
 fi
 rm -rf "$tdir"
 echo "=== Complete: $(date) ==="
