@@ -9,7 +9,7 @@ import os
 import tempfile
 
 import _util  # noqa: F401  (path bootstrap)
-from _util import have_numpy
+from _util import have_numpy, skip
 
 
 def _frame(step, rows, cols='id type q x y z', box=((0, 10), (0, 10), (0, 20))):
@@ -46,7 +46,7 @@ def _expect_value_error(fn, needle):
 
 def test_type_charge_layout_without_elements():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.parsers import parse_dump
     path = _write(_frame(0, REAX_ROWS) + _frame(100, REAX_ROWS))
@@ -65,7 +65,7 @@ def test_type_charge_layout_without_elements():
 
 def test_single_and_zero_atom_frames_keep_2d_shape():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import parse_dump
     path = _write(_frame(0, REAX_ROWS[:1]) + _frame(1, []))
     try:
@@ -78,7 +78,7 @@ def test_single_and_zero_atom_frames_keep_2d_shape():
 
 def test_column_selection_and_float32():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.parsers import DumpReader
     rows = [(7, 'Fe', 1.5, 2.5, 3.5, 0.1), (9, 'O', 4.5, 5.5, 6.5, 0.2)]
@@ -99,7 +99,7 @@ def test_column_selection_and_float32():
 
 def test_stride_and_max_frames():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import DumpReader
     path = _write(''.join(_frame(s, REAX_ROWS) for s in range(10)))
     try:
@@ -112,7 +112,7 @@ def test_stride_and_max_frames():
 
 def test_empty_file_matches_legacy_return():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import parse_dump
     path = _write('')
     try:
@@ -123,7 +123,7 @@ def test_empty_file_matches_legacy_return():
 
 def test_truncated_final_frame_raises():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import parse_dump
     text = _frame(0, REAX_ROWS) + _frame(100, REAX_ROWS)
     path = _write(text.rsplit('\n', 2)[0] + '\n')   # drop the last atom line
@@ -135,7 +135,7 @@ def test_truncated_final_frame_raises():
 
 def test_partial_last_line_raises():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import parse_dump
     path = _write((_frame(0, REAX_ROWS)).rstrip('\n')[:-4])  # cut mid-line
     try:
@@ -157,7 +157,7 @@ def _frames_equal(a, b):
 
 def test_lazy_frames_match_parse_dump_at_any_cache_size():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.parsers import parse_dump, DumpReader, LazyFrames
     path = _write(''.join(_frame(s, REAX_ROWS[: 1 + s % 3]) for s in range(9)))
@@ -180,7 +180,7 @@ def test_lazy_frames_match_parse_dump_at_any_cache_size():
 
 def test_lazy_frames_transform_survives_eviction():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import DumpReader, LazyFrames
     path = _write(''.join(_frame(s, REAX_ROWS) for s in range(4)))
     try:
@@ -194,7 +194,7 @@ def test_lazy_frames_transform_survives_eviction():
 
 def test_lazy_frames_raise_on_truncated_frame_access():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import DumpReader, LazyFrames
     text = _frame(0, REAX_ROWS) + _frame(100, REAX_ROWS)
     path = _write(text.rsplit('\n', 2)[0] + '\n')
@@ -209,10 +209,10 @@ def test_lazy_frames_raise_on_truncated_frame_access():
 def test_shell_streaming_load_matches_golden():
     """--cache-mb 0 re-parses every frame from disk; physics must not change."""
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from _util import FIXTURE, noninteractive, section_hash
     if not os.path.exists(FIXTURE):
-        return
+        skip(f'fixture not found: {FIXTURE}')
     from test_regression_numeric import GOLDEN_FAST
     from lammps_post import analysis as A
     from lammps_post.shell import LammpsPostShell
@@ -230,11 +230,11 @@ def test_shell_streaming_load_matches_golden():
 def test_native_parser_matches_loadtxt():
     """The Rust parser must return what the np.loadtxt path returns, bit for bit."""
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post import parsers
     if parsers._native is None:
-        return
+        skip('native parser not built (run native/build.sh)')
     from _util import FIXTURE
     rows = [(7, 'Fe', 1.5e-3, -2.5, 3.0000000000000004, '0.1'),
             (9, 'O', 4.5, 'inf', 6.5, '-1e-300'),
@@ -273,7 +273,7 @@ def test_native_parser_matches_loadtxt():
 
 def test_shell_load_skips_unused_columns_unless_asked():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from _util import noninteractive
     from lammps_post.shell import LammpsPostShell
@@ -298,7 +298,7 @@ def test_shell_load_skips_unused_columns_unless_asked():
 
 def test_layout_change_raises():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import parse_dump
     rows_xyz = [r[:2] + r[3:] for r in REAX_ROWS]
     path = _write(_frame(0, REAX_ROWS) + _frame(100, rows_xyz, cols='id type x y z'))
