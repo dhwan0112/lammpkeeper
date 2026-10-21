@@ -11,6 +11,24 @@ Changes since the last tagged state, grouped by migration stage
 (see `MIGRATION.md`). No version has been released from this section yet;
 REL-0 will tag a thesis-reproducible commit from it.
 
+### Session safety (OPS-1, HPC-1)
+
+#### Added
+
+- `LKPR_NO_HISTORY=1` environment variable: skip reading and writing
+  readline history files entirely.
+- `LKPR_SCRATCH` environment variable: override the scratch directory
+  in the generated job script (default `/hpctmp/$USER/$JOBID` unchanged).
+
+#### Fixed
+
+- Readline history files (`~/.lkpr_history`, `~/.lammps-pre_history`,
+  `~/.lammps-post_history`) are capped at the most recent 2,000 lines
+  instead of growing without bound (OPS-1, PR #4).
+- The generated job script no longer deletes the scratch directory when
+  copying results back fails; it keeps scratch, prints its path and
+  exits nonzero (HPC-1).
+
 ### Stage 1 — unified entry point
 
 #### Added
