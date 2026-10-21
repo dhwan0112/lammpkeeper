@@ -1,0 +1,43 @@
+---
+description: Physics-correctness and generality checklist for trajectory parsing, analysis and species selection
+globs: lammps_post/analysis.py,lammps_post/parsers.py,lammps_post/shell.py,lammps_post/state.py,lammpkeeper/**/*.py
+alwaysApply: false
+---
+
+# Analysis and parsing checklist
+
+Before editing an analysis or parser function, answer these in your plan:
+
+1. **Boundary:** Which dimensions are periodic, and where does that come from (input
+   `boundary`, dump `BOX BOUNDS` flags)? Take a `pbc=(bool, bool, bool)` argument and
+   never hardcode x/y-only.
+2. **Box shape:** Orthogonal only, or triclinic too? If triclinic is not supported,
+   detect it (tilt factors in `BOX BOUNDS xy xz yz`) and raise an error. Never drop the
+   tilt factors silently.
+3. **Identity:** Does the result follow the *same atoms* over time? If so, select IDs
+   at frame 0 and index later frames by ID. Report missing or added atoms visibly.
+4. **Selection:** Resolve user-facing names to **sets of types** through the species
+   map (ACE `Fe` → {1, 2}). An unknown name raises an error that lists the valid
+   names. It never becomes "all atoms" or a default type.
+5. **Generality:** No element names, FF names or domain constants (charge thresholds,
+   O₂ cutoffs, surface offsets) inside a generic function. Pass them in as
+   parameters. Domain defaults live in the domain pack or in
+   `lammps_post/__init__.py` until GEN-4.
+6. **Code paths:** A fast path and its fallback implement the same algorithm. Add an
+   equality test on a case where a naive difference would show up.
+7. **Normalization and units:** State which volume or density is used (slabs include
+   vacuum). Derive `dt_fs` and the units from the run. An unsupported `units` style
+   raises an error.
+
+Write tests with **made-up species labels** (`"A"`, `"B"`) and tiny synthetic frames
+with known answers, as in `tests/pending_review_findings.py`. Use real fixtures only
+for regression.
+
+Known traps (docs/agent/BACKLOG.md):
+- `analyze_msd`: does not unwrap z; reselects atoms by type every frame.
+- `detect_o2_dissociation`: KD-tree is not periodic; pairing differs at n ≤ 20 vs
+  n > 20; Fe/O-specific by name.
+- `shell.py` species maps: `inv[v.split('_')[0]] = k` overwrites Fe_up with Fe_down.
+- `parsers.detect_forcefield`: infers the FF from column/type counts. This is only
+  valid for the original three Fe-O force fields.
+- `parsers` box reading ignores triclinic tilt factors.
