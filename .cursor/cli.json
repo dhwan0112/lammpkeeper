@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(python)",
+      "Shell(python3)",
+      "Shell(pytest)",
+      "Shell(bash:.cursor/skills/verify-lkpr/scripts/verify.sh*)",
+      "Shell(bash:-n *)",
+      "Shell(shellcheck)",
+      "Shell(ls)",
+      "Shell(grep)",
+      "Shell(rg)",
+      "Shell(head)",
+      "Shell(tail)",
+      "Shell(wc)",
+      "Shell(git:status*)",
+      "Shell(git:diff*)",
+      "Shell(git:log*)",
+      "Shell(git:show*)",
+      "Shell(git:branch*)",
+      "Shell(git:add*)",
+      "Shell(git:commit*)",
+      "Read(**)",
+      "Write(lammpkeeper/**)",
+      "Write(lammps_pre/**)",
+      "Write(lammps_post/**)",
+      "Write(tests/**)",
+      "Write(docs/**)"
+    ],
+    "deny": [
+      "Shell(rm)",
+      "Shell(sudo)",
+      "Shell(git:push --force*)",
+      "Shell(git:push -f*)",
+      "Shell(git:push origin main*)",
+      "Shell(git:reset --hard*)",
+      "Shell(git:clean*)",
+      "Write(tests/fixtures/ace_examples/**)",
+      "Write(**/*.so)",
+      "Write(.git/**)",
+      "Write(native/target/**)"
+    ]
+  }
+}
