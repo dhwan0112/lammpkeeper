@@ -55,7 +55,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `'pytest' in sys.modules`. `os.environ.get('PYTEST_CURRENT_TEST')` is the robust
   signal (set by pytest only while a test runs). Optional follow-up before merge.
 
-### OPS-1 · P1 · readline history files grow without bound — `in-progress (branch fix/ops-1-history-limit)`
+### OPS-1 · P1 · readline history files grow without bound — `done (PR #4)`
 - **Where:** `lammpkeeper/shell.py` (`_HISTFILE`), `lammpkeeper/common/hosted.py`
   `_setup_history`; files `~/.lkpr_history`, `~/.lammps-pre_history`,
   `~/.lammps-post_history`.
@@ -69,7 +69,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 - **Done when:** a test writes 5,000 entries and the file holds ≤ 2,000 lines.
   `LKPR_NO_HISTORY=1` leaves HOME untouched.
 
-### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `open`
+### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `in-progress (branch fix/hpc-1-job-script-safety)`
 - **Where:** `lammps_pre/templates.py` PBS template (section "4. Copy Results").
 - **Evidence (measured, Codex):** injected `cp` failure → results lost, "Success"
   printed, exit 0. *(inferred)* The staging `cp`, `mkdir` and `cd` are also unchecked,
