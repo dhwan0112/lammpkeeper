@@ -39,8 +39,13 @@ class Skip(Exception):
 
 
 def skip(reason):
-    """Skip the calling test with `reason` (pytest-aware)."""
-    if 'pytest' in sys.modules:
+    """Skip the calling test with `reason` (pytest-aware).
+
+    PYTEST_CURRENT_TEST is set by pytest only while a test runs, so it is
+    the reliable "under pytest" signal ('pytest' in sys.modules can be
+    true in a plain runner session that merely imported pytest).
+    """
+    if os.environ.get('PYTEST_CURRENT_TEST'):
         import pytest
         pytest.skip(reason)
     raise Skip(reason)
