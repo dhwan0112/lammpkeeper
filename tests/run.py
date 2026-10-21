@@ -17,7 +17,7 @@ from _util import Skip  # noqa: E402
 
 MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_comparison',
            'test_regression_numeric', 'test_parse_log_merge', 'test_dump_reader',
-           'test_engine', 'test_skip_reporting']
+           'test_engine', 'test_skip_reporting', 'test_history']
 
 
 def main():

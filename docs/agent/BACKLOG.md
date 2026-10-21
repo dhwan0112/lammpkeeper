@@ -42,7 +42,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 
 ---
 
-### TEST-1 · P2 · Test runner counts skips as PASS — `done (branch fix/test-1-skip-reporting, not yet merged)`
+### TEST-1 · P2 · Test runner counts skips as PASS — `done (PR #3)`
 - **Where:** `tests/run.py`, every `return  # skip` in `tests/test_*.py`.
 - **Evidence (measured):** without ASE, 2 tests return early and are reported PASS
   (`42 passed, 0 failed`).
@@ -55,7 +55,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `'pytest' in sys.modules`. `os.environ.get('PYTEST_CURRENT_TEST')` is the robust
   signal (set by pytest only while a test runs). Optional follow-up before merge.
 
-### OPS-1 · P1 · readline history files grow without bound — `open`
+### OPS-1 · P1 · readline history files grow without bound — `in-progress (branch fix/ops-1-history-limit)`
 - **Where:** `lammpkeeper/shell.py` (`_HISTFILE`), `lammpkeeper/common/hosted.py`
   `_setup_history`; files `~/.lkpr_history`, `~/.lammps-pre_history`,
   `~/.lammps-post_history`.
