@@ -80,11 +80,45 @@ Invariants of the migration:
 
 ## Open questions (maintainer to answer before acceptance)
 
+Answers recorded 2026-10-24 by the maintainer. The ADR status stays `proposed`
+until it is accepted separately.
+
 1. **Scope:** LAMMPS-only (the working assumption), or engine-agnostic later? The
    `io` layer boundary is the place where this would matter.
+   - **Answer:** LAMMPS-only. No other MD engine is planned. The `io` layer does
+     not need an engine abstraction.
 2. **Configuration:** introduce a run manifest (e.g. `lkpr.toml`, written by prep and
    read by post) as the explicit-metadata source? Format and name?
+   - **Answer:** yes, as a small **optional** manifest.
+     - **Contents:** only what LAMMPS files cannot express: species groups (e.g.
+       `Fe` = {Fe_up, Fe_down}), domain name, system parameters (surface z, fixed and
+       thermostat layer bounds, molecule placement region), and provenance (lkpr
+       version and commit, generation parameters, seed, hashes of the generated
+       input and data files).
+     - **Not duplicated:** units, boundary, atom_style, pair_style/pair_coeff,
+       timestep, box and masses stay in the LAMMPS input and data files.
+     - **Optional:** post must work without a manifest (trajectories not produced
+       by lkpr prep). Lookup order: manifest → input script → data-file `Masses`
+       comments → dump columns → user. A last-resort heuristic prints what it guessed.
+     - **Conflicts:** if the manifest disagrees with the input or data file (or a
+       hash does not match), warn visibly. Never pick one silently.
+     - **Format:** JSON (stdlib; `tomllib` needs Python ≥ 3.11 and the project
+       supports ≥ 3.9). File name to be fixed in the implementing item (working
+       name `lkpr-run.json`).
 3. **Build vs reuse:** own NumPy `core` geometry, or depend on MDAnalysis / ASE for
    neighbor search and triclinic handling (heavier dependencies, less code)?
+   - **Answer:** build in-house where feasible (NumPy core; SciPy stays an optional
+     accelerator). External libraries are acceptable only in optional extras and as
+     independent cross-checks in tests.
 4. **Distribution:** PyPI release, license, supported Python versions?
+   - **Answer:** deferred. Does not block the GEN items. Revisit before sharing
+     the code with the group or publishing it with a paper. Python ≥ 3.9 stays
+     the floor for now.
 5. **Second reference system** for GEN-8: which system, and from which source?
+   - **Answer:** undecided. Candidates: SPC/E water, ~216 molecules (real units,
+     `atom_style full`, bonds and molecules, kspace; literature RDF peaks and
+     diffusion coefficient); Cu EAM slab (metal units, `p p f`, also covers
+     TEST-3, but one element only); binary Kob-Andersen LJ A/B (lj units, made-up
+     labels, no potential files). Agent recommendation: SPC/E water, unless a
+     system from planned research is a better fit. The maintainer picks before
+     GEN-8 starts.
