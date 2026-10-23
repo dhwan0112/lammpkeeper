@@ -1,6 +1,6 @@
 # ADR-0001: Evolve lkpr from a Fe-O oxidation tool into a general-purpose LAMMPS toolkit
 
-- **Status:** proposed
+- **Status:** accepted (2026-10-24)
 - **Date:** 2026-10-20
 - **Deciders:** 김동환 (maintainer)
 - **Backlog:** REL-0, GEN-1 … GEN-9
@@ -30,7 +30,7 @@ Measured on branch `parser-streaming` (2026-10-20):
 **A. Big-bang rewrite into a new package.** Clean design, but every Fe-O number has
 to be re-validated at once. The thesis work is exposed to regressions. High risk.
 
-**B. Strangler migration into a layered `lammpkeeper` package (proposed).**
+**B. Strangler migration into a layered `lammpkeeper` package (chosen).**
 Introduce generic layers next to the existing code, route callers through them one
 by one, and prove the Fe-O outputs unchanged at each step. Delete the old paths at
 the end. Slower, but every step can be verified.
@@ -41,7 +41,7 @@ The Fe-specific parts are also exactly where the bugs were found.
 
 B can still *use* external libraries where they are equivalent (see Open questions).
 
-## Decision (proposed)
+## Decision
 
 Option **B**, with this target layout:
 
@@ -78,10 +78,9 @@ Invariants of the migration:
   tracking) → GEN-6 (sites) → GEN-7 (generic prep) → GEN-8 (second reference system) →
   GEN-9 (package moves + shims).
 
-## Open questions (maintainer to answer before acceptance)
+## Open questions (answered)
 
-Answers recorded 2026-10-24 by the maintainer. The ADR status stays `proposed`
-until it is accepted separately.
+Answers recorded 2026-10-24 by the maintainer. The ADR was accepted the same day.
 
 1. **Scope:** LAMMPS-only (the working assumption), or engine-agnostic later? The
    `io` layer boundary is the place where this would matter.
