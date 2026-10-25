@@ -16,6 +16,7 @@ import os
 
 from lammpkeeper import VERSION
 from lammpkeeper.common.display import C, banner
+from lammpkeeper.common.hosted import HISTORY_LENGTH, history_enabled
 
 try:
     import readline
@@ -50,18 +51,20 @@ class LkprShell(cmd.Cmd):
     # ── readline history, one file per shell ──
 
     def _load_history(self, path):
-        if readline is None:
+        if readline is None or not history_enabled():
             return
         readline.clear_history()
+        readline.set_history_length(HISTORY_LENGTH)
         try:
             readline.read_history_file(path)
         except (FileNotFoundError, OSError):
             pass
 
     def _save_history(self, path):
-        if readline is None:
+        if readline is None or not history_enabled():
             return
         try:
+            readline.set_history_length(HISTORY_LENGTH)
             readline.write_history_file(path)
         except OSError:
             pass

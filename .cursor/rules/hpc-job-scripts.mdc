@@ -1,0 +1,38 @@
+---
+description: Safety and portability rules for generated job scripts, LAMMPS input templates and structure builders in lammps_pre
+globs: lammps_pre/templates.py,lammps_pre/writers.py,lammps_pre/builders.py,lammps_pre/state.py
+alwaysApply: false
+---
+
+# Generated job scripts, inputs and structures
+
+These run unattended on HPC clusters, where a lost scratch directory means lost
+compute. Treat every line as production.
+
+## Safety
+- **Check every data-moving step:** `mkdir`, `cp` into scratch, `cd`, `cp` back.
+  Track a single `COPY_OK` status.
+- **Delete scratch only after a verified copy.** On copy failure, keep `$tdir`, print
+  its path and exit nonzero, even if LAMMPS succeeded.
+- Copy hidden files too: `cp -a "$tdir"/. "$dest"/`.
+- Do not add a blanket `set -e`; the LAMMPS exit code must still be captured.
+  Use explicit `|| { …; exit N; }` checks.
+- Verify by generating the script, then running `bash -n` (and `shellcheck` if
+  available), then a local run with stub `mpirun` / `cp` on `PATH` to inject failures.
+
+## Portability (general-purpose goal, GEN-6 / GEN-7)
+- **No new site-specific literals** (queue names, `/app1/...` compiler paths,
+  `/hpctmp`, module names) in templates. They belong in a site profile (`sites/`,
+  e.g. `nus-pbs`, `slurm-generic`, `local`). Existing literals move there in GEN-6,
+  byte-identical for the NUS profile.
+- **No new element- or system-specific builders in generic code.** The Fe bcc slab
+  plus O₂ placement is the `fe_oxidation` recipe. Generic building means: structure
+  source (ASE builder, CIF, existing data file) plus optional molecule/gas placement
+  with user-given species.
+- `pair_coeff` and `dump_modify element` element order come from the FF/species
+  registry (today `lammpkeeper.common.mapping.element_order(ff)`).
+
+## Human gate
+Any change to the physics of a generated input (fixes, regions, timesteps,
+potentials, `atom/swap`, dump columns) or to a generated structure needs approval.
+For Fe-O it also must keep the cross-FF fair-comparison invariant.

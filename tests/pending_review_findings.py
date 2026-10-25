@@ -1,0 +1,62 @@
+"""Known-failing repros for open BACKLOG items (review of 2026-10-20).
+
+NOT collected by pytest or tests/run.py (file name does not start with test_).
+Each test FAILS on the current code and must PASS once its item is fixed.
+When fixing an item: move its test into a collected tests/test_*.py module,
+register that module in tests/run.py MODULES, and delete it from here.
+
+  test_msd_tracks_ids_through_spin_swap            -> PHYS-2
+  test_msd_unwraps_z_for_fully_periodic_box        -> PHYS-1 (needs z_pbc / pbc arg)
+  test_o2_detected_across_x_boundary_on_tree_path  -> PHYS-3
+  test_o2_count_independent_of_total_o_count       -> PHYS-5
+"""
+import numpy as np
+
+import _util  # noqa: F401  (path bootstrap)
+from lammps_post.analysis import analyze_msd, detect_o2_dissociation
+
+COL = {'id': 0, 'type': 1, 'x': 2, 'y': 3, 'z': 4}
+
+
+def _fr(rows, box, ts=0):
+    return {'atoms': np.array(rows, float), 'box': np.array(box, float), 'timestep': ts}
+
+
+def test_msd_tracks_ids_through_spin_swap():
+    # Two static Fe atoms exchange types 1<->2 (ACE atom/swap). Nothing moved.
+    box = [[0, 10], [0, 10], [0, 30]]
+    f0 = _fr([[1, 1, 1, 1, 1], [2, 2, 5, 1, 1], [3, 3, 9, 9, 9]], box, 0)
+    f1 = _fr([[1, 2, 1, 1, 1], [2, 1, 5, 1, 1], [3, 3, 9, 9, 9]], box, 100)
+    msd = analyze_msd([f0, f1], COL, species_type=1)['msd']
+    assert abs(msd[-1]) < 1e-9, f'spin swap produced fake MSD {msd[-1]}'
+
+
+def test_msd_unwraps_z_for_fully_periodic_box():
+    # p p p bulk: atom crosses z boundary by 0.2 A (0.1 -> 29.9 wrapped).
+    # Needs a z_pbc (or boundary-aware) option on analyze_msd.
+    box = [[0, 10], [0, 10], [0, 30]]
+    f0 = _fr([[1, 1, 5, 5, 0.1]], box, 0)
+    f1 = _fr([[1, 1, 5, 5, 29.9]], box, 100)
+    msd = analyze_msd([f0, f1], COL, species_type=1, z_pbc=True)['msd']
+    assert abs(msd[-1] - 0.04) < 1e-6, f'z not unwrapped: MSD {msd[-1]}'
+
+
+def test_o2_detected_across_x_boundary_on_tree_path():
+    # Same O2 straddling x=0 (0.6 A apart). Distant O atoms push n_O > 20.
+    box = [[0, 10], [0, 10], [0, 30]]
+    rows = [[1, 2, 0.3, 5, 5], [2, 2, 9.7, 5, 5]]
+    for k in range(19):
+        rows.append([3 + k, 2, (k % 5) * 2 + 1, (k // 5) * 2 + 1, 15 + (k % 3) * 4])
+    r = detect_o2_dissociation([_fr(rows, box)], COL, bond_cutoff=1.5, o_type=2)
+    assert r['n_o2'][0] == 1, f"boundary O2 missed: {r['n_o2'][0]}"
+
+
+def test_o2_count_independent_of_total_o_count():
+    # 4-O chain (gaps 1.0/0.5/1.0 A). Adding 17 far-away O atoms must not
+    # change how the chain is paired (slow path n<=20 vs tree path n>20).
+    box = [[0, 40], [0, 40], [0, 40]]
+    chain = [[1, 2, 5, 5, 5], [2, 2, 6.0, 5, 5], [3, 2, 6.5, 5, 5], [4, 2, 7.5, 5, 5]]
+    far = [[10 + k, 2, 20 + (k % 4) * 4, 20 + (k // 4) * 4, 30] for k in range(17)]
+    a = detect_o2_dissociation([_fr(chain, box)], COL, bond_cutoff=1.5, o_type=2)['n_o2'][0]
+    b = detect_o2_dissociation([_fr(chain + far, box)], COL, bond_cutoff=1.5, o_type=2)['n_o2'][0]
+    assert a == b, f'pairing depends on code path: {a} (n=4) vs {b} (n=21)'

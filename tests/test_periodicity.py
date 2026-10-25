@@ -14,7 +14,7 @@ import os
 import tempfile
 
 import _util  # noqa: F401  (path bootstrap)
-from _util import have_numpy, noninteractive
+from _util import have_numpy, noninteractive, skip
 
 
 def _frame(step, rows, bounds='pp pp ff', box=((0, 10), (0, 10), (0, 20))):
@@ -48,7 +48,7 @@ def test_boundary_flags_from_header():
 
 def test_dump_reader_exposes_boundary():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.parsers import DumpReader
     rows = [(1, 1, 1.0, 2.0, 3.0)]
     for bounds, expected in (('pp pp ff', ('pp', 'pp', 'ff')),
@@ -75,7 +75,7 @@ def _z_crossing_frames():
 
 def test_msd_unwraps_z_only_when_periodic():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.analysis import analyze_msd
     frames, col_idx = _z_crossing_frames()
@@ -88,7 +88,7 @@ def test_msd_unwraps_z_only_when_periodic():
 
 def test_msd_reports_skipped_frames():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.analysis import analyze_msd
     frames, col_idx = _z_crossing_frames()
@@ -103,7 +103,7 @@ def test_msd_reports_skipped_frames():
 
 def test_shell_periodicity_prefers_dump_flags():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     from lammps_post.shell import LammpsPostShell
     rows = [(1, 1, 1.0, 2.0, 3.0), (2, 2, 4.0, 5.0, 6.0)]
     path = _write(_frame(0, rows, 'pp pp pp') + _frame(1, rows, 'pp pp pp'))
@@ -140,7 +140,7 @@ def _crossing_dump(bounds):
 
 def test_shell_msd_and_rdf_follow_dump_flags():
     if not have_numpy():
-        return
+        skip('numpy not installed')
     import numpy as np
     from lammps_post.shell import LammpsPostShell
     for bounds, msd_o, z_pbc in (('pp pp pp', [0.0, 1.0, 4.0, 9.0], True),

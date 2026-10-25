@@ -10,7 +10,7 @@ mismatched-layout exclusion. Skips cleanly without numpy or the fixture.
 import os
 
 import _util  # noqa: F401  (path bootstrap)
-from _util import REPO_ROOT, have_numpy
+from _util import REPO_ROOT, have_numpy, skip
 
 LOG = os.path.join(REPO_ROOT, 'tests', 'fixtures', 'ace_examples',
                    'regular_MD', 'log.lammps')
@@ -22,7 +22,7 @@ def _available():
 
 def test_parse_log_merges_same_layout_blocks():
     if not _available():
-        return  # skip: no numpy or fixture
+        skip('numpy not installed or log fixture not found')
     import numpy as np
     from lammps_post.parsers import parse_log
 

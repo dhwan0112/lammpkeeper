@@ -8,7 +8,7 @@ Skips cleanly when numpy or the fixture is unavailable.
 import os
 
 import _util  # noqa: F401  (path bootstrap)
-from _util import FIXTURE, have_numpy, noninteractive, section_hash
+from _util import FIXTURE, have_numpy, noninteractive, section_hash, skip
 
 # sha256[:16] of the canonical fingerprints (baseline commit bb6c634).
 #
@@ -42,7 +42,7 @@ def _load_state():
 
 def test_numeric_regression_fast():
     if not _available():
-        return  # skip: no numpy or fixture
+        skip('numpy not installed or fixture not found')
     from lammps_post import analysis as A
     s = _load_state()
     assert section_hash(dict(s.ff_info)) == GOLDEN_FAST['post_ff_info']
@@ -53,9 +53,9 @@ def test_numeric_regression_fast():
 
 def test_numeric_regression_rdf_msd_slow():
     if os.environ.get('LKPR_SLOW') != '1':
-        return  # opt-in (RDF/MSD are slower)
+        skip('LKPR_SLOW=1 not set (opt-in RDF/MSD golden)')
     if not _available():
-        return
+        skip('numpy not installed or fixture not found')
     from lammps_post import analysis as A
     s = _load_state()
     f, ci = s.dump_frames, s.dump_col_idx

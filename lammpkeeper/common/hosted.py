@@ -17,6 +17,15 @@ try:
 except ImportError:
     readline = None
 
+# Maximum history lines kept per shell (OPS-1). Without a cap the history
+# files grow without bound — they reached tens of millions of lines.
+HISTORY_LENGTH = 2000
+
+
+def history_enabled():
+    """False when LKPR_NO_HISTORY=1: no history is read or written."""
+    return os.environ.get('LKPR_NO_HISTORY') != '1'
+
 
 class HostedShellMixin:
     shell_name = None       # 'prep' or 'post'
@@ -27,9 +36,10 @@ class HostedShellMixin:
     def _setup_history(self, histfile):
         """Load this shell's history; standalone shells save it at exit."""
         self.histfile = os.path.expanduser(histfile)
-        if readline is None:
+        if readline is None or not history_enabled():
             return
         readline.set_completer_delims(' \t\n')
+        readline.set_history_length(HISTORY_LENGTH)
         # Start from this file alone, as lkpr's _load_history does. Without the
         # clear, every shell created in one process (the test suite makes many)
         # re-appends the file to the shared readline history, and the exit
@@ -44,8 +54,9 @@ class HostedShellMixin:
 
     def _save_history_if_standalone(self):
         # Hosted shells share readline with lkpr, which swaps history per shell.
-        if self._host is None and readline is not None:
+        if self._host is None and readline is not None and history_enabled():
             try:
+                readline.set_history_length(HISTORY_LENGTH)
                 readline.write_history_file(self.histfile)
             except OSError:
                 pass

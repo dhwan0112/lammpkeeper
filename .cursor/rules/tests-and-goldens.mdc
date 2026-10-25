@@ -1,0 +1,31 @@
+---
+description: How to write, run and re-baseline tests in tests/
+globs: tests/**
+alwaysApply: false
+---
+
+# Tests
+
+- Every test runs under **both** `python tests/run.py` and `pytest`. Register new
+  `test_*.py` modules in `MODULES` in `tests/run.py`.
+- Run with an isolated HOME: `HOME="$(mktemp -d)" LKPR_SLOW=1 python tests/run.py`.
+- **Skips must be visible.** Do not add bare `return` skips. Until TEST-1 lands,
+  report every early-returning test.
+- **Behavior over hashes.** Every hash/golden test needs a sibling behavior test with
+  a known physical answer: MSD of a static crystal ≈ vibration only; an isolated
+  diatomic counts as 1 molecule; RDF of an ideal gas → 1.
+- **Generality tests:** generic analyses are tested with **made-up species labels**
+  (`"A"`, `"B"`, `"X"`) and both orthogonal and (once supported) triclinic boxes, so
+  hardcoded Fe/O names or box assumptions fail.
+- **Reference systems:**
+  1. Fe-O ACE magnetite, bulk `p p p` (`tests/fixtures/ace_examples/`, Fe 64 / Mn 128 / O 256, 350 frames).
+  2. A non-Fe system (GEN-8), not yet added.
+  3. A slab `p p f` fixture (TEST-3), not yet added.
+  New fixtures are small (≤ 500 atoms, ≤ 50 frames) and are committed together with
+  the script that generated them.
+- `tests/fixtures/**` is read-only for agents. Adding a new fixture is a human-gated
+  change.
+- Golden re-baselines: dedicated commit, reason + independent check, comment next to
+  the golden (AGENTS.md §7).
+- `tests/pending_review_findings.py` holds known-failing repros and is not collected.
+  When fixing an item, move its test into a collected module.
