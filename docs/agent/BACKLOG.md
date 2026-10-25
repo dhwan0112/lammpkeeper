@@ -71,7 +71,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 - **Done when:** a test writes 5,000 entries and the file holds ≤ 2,000 lines.
   `LKPR_NO_HISTORY=1` leaves HOME untouched.
 
-### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `open`
+### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `done (branch fix/hpc-1-job-script-safety-local; awaiting review/merge)`
 - **Where:** `lammps_pre/templates.py` PBS template (section "4. Copy Results").
 - **Evidence (measured, Codex):** injected `cp` failure → results lost, "Success"
   printed, exit 0. *(inferred)* The staging `cp`, `mkdir` and `cd` are also unchecked,
@@ -82,8 +82,30 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `cp` on PATH. On copy failure, scratch is kept, its path is printed and the exit
   code is nonzero. On success, scratch is removed and the exit code is 0.
   `bash -n` passes.
+- **Implementation:** checked fresh scratch creation, staging and directory
+  changes; copy hidden files with `cp -a`; one `COPY_OK` gate before checked
+  cleanup. Copy failures retain scratch and its recovery path. An optional
+  absolute `LKPR_SCRATCH` override keeps the default site path unchanged.
+- **Verification (2026-10-25, measured):** 16 stubbed failure/success tests fail
+  against `origin/main`'s old renderer and pass with the fix, including partial
+  copies, archive/staging failures, stale/symlink scratch and cleanup failures.
+  Full verification: 69 passed, 0 failed, 1 skipped (native extension absent);
+  post analysis/plots and prep + `bash -n` passed. HPC tests also pass with
+  Python `-S` (no optional packages). Real HPC/LAMMPS execution, ShellCheck
+  (not installed), MDAnalysis and native parser paths were not verified.
 
 ### PARSE-1 · P3 · Dump parser discards `BOX BOUNDS` periodicity flags — `open`
+- **Next session target (2026-10-25):** finish PARSE-1, starting from updated
+  `main` on `fix/parse-1-boundary-parity`. HPC-1 is ready for review; a real
+  HPC execution is still unverified and is not claimed by its local tests.
+- **Scope:** boundary metadata and reader regression tests only. Verify `pp pp ff`,
+  `pp pp pp`, mixed nonperiodic flags and absent flags; compare native and NumPy
+  metadata/frame results on the same synthetic input. Build the optional native
+  extension in an isolated checkout if feasible, never commit binary artifacts.
+- **Completion gate:** explicit native/NumPy parity evidence plus full regression
+  verification, or leave PARSE-1 open with the native verification blocker named.
+  Keep fixtures and goldens unchanged. Do not fold in MSD ID tracking or a golden
+  rebaseline; those remain the separate PHYS-2 + PHYS-1 PR gated by REL-0.
 - Integration: local commit `0c0a21d` now exposes dump boundary flags and adds
   periodicity tests, including shell RDF/MSD routing. Native/NumPy parity still
   needs verification when the optional native extension is available. This does
