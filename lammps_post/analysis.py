@@ -851,7 +851,7 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
             'up_fraction': up_frac, 'down_fraction': down_frac, 'o_fraction': o_frac}
 
 
-def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
+def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, False)):
     """
     Compute Mean Square Displacement (MSD) for a specified atom species.
 
@@ -859,9 +859,11 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
     diffusion. In equilibrium, MSD grows linearly with time for diffusive
     motion: MSD = 6*D*t (3D) where D is the diffusion coefficient.
 
-    For slab geometries (p p f boundary conditions), PBC unwrapping is
-    applied only in x and y directions. The z-direction is left as-is
-    because it is non-periodic (bounded by walls or vacuum).
+    PBC unwrapping is applied only on the axes that `pbc` marks periodic.
+    The default (x, y only) suits slab geometries (p p f boundary
+    conditions), where z is bounded by walls or vacuum. A fully periodic
+    (p p p) cell needs pbc=(True, True, True); otherwise an atom crossing
+    the z boundary adds a jump of ~Lz to its displacement.
 
     PBC unwrapping algorithm:
     1. Track cumulative displacement: unwrapped += (current - previous)
@@ -874,11 +876,16 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
         col_idx:      dict       — Column index mapping
         species_type: int or None — Atom type to track (None = all atoms)
         dt_fs:        float      — Timestep in femtoseconds
+        pbc:          tuple[bool, bool, bool] — Axes to unwrap (x, y, z).
+                      The shell takes it from the dump's boundary flags.
 
     Returns:
         dict with keys:
             'time' : np.array — Time in picoseconds
             'msd'  : np.array — Mean square displacement (Angstrom²)
+            'n_skipped' : int    — Present only when frames were skipped
+                                   because their atom count for the species
+                                   differs from the first frame.
         Returns None if fewer than 2 frames or no atoms of the species.
     """
     xi, yi, zi_col = col_idx['x'], col_idx['y'], col_idx['z']
@@ -909,6 +916,8 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
 
     t0 = frames[0]['timestep']
     time_arr, msd_arr = [0.0], [0.0]
+    wrap_dims = [dim for dim in range(3) if pbc[dim]]
+    n_skipped = 0
 
     for fr in itertools.islice(frames, 1, None):
         atoms = fr['atoms']
@@ -924,13 +933,14 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
             cur_pos = atoms[cur_mask][:, [xi, yi, zi_col]]
 
         if len(cur_pos) != n_atoms:
+            n_skipped += 1
             continue
 
         box = fr['box']
         L = box[:, 1] - box[:, 0]
 
         delta = cur_pos - prev_pos
-        for dim in range(2):  # x, y only
+        for dim in wrap_dims:
             delta[:, dim] -= L[dim] * np.round(delta[:, dim] / L[dim])
         unwrapped += delta
         prev_pos = cur_pos.copy()
@@ -941,7 +951,10 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0):
         time_arr.append((fr['timestep'] - t0) * dt_fs / 1000)
         msd_arr.append(msd)
 
-    return {'time': np.array(time_arr), 'msd': np.array(msd_arr)}
+    result = {'time': np.array(time_arr), 'msd': np.array(msd_arr)}
+    if n_skipped:
+        result['n_skipped'] = n_skipped
+    return result
 
 
 def analyze_stage_performance(log_data):

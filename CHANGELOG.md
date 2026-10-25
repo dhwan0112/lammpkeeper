@@ -11,6 +11,18 @@ Changes since the last tagged state, grouped by migration stage
 (see `MIGRATION.md`). No version has been released from this section yet;
 REL-0 will tag a thesis-reproducible commit from it.
 
+### Local/remote integration (PARSE-1, OPS-1, TEST-1)
+
+- Dump readers expose `BOX BOUNDS` boundary flags. The post shell uses dump
+  flags before input-script boundary settings and the surface heuristic when
+  choosing MSD unwrap axes and RDF z periodicity. Fully periodic shell MSD
+  results can therefore differ from the old slab-only unwrap behavior; atom-ID
+  tracking and the approved golden rebaseline remain open (PHYS-1/2).
+- Standalone shells clear shared readline history before loading their own
+  file, alongside the 2,000-line limit and `LKPR_NO_HISTORY=1` support.
+- The dependency-free runner includes both periodicity and remote history/skip
+  tests; periodicity tests report missing NumPy as a skip.
+
 ### Stage 1 — unified entry point
 
 #### Added

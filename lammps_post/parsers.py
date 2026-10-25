@@ -106,6 +106,42 @@ _ELEMENT_PARSE_DTYPE = 'U16'
 _INDEX_RELEASE_BYTES = 32 * 1024 ** 2
 
 
+# One boundary token per axis in 'ITEM: BOX BOUNDS' ('pp', 'ff', 'fs', 'mm', ...).
+_BOUNDARY_TOKEN = re.compile(r'^[pfsm]{1,2}$')
+
+
+def parse_boundary_flags(line):
+    """
+    Per-axis boundary flags from an 'ITEM: BOX BOUNDS ...' header line.
+
+    LAMMPS writes one token per axis after the keyword, preceded by
+    'xy xz yz' for triclinic boxes, e.g. 'ITEM: BOX BOUNDS pp pp ff'.
+
+    Returns:
+        tuple[str, str, str] — e.g. ('pp', 'pp', 'ff'), or None when the line
+        carries no flags (dumps written by very old LAMMPS versions).
+    """
+    tokens = line.split()[3:]
+    if len(tokens) < 3:
+        return None
+    flags = tuple(tokens[-3:])
+    if not all(_BOUNDARY_TOKEN.match(t) for t in flags):
+        return None
+    return flags
+
+
+def pbc_from_boundary(boundary):
+    """
+    (x, y, z) periodicity from dump boundary flags (parse_boundary_flags).
+
+    An axis is periodic only when both of its faces are 'p'. Returns None
+    when boundary is None, so callers can fall back to another source.
+    """
+    if boundary is None:
+        return None
+    return tuple(flag == 'pp' for flag in boundary)
+
+
 class DumpReader:
     """
     Lazy LAMMPS dump reader: iterating yields one frame dict at a time, so a
@@ -115,6 +151,8 @@ class DumpReader:
     atoms, elements). The column layout is read from the first frame on
     construction and exposed as `raw_columns` (file order, all columns),
     `columns` (kept numeric columns) and `col_idx` (name -> atoms column).
+    The first frame's boundary flags are exposed as `boundary` (see
+    parse_boundary_flags; None if the header has none).
 
     Args:
         filepath:   str — Path to the dump or lammpstrj file.
@@ -156,9 +194,14 @@ class DumpReader:
         self._native = _native if self.dtype in (np.float64, np.float32) else None
 
     def _read_layout(self):
+        # The first frame's 'ITEM: BOX BOUNDS' line also gives the boundary
+        # flags; LAMMPS does not change them during a run.
+        self.boundary = None
         with open(self.filepath, 'r') as f:
             for line in f:
-                if line.startswith('ITEM: ATOMS'):
+                if line.startswith('ITEM: BOX BOUNDS'):
+                    self.boundary = parse_boundary_flags(line)
+                elif line.startswith('ITEM: ATOMS'):
                     return line.split()[2:]
         return []
 

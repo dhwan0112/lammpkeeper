@@ -60,6 +60,31 @@ class _patched_home:
                 os.environ[k] = v
 
 
+def test_standalone_shell_history_does_not_accumulate_on_reload():
+    _require_readline()
+    from lammpkeeper.common.hosted import HostedShellMixin
+
+    class Shell(HostedShellMixin):
+        pass
+
+    with _patched_home() as home:
+        path = os.path.join(home, '.test_history')
+        _fill(path, n=3)
+        saved = [readline.get_history_item(i + 1)
+                 for i in range(readline.get_current_history_length())]
+        try:
+            for _ in range(3):
+                sh = Shell()
+                sh._setup_history(path)
+                assert readline.get_current_history_length() == 3
+                sh._save_history_if_standalone()
+                assert _lines(path) == ['cmd 0', 'cmd 1', 'cmd 2']
+        finally:
+            readline.clear_history()
+            for line in saved:
+                readline.add_history(line)
+
+
 def test_pre_shell_history_is_trimmed_to_limit():
     _require_readline()
     with _patched_home() as home:

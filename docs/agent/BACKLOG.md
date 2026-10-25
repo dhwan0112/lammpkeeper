@@ -55,7 +55,9 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `'pytest' in sys.modules`. `os.environ.get('PYTEST_CURRENT_TEST')` is the robust
   signal (set by pytest only while a test runs). Optional follow-up before merge.
 
-### OPS-1 · P1 · readline history files grow without bound — `in-progress (branch fix/ops-1-history-limit)`
+### OPS-1 · P1 · readline history files grow without bound — `done (PR #4)`
+- Integration: retain the local clear-before-load fix alongside the remote
+  2,000-line limit and opt-out; a regression test covers repeated standalone loads.
 - **Where:** `lammpkeeper/shell.py` (`_HISTFILE`), `lammpkeeper/common/hosted.py`
   `_setup_history`; files `~/.lkpr_history`, `~/.lammps-pre_history`,
   `~/.lammps-post_history`.
@@ -82,6 +84,10 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `bash -n` passes.
 
 ### PARSE-1 · P3 · Dump parser discards `BOX BOUNDS` periodicity flags — `open`
+- Integration: local commit `0c0a21d` now exposes dump boundary flags and adds
+  periodicity tests, including shell RDF/MSD routing. Native/NumPy parity still
+  needs verification when the optional native extension is available. This does
+  not close PHYS-1/2 (ID tracking and the approved MSD golden rebaseline).
 - **Where:** `lammps_post/parsers.py` (both reader paths, around the `ITEM: BOX BOUNDS` reads).
 - **Why:** this is the boundary source PHYS-1 and PHYS-3 need when no input script
   is loaded.

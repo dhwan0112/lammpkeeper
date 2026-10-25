@@ -38,6 +38,7 @@ from lammpkeeper.common.hosted import HostedShellMixin
 from lammps_post.parsers import (
     parse_log, parse_data_file, detect_forcefield, parse_input,
     DumpReader, LazyFrames, ANALYSIS_COLUMNS, DEFAULT_CACHE_BYTES,
+    pbc_from_boundary,
 )
 
 from lammpkeeper.common.mapping import element_to_type as ff_element_to_type
@@ -273,6 +274,25 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         except ValueError:
             print(C.err(f"  Invalid number: {val}"))
             return False
+
+    def _periodicity(self):
+        """
+        (x, y, z) periodicity for RDF and MSD, and where it came from.
+
+        Prefers the dump's own BOX BOUNDS flags (e.g. 'pp pp ff'), which hold
+        for the trajectory being analyzed even without an input file. Falls
+        back to the input file's boundary command, then to the surface_z
+        heuristic: a known surface means a slab (z non-periodic).
+        """
+        s = self.state
+        # dump_frames is None until a dump is loaded, then a LazyFrames.
+        reader = getattr(s.dump_frames, 'reader', None)
+        pbc = pbc_from_boundary(getattr(reader, 'boundary', None))
+        if pbc is not None:
+            return pbc, 'dump'
+        if s.input_config and s.input_config.get('boundary'):
+            return tuple(b == 'p' for b in s.input_config['boundary'][:3]), 'input'
+        return (True, True, s.surface_z is None), 'surface_z'
 
     def _require_data(self):
         """Ensure data file is loaded, ask user if not."""
@@ -1120,8 +1140,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # A trajectory larger than the frame cache would be re-read from disk
         # by every analysis; run them concurrently over one shared read instead.
-        # Needs surface_z up front: the RDF z_pbc default depends on whether it
-        # was known before the auto-detect below, so that case stays sequential.
+        # Needs surface_z up front: when neither the dump nor the input file
+        # has boundary flags, the RDF z_pbc default depends on whether it was
+        # known before the auto-detect below. The gate does not look at the
+        # flags, so that case stays sequential even when they are present.
         shared = (bool(s.dump_frames) and not s.dump_frames.fits_in_cache
                   and s.surface_z is not None)
 
@@ -1344,14 +1366,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 except ValueError:
                     pass
 
-        # Auto-detect z_pbc from boundary conditions or surface_z
-        z_pbc = False  # Safe default for slab geometries
-        if s.input_config and s.input_config.get('boundary'):
-            z_pbc = s.input_config['boundary'][2] == 'p'
-        elif s.surface_z is None:
-            z_pbc = True  # No slab detected, assume fully periodic
+        # z periodicity from the dump's boundary flags, else the input file,
+        # else surface_z (see _periodicity). compute_rdf always wraps x and y,
+        # so only the z flag is used here.
+        pbc, pbc_src = self._periodicity()
+        z_pbc = pbc[2]
 
-        progress_msg(f"Computing RDF {pair_str} (last {max_frames} frames, z_pbc={z_pbc})...")
+        progress_msg(f"Computing RDF {pair_str} (last {max_frames} frames, "
+                     f"z_pbc={z_pbc} from {pbc_src})...")
         result = compute_rdf(s.dump_frames, s.dump_col_idx,
                              type_a=type_a, type_b=type_b,
                              max_frames=max_frames,
@@ -1554,11 +1576,18 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         species_type = inv.get(species_name)
 
-        progress_msg(f"Computing MSD for {species_name}...")
+        # Unwrap only the periodic axes: x, y for a p p f slab, all three for
+        # a p p p cell, where a z boundary crossing would otherwise add ~Lz.
+        pbc, pbc_src = self._periodicity()
+        axes = ''.join(a for a, p in zip('xyz', pbc) if p) or 'none'
+        progress_msg(f"Computing MSD for {species_name} (unwrap {axes} from {pbc_src})...")
         result = analyze_msd(s.dump_frames, s.dump_col_idx,
-                             species_type=species_type, dt_fs=s.dt_fs)
+                             species_type=species_type, dt_fs=s.dt_fs, pbc=pbc)
         cache_key = f'msd_{species_name}'
         s.cache[cache_key] = result
+        if result and result.get('n_skipped'):
+            print(C.warn(f"  Skipped {result['n_skipped']} frame(s) whose {species_name} "
+                         f"atom count differs from the first frame."))
         if result and len(result['msd']) > 0:
             progress_msg(f"Final MSD: {result['msd'][-1]:.2f} A^2")
         print(C.ok(f"  Done. Use 'plot msd' to visualize."))
