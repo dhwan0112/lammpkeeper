@@ -2,7 +2,8 @@
 
 - parse_boundary_flags / pbc_from_boundary read orthogonal and triclinic
   headers, and return None for a header without flags.
-- DumpReader exposes the first frame's flags as `boundary`.
+- DumpReader exposes the first frame's flags as `boundary`, independent of
+  streaming/indexed/cached access and native/NumPy atom parsing (PARSE-1).
 - analyze_msd unwraps only the axes `pbc` marks periodic, and reports frames
   it skips because their atom count changed.
 - The shell's _periodicity prefers the dump flags over the input file and the
@@ -17,12 +18,13 @@ import _util  # noqa: F401  (path bootstrap)
 from _util import have_numpy, noninteractive, skip
 
 
-def _frame(step, rows, bounds='pp pp ff', box=((0, 10), (0, 10), (0, 20))):
+def _frame(step, rows, bounds='pp pp ff', box=((0, 10), (0, 10), (0, 20)),
+           cols='id type x y z'):
     head = [
-       'ITEM: TIMESTEP', str(step),
-       'ITEM: NUMBER OF ATOMS', str(len(rows)),
-       f'ITEM: BOX BOUNDS {bounds}'.rstrip(),
-    ] + [f'{lo} {hi}' for lo, hi in box] + ['ITEM: ATOMS id type x y z']
+        'ITEM: TIMESTEP', str(step),
+        'ITEM: NUMBER OF ATOMS', str(len(rows)),
+        f'ITEM: BOX BOUNDS {bounds}'.rstrip(),
+    ] + [f'{lo} {hi}' for lo, hi in box] + [f'ITEM: ATOMS {cols}']
     return '\n'.join(head + [' '.join(str(v) for v in r) for r in rows]) + '\n'
 
 
@@ -46,19 +48,153 @@ def test_boundary_flags_from_header():
     assert pbc_from_boundary(None) is None
 
 
+_BOUNDARY_CASES = (
+    ('pp pp ff', ('pp', 'pp', 'ff'), (True, True, False)),
+    ('pp pp pp', ('pp', 'pp', 'pp'), (True, True, True)),
+    ('ff fs mm', ('ff', 'fs', 'mm'), (False, False, False)),
+    ('', None, None),
+)
+
+
+def _read_paths(reader):
+    """Exercise the atom-block entry points without changing reader metadata."""
+    from lammps_post.parsers import LazyFrames
+    from test_dump_reader import _frames_equal
+    streamed = list(reader)
+    index = reader.index()
+    paths = {'stream': streamed,
+             'indexed': [reader.read_frame(index, k) for k in range(len(index))]}
+    for cache_bytes in (0, 10 ** 6):
+        lazy = LazyFrames(reader, index=index, cache_bytes=cache_bytes)
+        assert lazy.reader is reader
+        assert lazy.fits_in_cache == bool(cache_bytes)
+        frames = list(lazy)
+        again = lazy[-1]
+        _frames_equal(frames[-1], again)
+        assert (again is frames[-1]) == bool(cache_bytes)
+        paths[f'lazy-{cache_bytes}'] = frames
+    return paths
+
+
 def test_dump_reader_exposes_boundary():
+    """NumPy parsing preserves flags, including unknown rather than guessed PBC."""
     if not have_numpy():
         skip('numpy not installed')
-    from lammps_post.parsers import DumpReader
-    rows = [(1, 1, 1.0, 2.0, 3.0)]
-    for bounds, expected in (('pp pp ff', ('pp', 'pp', 'ff')),
-                             ('pp pp pp', ('pp', 'pp', 'pp')),
-                             ('', None)):
-        path = _write(_frame(0, rows, bounds))
+    import numpy as np
+    from lammps_post.parsers import DumpReader, pbc_from_boundary
+    from test_dump_reader import _frames_equal
+    rows = [(1, 1, 1.0, 2.0, 3.0), (2, 2, 4.0, 5.0, 6.0)]
+    for bounds, expected, pbc in _BOUNDARY_CASES:
+        path = _write(_frame(0, rows, bounds) + _frame(100, rows[:1], bounds))
         try:
-            assert DumpReader(path).boundary == expected, bounds
+            reader = DumpReader(path)
+            reader._native = None
+            assert reader.boundary == expected, bounds
+            assert pbc_from_boundary(reader.boundary) == pbc, bounds
+            paths = _read_paths(reader)
+            for frames in paths.values():
+                assert len(frames) == 2
+                for k, frame in enumerate(frames):
+                    assert set(frame) == {'timestep', 'natoms', 'box', 'atoms', 'elements'}
+                    assert frame['timestep'] == (0, 100)[k]
+                    assert frame['natoms'] == (2, 1)[k]
+                    assert np.array_equal(frame['atoms'], np.array(rows[:2 - k]))
+                    assert frame['elements'] is None
+                    _frames_equal(paths['stream'][k], frame)
+            assert reader.boundary == expected, bounds
+            assert pbc_from_boundary(reader.boundary) == pbc, bounds
         finally:
             os.remove(path)
+
+
+def test_native_boundary_metadata_matches_numpy_without_fallback():
+    """Require successful extension calls, not a native-enabled silent fallback."""
+    if not have_numpy():
+        skip('numpy not installed')
+    import importlib.machinery
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import numpy as np
+    from lammps_post import parsers
+    from test_dump_reader import _frames_equal
+    native = parsers._native
+    if native is None:
+        skip('native parser unavailable or disabled (run native/build.sh; unset LKPR_NO_NATIVE)')
+    assert any(native.__file__.endswith(suffix)
+               for suffix in importlib.machinery.EXTENSION_SUFFIXES), native.__file__
+
+    successful_calls = []
+
+    def parse_block(*args):
+        result = native.parse_block(*args)
+        assert result[2] == args[1], 'native parser deferred to NumPy'
+        successful_calls.append(result[2])
+        return result
+
+    rows = [(7, 'A', 1, 1.125, -2.5, 3.75),
+            (9, 'B', 2, 4.5, 5.25, 6.125)]
+    for bounds, expected, pbc in _BOUNDARY_CASES:
+        path = _write(_frame(0, rows, bounds, cols='id element type x y z')
+                      + _frame(100, rows[:1], bounds, cols='id element type x y z'))
+        try:
+            for dtype in (np.float64, np.float32):
+                for columns in (None, ('id', 'x', 'z')):
+                    reference = parsers.DumpReader(path, dtype=dtype, columns=columns)
+                    reference._native = None
+                    numpy_paths = _read_paths(reference)
+                    reader = parsers.DumpReader(path, dtype=dtype, columns=columns)
+                    assert reader._native is native
+                    reader._native = SimpleNamespace(parse_block=parse_block)
+                    assert reader.boundary == reference.boundary == expected, bounds
+                    assert parsers.pbc_from_boundary(reader.boundary) == pbc, bounds
+                    before = len(successful_calls)
+                    with patch.object(np, 'loadtxt', side_effect=AssertionError(
+                            'native parity test must not fall back to NumPy')):
+                        native_paths = _read_paths(reader)
+                    # 2 streamed + 2 indexed + 3 uncached + 2 cached block parses.
+                    assert len(successful_calls) - before == 9
+                    assert reader.boundary == reference.boundary == expected, bounds
+                    assert parsers.pbc_from_boundary(reader.boundary) == pbc, bounds
+                    assert reader.raw_columns == reference.raw_columns
+                    assert reader.columns == reference.columns
+                    assert reader.col_idx == reference.col_idx
+                    for access, frames in native_paths.items():
+                        assert len(frames) == len(numpy_paths[access]) == 2
+                        for k, frame in enumerate(frames):
+                            assert set(frame) == {'timestep', 'natoms', 'box',
+                                                  'atoms', 'elements'}
+                            _frames_equal(numpy_paths[access][k], frame)
+                            assert frame['atoms'].dtype == dtype
+                            if columns is None:
+                                assert list(frame['elements']) == ['A', 'B'][:2 - k]
+                                ref_elements = numpy_paths[access][k]['elements']
+                                assert frame['elements'].dtype == ref_elements.dtype
+                            else:
+                                assert frame['elements'] is None
+        finally:
+            os.remove(path)
+
+
+def test_bulk_fixture_boundary_metadata():
+    if not have_numpy():
+        skip('numpy not installed')
+    from _util import FIXTURE
+    from lammps_post.parsers import DumpReader, LazyFrames, pbc_from_boundary
+    from test_dump_reader import _frames_equal
+    if not os.path.exists(FIXTURE):
+        skip(f'fixture not found: {FIXTURE}')
+    reader = DumpReader(FIXTURE)
+    assert reader.boundary == ('pp', 'pp', 'pp')
+    assert pbc_from_boundary(reader.boundary) == (True, True, True)
+    first = next(iter(reader))
+    index = reader.index()
+    _frames_equal(first, reader.read_frame(index, 0))
+    for cache_bytes in (0, 10 ** 6):
+        lazy = LazyFrames(reader, index=index, cache_bytes=cache_bytes, max_frames=1)
+        _frames_equal(first, lazy[0])
+        _frames_equal(first, next(iter(lazy)))
+        assert lazy.reader.boundary == ('pp', 'pp', 'pp')
+        assert pbc_from_boundary(lazy.reader.boundary) == (True, True, True)
 
 
 def _z_crossing_frames():

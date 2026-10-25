@@ -152,7 +152,9 @@ class DumpReader:
     construction and exposed as `raw_columns` (file order, all columns),
     `columns` (kept numeric columns) and `col_idx` (name -> atoms column).
     The first frame's boundary flags are exposed as `boundary` (see
-    parse_boundary_flags; None if the header has none).
+    parse_boundary_flags; None if the header has none). Header metadata is read
+    by the shared Python scanner, independently of the native/NumPy atom-block
+    backend. LazyFrames exposes the same metadata through its `reader`.
 
     Args:
         filepath:   str — Path to the dump or lammpstrj file.
@@ -1394,5 +1396,4 @@ def detect_forcefield(columns, col_idx, frames):
         'has_element': has_element,
         'atom_types': type_to_label('hdnnp'),
     }
-
 
