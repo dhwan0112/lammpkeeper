@@ -71,7 +71,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 - **Done when:** a test writes 5,000 entries and the file holds ≤ 2,000 lines.
   `LKPR_NO_HISTORY=1` leaves HOME untouched.
 
-### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `done (branch fix/hpc-1-job-script-safety-local; awaiting review/merge)`
+### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `done (PR #9)`
 - **Where:** `lammps_pre/templates.py` PBS template (section "4. Copy Results").
 - **Evidence (measured, Codex):** injected `cp` failure → results lost, "Success"
   printed, exit 0. *(inferred)* The staging `cp`, `mkdir` and `cd` are also unchecked,
@@ -93,28 +93,43 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   post analysis/plots and prep + `bash -n` passed. HPC tests also pass with
   Python `-S` (no optional packages). Real HPC/LAMMPS execution, ShellCheck
   (not installed), MDAnalysis and native parser paths were not verified.
+- **Integration verification (2026-10-26, measured):** combined with PARSE-1
+  from PR #10; full native verification and pytest both passed all 72 tests.
+  Forced NumPy mode passed 70 tests with 2 explicit native-test skips in both
+  runners. Full analysis/plots and prep + `bash -n` passed in both modes; all
+  three force-field job templates also passed `bash -n`. Evidence:
+  `/tmp/opencode/parse1-native-9tj0Xnpf/evidence-combined` and
+  `/tmp/opencode/lkpr-combined-fallback/20261026T134705-310566d-full`.
+  Real HPC/LAMMPS execution remains unverified.
 
-### PARSE-1 · P3 · Dump parser discards `BOX BOUNDS` periodicity flags — `open`
-- **Next session target (2026-10-25):** finish PARSE-1, starting from updated
-  `main` on `fix/parse-1-boundary-parity`. HPC-1 is ready for review; a real
-  HPC execution is still unverified and is not claimed by its local tests.
-- **Scope:** boundary metadata and reader regression tests only. Verify `pp pp ff`,
-  `pp pp pp`, mixed nonperiodic flags and absent flags; compare native and NumPy
-  metadata/frame results on the same synthetic input. Build the optional native
-  extension in an isolated checkout if feasible, never commit binary artifacts.
-- **Completion gate:** explicit native/NumPy parity evidence plus full regression
-  verification, or leave PARSE-1 open with the native verification blocker named.
-  Keep fixtures and goldens unchanged. Do not fold in MSD ID tracking or a golden
-  rebaseline; those remain the separate PHYS-2 + PHYS-1 PR gated by REL-0.
-- Integration: local commit `0c0a21d` now exposes dump boundary flags and adds
-  periodicity tests, including shell RDF/MSD routing. Native/NumPy parity still
-  needs verification when the optional native extension is available. This does
-  not close PHYS-1/2 (ID tracking and the approved MSD golden rebaseline).
+### PARSE-1 · P3 · Dump parser discards `BOX BOUNDS` periodicity flags — `done (branch fix/parse-1-boundary-parity)`
+- **Implementation:** commit `0c0a21d` exposes dump boundary flags and adds
+  shell RDF/MSD routing. Header metadata is shared by both atom-block backends
+  and is available as `DumpReader.boundary` / `LazyFrames.reader.boundary`,
+  converted to per-axis booleans by `pbc_from_boundary`.
 - **Where:** `lammps_post/parsers.py` (both reader paths, around the `ITEM: BOX BOUNDS` reads).
 - **Why:** this is the boundary source PHYS-1 and PHYS-3 need when no input script
   is loaded.
 - **Done when:** frames (or reader metadata) expose `pbc=(True, True, False)` for
   `pp pp ff`. The fixture yields `(True, True, True)`. Both native and NumPy paths agree.
+- **Verification (2026-10-25, measured):** slab, bulk, mixed nonperiodic and
+  absent flags agree across streaming, indexed and cached/uncached access.
+  Native parity uses float64/float32, generic A/B labels and numeric selections;
+  it asserts successful compiled-extension calls and forbids NumPy fallback.
+  The committed bulk fixture reports `(True, True, True)`.
+- **Evidence:** an isolated source copy with Rust/Cargo 1.99.1 and mlff Python
+  3.11.15 / NumPy 2.4.3 passed full verification (`56 passed, 0 failed, 0 skipped`)
+  and pytest (`56 passed`). Forced NumPy mode passed both runners (`54 passed,
+  2 skipped`, the two native tests). Full post analysis/plots and prep + `bash -n`
+  passed in both modes. Evidence directories:
+  `/tmp/opencode/parse1-final-native/20261025T204229-nogit-full` and
+  `/tmp/opencode/parse1-final-fallback/20261025T204147-922e517-full`.
+- **Limits / next gate:** no fixtures, goldens, frame keys or physics behavior
+  changed. Boundary metadata describes the first frame, not changing boundaries
+  in concatenated runs. Triclinic geometry remains GEN-3; real LAMMPS/HPC execution and
+  MDAnalysis were not verified. PHYS-2 + PHYS-1 remain a separate MSD PR; REL-0
+  maintainer confirmation/tagging and human approval of any golden rebaseline
+  are still required before that physics-changing work.
 
 ### MSD = PHYS-2 + PHYS-1 · one PR, two commits (PHYS-2 first), golden rebaseline inside
 Both defects live in `analyze_msd`. The "correct" reference value below already

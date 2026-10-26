@@ -24,6 +24,15 @@ REL-0 will tag a thesis-reproducible commit from it.
 - A failed LAMMPS run still returns its original failure status after a successful
   archive. LAMMPS inputs, structures and site configuration are unchanged.
 
+### Dump boundary metadata verification (PARSE-1)
+
+- Regression tests cover slab, fully periodic, mixed nonperiodic and absent
+  boundary flags through streaming, indexed and cached readers. Boundary
+  metadata remains on `DumpReader` / `LazyFrames.reader`; frame keys and analysis
+  behavior are unchanged.
+- Native/NumPy parity checks require successful native atom-block calls, rather
+  than silently accepting the NumPy fallback as native coverage.
+
 ### Local/remote integration (PARSE-1, OPS-1, TEST-1)
 
 - Dump readers expose `BOX BOUNDS` boundary flags. The post shell uses dump
