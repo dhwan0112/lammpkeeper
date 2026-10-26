@@ -22,9 +22,17 @@ GOLDEN_FAST = {
    'spin': 'bf7fa759103f2883',
 }
 GOLDEN_SLOW = {
-   'rdf_FeUp_O': '46e63f7e15ac805b',
-   'msd_O': 'ce2e617b3ad32239',
-   'msd_FeUp': 'eb7f778ead75a17d',
+    'rdf_FeUp_O': '46e63f7e15ac805b',
+    'msd_O': 'ce2e617b3ad32239',
+    # PHYS-1/2, maintainer-approved 2026-10-27: the bulk dump says pp pp pp.
+    # The old slab-default hash eb7f778ead75a17d ended at 17.4725703688831 A^2;
+    # xyz unwrapping gives 0.074623992827988 A^2 (hash below). Four z-wrapping
+    # atoms caused the false box-sized jumps. Independent ID dictionaries and
+    # brute-force periodic-image enumeration agree within 4.17e-16 A^2;
+    # test_msd also checks analytic vibrations and explicit bulk/slab crossings.
+    # This endpoint includes minimization: a regression target, not a certified
+    # equilibrium thermal MSD. The historical time-axis heuristic is unchanged.
+    'msd_FeUp': '8a151e1c5051cb59',
 }
 
 
@@ -59,6 +67,9 @@ def test_numeric_regression_rdf_msd_slow():
     from lammps_post import analysis as A
     s = _load_state()
     f, ci = s.dump_frames, s.dump_col_idx
+    from lammps_post.parsers import pbc_from_boundary
+    pbc = pbc_from_boundary(f.reader.boundary)
+    assert pbc == (True, True, True), 'the ACE reference trajectory is bulk, not a slab'
     assert section_hash(A.compute_rdf(f, ci, type_a=1, type_b=3, z_pbc=True)) == GOLDEN_SLOW['rdf_FeUp_O']
-    assert section_hash(A.analyze_msd(f, ci, species_type=3, dt_fs=s.dt_fs)) == GOLDEN_SLOW['msd_O']
-    assert section_hash(A.analyze_msd(f, ci, species_type=1, dt_fs=s.dt_fs)) == GOLDEN_SLOW['msd_FeUp']
+    assert section_hash(A.analyze_msd(f, ci, species_type=3, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_O']
+    assert section_hash(A.analyze_msd(f, ci, species_type=1, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_FeUp']

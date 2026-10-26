@@ -12,7 +12,7 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
-### MSD atom identity (PHYS-2; local work, golden approval pending)
+### MSD atom identity and bulk regression (PHYS-2, PHYS-1)
 
 - MSD selects an initial cohort by atom type (an integer, a set of type IDs, or
   all initial atoms), then follows those atom IDs despite type changes and row
@@ -24,8 +24,15 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   invalidates the target MSD cache entry so an older curve is not plotted as
   the result of a failed attempt.
 - The public `pbc` argument and slab default are unchanged; the shell already
-  passes per-axis periodicity from dump/input metadata. The bulk MSD golden's
-  switch to explicit fully periodic geometry requires separate human approval.
+  passes per-axis periodicity from dump/input metadata. Bulk fixture regressions
+  now explicitly use the dump's `pp pp pp` flags rather than the slab default.
+- Maintainer-approved golden rebaseline (2026-10-27): final Fe_up MSD changes
+  from 17.4725703688831 to 0.074623992827988 Å² after removing false z-boundary
+  jumps. O MSD and all other golden values are unchanged. Independent periodic
+  image enumeration and analytic vibration/crossing tests support the correction.
+  The final frame includes structural minimization, not equilibrium thermal
+  motion. Time-axis inference and separation of MD/minimization remain separate
+  issues; no fixtures or thesis-baseline tags were changed.
 
 ### HPC job-script safety (HPC-1)
 
