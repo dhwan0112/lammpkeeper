@@ -27,16 +27,17 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 
 ---
 
-### REL-0 · P1 · Tag the thesis-reproducible state — `in-progress (prep done; tag = human)`
+### REL-0 · P1 · Tag the thesis-reproducible state — `done (v1.2.0-thesis)`
 - **Why:** generalization will change internals. Thesis and paper numbers must stay
   reproducible from a fixed commit.
-- **Prep (done 2026-10-20, Cursor):** `docs/reproducibility.md` draft (candidate
-  `cdf5c38`, `parser-streaming` tip; verified `42 passed, 0 failed` in a detached
-  worktree) and `CHANGELOG.md` (Keep a Changelog). Both are not yet committed.
-- **Remaining (maintainer):** confirm the candidate is the commit whose numbers the
-  thesis reports (or name another one and re-run the verification on it); create and
-  push the tag; fill in the tag name/date in `docs/reproducibility.md`; commit both
-  files.
+- **Completed (2026-10-26, maintainer approved):** annotated tag `v1.2.0-thesis`
+  created and pushed at `cdf5c38e975871debf64eb6d810e78a08165c381`.
+  `docs/reproducibility.md` records the tag and verification limitations.
+- **Verification (measured):** isolated checkout at the tagged commit, with
+  `LKPR_SLOW=1` and isolated HOME, reports `42 passed, 0 failed`; RDF/MSD
+  goldens pass. The historical runner counts three early-return skips as PASS
+  (two ASE tests and one native-parser test). This freezes historical results,
+  including known MSD defects; it is not a physics-correctness certification.
 - **Done when:** the tag exists on the remote, `docs/reproducibility.md` says
   "Tag created: yes", and checking the tag out reproduces the goldens on the fixture.
 
