@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Changes since the last tagged state, grouped by migration stage
 (see `MIGRATION.md`). No version has been released from this section yet;
-REL-0 will tag a thesis-reproducible commit from it.
+REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
+on 2026-10-26; that tag predates the unreleased fixes below.
 
 ### HPC job-script safety (HPC-1)
 

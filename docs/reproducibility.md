@@ -1,27 +1,27 @@
-# Reproducibility record (REL-0 draft)
+# Reproducibility record (REL-0)
 
-Status: **draft — tag not created yet.** The maintainer creates the tag with
-the command given at handover. Do not treat this file as the tagged record
-until the tag name and date are filled in below.
+Status: **tag created and pushed — 2026-10-26.** The maintainer confirmed
+commit `cdf5c38` and the name `v1.2.0-thesis`. This annotated tag fixes the
+historical thesis baseline; it does not certify its physics as correct.
+The tag points to the original code, not to this subsequently completed record.
 
-## Candidate commit
+## Tagged commit
 
 | Item | Value |
 |---|---|
-| Candidate commit | `cdf5c38e975871debf64eb6d810e78a08165c381` |
+| Tagged commit | `cdf5c38e975871debf64eb6d810e78a08165c381` |
 | Short hash | `cdf5c38` |
 | Commit subject | `Use 4-space indentation everywhere` |
 | Commit date | 2026-10-06 01:35:06 +0800 |
 | Branch at verification | `parser-streaming` (HEAD, also `origin/parser-streaming`) |
-| Proposed tag | `v1.2.0-thesis` *(maintainer to confirm name)* |
-| Tag created | **no** |
-| Tag pushed | **no** |
+| Tag | `v1.2.0-thesis` (annotated) |
+| Tag created | **yes** — 2026-10-26 |
+| Tag pushed | **yes** — 2026-10-26 |
 
-This commit was chosen as the REL-0 candidate because it is the current
-`parser-streaming` HEAD verified in this session. Whether it is the commit
-whose numbers are reported in the thesis is a maintainer decision
-(AGENTS.md §8 human gate); if a different commit is chosen, re-run the
-verification below on that commit and update this file.
+The maintainer confirmed this commit as the thesis baseline and approved
+creation and push of the proposed tag name on 2026-10-26. Remote tag target
+verification (`git ls-remote --tags origin 'refs/tags/v1.2.0-thesis*'`)
+returned the exact commit above as the peeled target.
 
 ## Verification run
 
@@ -41,9 +41,30 @@ Result (2026-10-20, this machine):
 42 passed, 0 failed
 ```
 
-Covered by that run: mapping/display/CLI suites, fair-comparison coordinate
-checks, fast numeric regression, slow RDF/MSD goldens
-(`LKPR_SLOW=1`), log-merge, dump-reader and shared-pass engine tests.
+Covered by that run: mapping/display/CLI suites, fast numeric regression,
+slow RDF/MSD goldens (`LKPR_SLOW=1`), log-merge, dump-reader and shared-pass
+engine tests. ASE-dependent fair-comparison coordinate checks were skipped.
+
+### Tag verification (2026-10-26, measured)
+
+Re-ran `HOME="$(mktemp -d /tmp/opencode/rel0-home-XXXXXX)" LKPR_SLOW=1
+python tests/run.py` in the clean detached checkout at `cdf5c38`, the exact
+commit subsequently verified as the remote tag's target. The runner again
+reported **42 passed, 0 failed**, including the RDF/MSD golden comparison.
+Python was 3.14.4 and NumPy 2.3.5; SciPy was available. ASE, matplotlib,
+pandas, MDAnalysis, pytest and the native parser were absent.
+The log is `/tmp/opencode/rel0-20261026-tests.log` (local evidence, not
+part of the repository).
+
+Three tests returned early and were counted as PASS by the historical runner:
+- `test_all_force_fields_build_identical_coordinates` — ASE absent.
+- `test_wall_does_not_depend_on_the_force_field` — ASE absent.
+- `test_native_parser_matches_loadtxt` — native parser not built.
+
+The tag preserves known historical defects, including MSD type reselection
+and slab-only default unwrapping (PHYS-1/2). Passing goldens prove the
+baseline is reproduced, not that those numerical values are physically correct.
+No fixtures or goldens were changed.
 
 ### Known caveats of this verification
 
@@ -216,12 +237,12 @@ Committed under `tests/fixtures/ace_examples/` (never modify fixtures):
 | `tests/fixtures/ace_examples/ACE_Fe-O.yace`, `ACE_Fe-O.yaml` | ACE potential reference |
 | `tests/fixtures/ace_examples/simulation_summary.md` | fixture provenance |
 
-## Reproduction commands (after tagging)
+## Reproduction commands
 
 ```bash
 # 1. Get the exact tagged state in a scratch worktree
-WT=$(mktemp -d /tmp/lkpr-thesis-XXXXXX)
-git worktree add --detach "$WT" <TAG>
+WT=$(mktemp -d /tmp/opencode/lkpr-thesis-XXXXXX)
+git worktree add --detach "$WT" v1.2.0-thesis
 cd "$WT"
 
 # 2. (Recommended) clean environment
