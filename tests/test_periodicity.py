@@ -4,8 +4,8 @@
   headers, and return None for a header without flags.
 - DumpReader exposes the first frame's flags as `boundary`, independent of
   streaming/indexed/cached access and native/NumPy atom parsing (PARSE-1).
-- analyze_msd unwraps only the axes `pbc` marks periodic, and reports frames
-  it skips because their atom count changed.
+- analyze_msd unwraps only the axes `pbc` marks periodic, and rejects
+  duplicate atom IDs instead of silently skipping malformed frames.
 - The shell's _periodicity prefers the dump flags over the input file and the
   surface_z heuristic, and 'analyze msd' / 'analyze rdf' follow it.
 
@@ -222,18 +222,23 @@ def test_msd_unwraps_z_only_when_periodic():
     assert np.allclose(slab['msd'], [0.0, 1.0, 64.0, 49.0])
 
 
-def test_msd_reports_skipped_frames():
+def test_msd_rejects_duplicate_ids_instead_of_skipping_frames():
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
     from lammps_post.analysis import analyze_msd
     frames, col_idx = _z_crossing_frames()
     frames[2] = dict(frames[2], atoms=np.vstack([frames[2]['atoms']] * 2))
-    result = analyze_msd(frames, col_idx, pbc=(True, True, True))
-    # Frame 3 is measured against frame 1: -8 A wraps to +2 A, so z = 3 A.
-    assert np.allclose(result['msd'], [0.0, 1.0, 9.0])
-    assert result['n_skipped'] == 1
-    # No key when nothing was skipped, so existing result hashes are unchanged.
+    # PHYS-2 physical justification: repeating the same ID is not a second atom.
+    # Silently dropping its frame (the old expectation) also creates an unknown
+    # sampling gap across which minimum-image unwrapping can miss crossings.
+    # Reject the malformed trajectory, rather than bless a partial MSD series.
+    try:
+        analyze_msd(frames, col_idx, pbc=(True, True, True))
+    except ValueError as exc:
+        assert 'duplicate' in str(exc).lower() and '2' in str(exc)
+    else:
+        raise AssertionError('duplicate IDs must be rejected, not skipped')
     assert 'n_skipped' not in analyze_msd(_z_crossing_frames()[0], col_idx)
 
 

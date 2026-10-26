@@ -12,6 +12,21 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### MSD atom identity (PHYS-2; local work, golden approval pending)
+
+- MSD selects an initial cohort by atom type (an integer, a set of type IDs, or
+  all initial atoms), then follows those atom IDs despite type changes and row
+  reordering. Type changes no longer substitute atoms or silently drop frames.
+- An absent `id` column, invalid/duplicate IDs or a missing tracked atom now
+  raises a visible error. Skipping a missing sample can lose periodic crossings,
+  so an apparently valid partial trajectory is not returned. Newly added atoms
+  are reported and excluded from the fixed initial cohort. Failed recomputation
+  invalidates the target MSD cache entry so an older curve is not plotted as
+  the result of a failed attempt.
+- The public `pbc` argument and slab default are unchanged; the shell already
+  passes per-axis periodicity from dump/input metadata. The bulk MSD golden's
+  switch to explicit fully periodic geometry requires separate human approval.
+
 ### HPC job-script safety (HPC-1)
 
 - Generated PBS scripts check scratch creation, input staging and directory

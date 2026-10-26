@@ -1581,13 +1581,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         pbc, pbc_src = self._periodicity()
         axes = ''.join(a for a, p in zip('xyz', pbc) if p) or 'none'
         progress_msg(f"Computing MSD for {species_name} (unwrap {axes} from {pbc_src})...")
+        cache_key = f'msd_{species_name}'
+        # A validation failure must not leave an older curve available to plot
+        # under the name of this failed computation.
+        s.cache.pop(cache_key, None)
         result = analyze_msd(s.dump_frames, s.dump_col_idx,
                              species_type=species_type, dt_fs=s.dt_fs, pbc=pbc)
-        cache_key = f'msd_{species_name}'
         s.cache[cache_key] = result
-        if result and result.get('n_skipped'):
-            print(C.warn(f"  Skipped {result['n_skipped']} frame(s) whose {species_name} "
-                         f"atom count differs from the first frame."))
         if result and len(result['msd']) > 0:
             progress_msg(f"Final MSD: {result['msd'][-1]:.2f} A^2")
         print(C.ok(f"  Done. Use 'plot msd' to visualize."))

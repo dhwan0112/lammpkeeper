@@ -19,6 +19,7 @@ Dependencies:
 """
 
 import itertools
+import warnings
 
 import numpy as np
 
@@ -852,109 +853,145 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
 
 
 def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, False)):
-    """
-    Compute Mean Square Displacement (MSD) for a specified atom species.
+    """Compute MSD of a fixed initial cohort, following atom IDs over time.
 
-    MSD = <|r(t) - r(0)|²> is a key indicator of atomic mobility and
-    diffusion. In equilibrium, MSD grows linearly with time for diffusive
-    motion: MSD = 6*D*t (3D) where D is the diffusion coefficient.
+    Select types only in frame zero. Subsequent type changes or row reordering
+    do not change the cohort or denominator. Newly added IDs are reported and
+    ignored; missing tracked IDs raise rather than creating an unknown sampling
+    gap across which periodic crossings could be lost.
 
-    PBC unwrapping is applied only on the axes that `pbc` marks periodic.
-    The default (x, y only) suits slab geometries (p p f boundary
-    conditions), where z is bounded by walls or vacuum. A fully periodic
-    (p p p) cell needs pbc=(True, True, True); otherwise an atom crossing
-    the z boundary adds a jump of ~Lz to its displacement.
-
-    PBC unwrapping algorithm:
-    1. Track cumulative displacement: unwrapped += (current - previous)
-    2. Before adding, correct for PBC jumps: if an atom jumps by ~Lx,
-       subtract Lx to get the true displacement.
-    3. MSD = mean over all atoms of |unwrapped - initial|²
+    Minimum-image displacements are accumulated on the axes marked periodic.
+    Wrapped coordinates must be sampled often enough that each periodic step is
+    less than half a box length. Only orthogonal (3, 2) bounds are supported;
+    this routine does not reconstruct tilt discarded by an upstream reader.
+    Geometry with retained triclinic bounds is rejected, not approximated.
 
     Args:
-        frames:       list[dict] — Trajectory frames (needs ≥ 2)
-        col_idx:      dict       — Column index mapping
-        species_type: int or None — Atom type to track (None = all atoms)
-        dt_fs:        float      — Timestep in femtoseconds
-        pbc:          tuple[bool, bool, bool] — Axes to unwrap (x, y, z).
-                      The shell takes it from the dump's boundary flags.
+        frames: list-like trajectory with at least two frames.
+        col_idx: numeric column indices, including id, type, x, y and z.
+        species_type: integer type ID, iterable of type IDs, or None for all
+            atoms initially present. This is an initial-cohort MSD, not a
+            time-dependent population or spin-channel MSD.
+        dt_fs: timestep in femtoseconds; output time is in picoseconds.
+        pbc: three booleans for x/y/z unwrapping. The historical slab default
+            is retained for compatibility. A bulk cell needs (True, True, True);
+            the shell supplies flags from dump/input metadata.
 
     Returns:
-        dict with keys:
-            'time' : np.array — Time in picoseconds
-            'msd'  : np.array — Mean square displacement (Angstrom²)
-            'n_skipped' : int    — Present only when frames were skipped
-                                   because their atom count for the species
-                                   differs from the first frame.
-        Returns None if fewer than 2 frames or no atoms of the species.
-    """
-    xi, yi, zi_col = col_idx['x'], col_idx['y'], col_idx['z']
-    ti = col_idx['type']
+        {'time': ndarray, 'msd': ndarray}, MSD in squared coordinate units
+        (Angstrom² for metal/real units), or None for fewer than two frames or
+        an empty initial selection. No frames are silently skipped.
 
+    Raises:
+        ValueError: IDs are absent, invalid, duplicated or missing from the
+            cohort; PBC, box bounds or selected positions are malformed.
+    """
     if len(frames) < 2:
         return None
 
-    # Get reference positions from first frame
-    atoms0 = frames[0]['atoms']
-    if species_type is not None:
-        mask = atoms0[:, ti].astype(int) == species_type
-    else:
-        mask = np.ones(len(atoms0), dtype=bool)
+    try:
+        pbc = tuple(pbc)
+    except TypeError:
+        raise ValueError('MSD pbc must contain exactly three booleans') from None
+    if len(pbc) != 3 or not all(isinstance(v, (bool, np.bool_)) for v in pbc):
+        raise ValueError('MSD pbc must contain exactly three booleans')
 
-    id_col = col_idx.get('id')
-    if id_col is not None:
-        sort_order = np.argsort(atoms0[mask, id_col])
-        ref_pos = atoms0[mask][sort_order][:, [xi, yi, zi_col]].copy()
+    position_cols = [col_idx[k] for k in ('x', 'y', 'z')]
+    first = frames[0]
+    atoms0 = first['atoms']
+    if species_type is None:
+        mask = np.ones(len(atoms0), dtype=bool)
     else:
-        ref_pos = atoms0[mask][:, [xi, yi, zi_col]].copy()
+        if isinstance(species_type, (int, np.integer)):
+            types = [species_type]
+        else:
+            try:
+                types = list(species_type)
+            except TypeError:
+                raise ValueError('MSD species_type must be an integer or iterable of type IDs') from None
+        if any(isinstance(t, (bool, np.bool_)) or not isinstance(t, (int, np.integer))
+               or t <= 0 for t in types):
+            raise ValueError('MSD species_type must contain positive integer type IDs')
+        mask = np.isin(atoms0[:, col_idx['type']], types)
+
+    if not np.any(mask):
+        return None
+    id_col = col_idx.get('id')
+    if id_col is None:
+        raise ValueError('MSD requires an explicit atom ID (id) column to track the initial cohort')
+
+    def sorted_atoms(frame):
+        atoms = frame['atoms']
+        ids = atoms[:, id_col]
+        step = frame['timestep']
+        if (not np.all(np.isfinite(ids)) or np.any(ids <= 0)
+                or np.any(ids != np.floor(ids))):
+            raise ValueError(f'MSD timestep {step}: atom IDs must be finite positive integers')
+        order = np.argsort(ids)
+        ids = ids[order]
+        if np.any(ids[1:] == ids[:-1]):
+            raise ValueError(f'MSD timestep {step}: duplicate atom IDs')
+        return atoms[order], ids
+
+    def box_lengths(frame):
+        box = np.asarray(frame['box'], dtype=float)
+        if box.shape != (3, 2):
+            raise ValueError(f"MSD timestep {frame['timestep']}: requires orthogonal (3, 2) box bounds; "
+                             'triclinic geometry is unsupported')
+        lengths = box[:, 1] - box[:, 0]
+        if (not np.all(np.isfinite(box)) or not np.all(np.isfinite(lengths))
+                or np.any(lengths <= 0)):
+            raise ValueError(f"MSD timestep {frame['timestep']}: box lengths must be finite and positive")
+        return lengths
+
+    box_lengths(first)
+    ordered0, initial_ids = sorted_atoms(first)
+    # Apply the selection to the same ID order as ordered0; never select again.
+    selected_ids = np.sort(atoms0[mask, id_col])
+    indices = np.searchsorted(initial_ids, selected_ids)
+    ref_pos = ordered0[indices][:, position_cols].astype(float, copy=True)
+    if not np.all(np.isfinite(ref_pos)):
+        raise ValueError(f"MSD timestep {first['timestep']}: selected positions must be finite")
     prev_pos = ref_pos.copy()
     unwrapped = ref_pos.copy()
-    n_atoms = len(ref_pos)
+    reported_new_ids = set()
 
-    if n_atoms == 0:
-        return None
-
-    t0 = frames[0]['timestep']
+    t0 = first['timestep']
     time_arr, msd_arr = [0.0], [0.0]
-    wrap_dims = [dim for dim in range(3) if pbc[dim]]
-    n_skipped = 0
+    wrap_dims = [dim for dim, periodic in enumerate(pbc) if periodic]
 
     for fr in itertools.islice(frames, 1, None):
-        atoms = fr['atoms']
-        if species_type is not None:
-            cur_mask = atoms[:, ti].astype(int) == species_type
-        else:
-            cur_mask = np.ones(len(atoms), dtype=bool)
-
-        if id_col is not None:
-            cur_sort = np.argsort(atoms[cur_mask][:, id_col])
-            cur_pos = atoms[cur_mask][cur_sort][:, [xi, yi, zi_col]]
-        else:
-            cur_pos = atoms[cur_mask][:, [xi, yi, zi_col]]
-
-        if len(cur_pos) != n_atoms:
-            n_skipped += 1
-            continue
-
-        box = fr['box']
-        L = box[:, 1] - box[:, 0]
+        lengths = box_lengths(fr)
+        ordered, ids = sorted_atoms(fr)
+        present = np.isin(selected_ids, ids, assume_unique=True)
+        if not np.all(present):
+            missing = selected_ids[~present]
+            preview = ', '.join(str(int(v)) for v in missing[:8])
+            raise ValueError(f"MSD timestep {fr['timestep']}: missing {len(missing)} tracked atom ID(s) "
+                             f'[{preview}]; cannot unwrap across missing samples')
+        added = np.setdiff1d(ids, initial_ids, assume_unique=True)
+        new_ids = set(added) - reported_new_ids
+        if new_ids:
+            warnings.warn(f"MSD timestep {fr['timestep']}: {len(new_ids)} new atom ID(s) ignored; "
+                          'tracking the fixed initial cohort', RuntimeWarning, stacklevel=2)
+            reported_new_ids.update(new_ids)
+        indices = np.searchsorted(ids, selected_ids)
+        cur_pos = ordered[indices][:, position_cols].astype(float, copy=False)
+        if not np.all(np.isfinite(cur_pos)):
+            raise ValueError(f"MSD timestep {fr['timestep']}: selected positions must be finite")
 
         delta = cur_pos - prev_pos
         for dim in wrap_dims:
-            delta[:, dim] -= L[dim] * np.round(delta[:, dim] / L[dim])
+            delta[:, dim] -= lengths[dim] * np.round(delta[:, dim] / lengths[dim])
         unwrapped += delta
         prev_pos = cur_pos.copy()
 
         disp = unwrapped - ref_pos
         msd = np.mean(np.sum(disp ** 2, axis=1))
-
         time_arr.append((fr['timestep'] - t0) * dt_fs / 1000)
         msd_arr.append(msd)
 
-    result = {'time': np.array(time_arr), 'msd': np.array(msd_arr)}
-    if n_skipped:
-        result['n_skipped'] = n_skipped
-    return result
+    return {'time': np.array(time_arr), 'msd': np.array(msd_arr)}
 
 
 def analyze_stage_performance(log_data):
