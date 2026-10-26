@@ -12,6 +12,14 @@ Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end 
 
 ## Suggested order
 
+**Scheduling update (maintainer, 2026-10-26):** defer actual HPC submissions,
+site-dependent validation and HPC site-profile work (GEN-6) until early-to-mid
+November 2026 or later, when the maintainer is available; this is not an
+automatic restart date. HPC-1's local safety fix is done, but real-cluster
+execution remains unverified. In the meantime prioritize local analysis,
+synthetic regressions and replay of committed trajectories. No new HPC jobs or
+site changes are part of this work.
+
 **Phase 0, reproducibility:** REL-0
 **Phase 1, trustworthy tests and correct physics:** TEST-1 → OPS-1 → HPC-1 → PARSE-1 → **MSD (PHYS-2 + PHYS-1, one PR)** → PHYS-4 → PHYS-3 → PHYS-5 → TEST-3 → DOC-1 → DOC-2
 
@@ -133,32 +141,102 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   are still required before that physics-changing work.
 
 ### MSD = PHYS-2 + PHYS-1 · one PR, two commits (PHYS-2 first), golden rebaseline inside
-Both defects live in `analyze_msd`. The "correct" reference value below already
-needs both fixes, so rebaselining after only one of them would churn the goldens.
-Commit order in the PR: ① PHYS-2 (ID tracking) ② PHYS-1 (per-dimension unwrap)
-③ `test(golden): rebaseline msd_* …` (human-approved, see TEST-2).
+- **Status:** done locally (`fix/msd-id-tracking`, 2026-10-27): PHYS-2 in
+  `64a6084`; approved PHYS-1 golden rebaseline in dedicated commit `c9eeb37`.
+  REL-0 is complete. No fixtures were modified and no push/PR/merge has been
+  performed for this work. The maintainer approved the numerical correction
+  after reviewing its physical interpretation and limitations.
+- **Reproduction (measured):** the collected synthetic suite had 15 failures and
+  10 passes before the fix, then 25 passes. Four follow-up cases bring the
+  collected MSD module to 29 passes (37 with periodicity tests). The static type-swap case changes
+  from a fictitious 16 Å² to zero; population changes no longer drop frames.
+- **Implementation:** select an initial cohort by integer type or type set and
+  track IDs thereafter. Missing tracked IDs, duplicate/invalid IDs, absent ID
+  columns and invalid supplied bounds raise clear errors. Newly added IDs warn
+  and are excluded. A missing sample is not skipped because an unknown periodic
+  crossing cannot safely be reconstructed across the gap.
+- **Verification (measured):** `/verify-lkpr full` script: 99 passed, 0 failed,
+  2 skipped (ASE tests); post `analyze all` passes, prep is skipped (ASE absent).
+  Forced NumPy mode: 97 passed, 0 failed, 4 skipped (same ASE tests plus 2 native
+  tests). Native/NumPy fixture MSD measurements match exactly. Matplotlib,
+  pandas, MDAnalysis and pytest are absent; plots and their paths are unverified.
+  No real LAMMPS execution or HPC submission was performed.
+- **Independent check (measured):** ID dictionaries plus brute-force periodic
+  image enumeration reproduce the regular bulk cohort to max error
+  4.17e-16 Å² and the spin-equilibration cohort to 6.81e-16 Å². The latter now
+  uses 337/337 frames, compared with 32/337 before the fix (305 skipped).
+  Analytic type-swap, vibration, bulk and slab behavior tests also pass.
+- **Golden rebaseline (approved and applied 2026-10-27):** regular-fixture
+  regressions now explicitly use dump `pp pp pp` metadata instead of the slab
+  default. Only the `msd_FeUp` fingerprint changes:
+  `msd_FeUp` final 17.4725703688831 → 0.074623992827988 Å², fingerprint
+  `eb7f778ead75a17d` → `8a151e1c5051cb59`. `msd_O` remains
+  0.049907252878781 Å² / `ce2e617b3ad32239`. The regular fixture does not change
+  type membership; this golden correction is due to z periodicity (already
+  supported since PR #8), not the new ID-tracking fix. The public slab default
+  is preserved; the bulk regression's explicit PBC and golden were changed
+  together in the dedicated human-approved commit.
+- **Evidence (local):** `/tmp/opencode/msd-before.json`, `msd-after.json`,
+  `msd-after-fallback.json`, `msd-after-target.log`, `msd-fallback-tests.log`
+  and `/tmp/opencode/msd-verification/20261026T194236-ab492c2-full`.
+  **Final approved-golden verification (2026-10-27, measured):** full script
+  again reports 99 passed, 0 failed, 2 ASE skips; post `analyze all` passes and
+  prep is skipped (ASE absent). Forced NumPy reports 97 passed, 0 failed,
+  4 skips. Evidence: `/tmp/opencode/msd-golden-verification/20261027T010307-64a6084-full`
+  and `/tmp/opencode/msd-golden-fallback-tests.log`.
+- **Physical interpretation check (2026-10-27, measured/inferred):** regular
+  trajectory frames span step 100 through 3587. The NPT MD ends at step 2100;
+  later frames are zero-temperature box/position minimization, not elapsed MD
+  time. Fe_up/O MSD at the MD endpoint is 0.1631937540 / 0.1544326557 Å²;
+  the final relaxed endpoint is 0.0746239928 / 0.0499072529 Å² (RMS displacement
+  0.273 / 0.223 Å). These are plausible localized displacements, not certified
+  equilibrium 1200-K vibration amplitudes or evidence of diffusion. Four of the
+  64 Fe_up IDs wrap across z; the uncorrected z contribution alone is
+  17.41704714 Å² versus 0.01910076 Å² after MIC. MD displacement components
+  between saved frames stay below 0.021 of the box length (whole saved series),
+  consistent with the adjacent-frame MIC sampling assumption. NPT box changes
+  and subsequent relaxation also contribute to the reference-relative MSD.
+  Evidence: `/tmp/opencode/msd-physics-assessment.json`.
+- **Time-axis warning (measured):** `run_md.lammps` specifies metal units and
+  timestep 0.001 ps = 1 fs, whereas dump-only shell heuristics currently choose
+  0.25 fs. This scales plotted time by a factor of four, not the MSD magnitude.
+  Run-derived timestep handling remains separate work; a correct timestep must
+  not be used to turn minimizer iteration numbers into physical time either.
+- **Limits:** PHYS-4 name/group resolution, run-derived units and GEN-3 triclinic
+  reader geometry remain separate work. This fix rejects malformed supplied
+  bounds but cannot restore tilt already discarded by the existing parser.
 
-### PHYS-1 · P1 · MSD never unwraps z, even for `p p p` — `open`
-- **Where:** `lammps_post/analysis.py::analyze_msd` (`for dim in range(2)`), and the
-  caller in `shell.py::_analyze_msd`.
-- **Evidence (measured):** fixture (bulk `p p p`), final Fe_up MSD = **17.47 Å²**
-  currently, vs **0.07 Å²** with ID tracking + xyz unwrap. The O MSD is unaffected
-  here (0.05 both). The 17.47 is locked into golden `msd_FeUp`.
-- **Fix direction:** `pbc` / `z_pbc` argument, auto-detected like the RDF
-  (input `boundary` → PARSE-1 flags → `surface_z` fallback). Print the choice.
-- **Repro:** `tests/pending_review_findings.py::test_msd_unwraps_z_for_fully_periodic_box`.
+The original plan combined both fixes before rebaselining. Per-axis unwrap and
+shell routing subsequently landed in PR #8. This branch completes ID tracking
+first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
+(`c9eeb37`), without duplicating the already merged unwrap implementation.
+
+### PHYS-1 · P1 · Bulk MSD must unwrap all periodic axes — `done (c9eeb37; local)`
+- **Where:** `lammps_post/analysis.py::analyze_msd` and the caller in
+  `shell.py::_analyze_msd`.
+- **Current state:** PR #8 introduced per-axis `pbc` and shell routing; collected
+  behavior tests and the maintainer-approved bulk golden complete the item.
+  The public slab default is preserved for callers that pass no metadata.
+- **Evidence (measured):** the old bulk-fixture golden used the slab default and
+  ended at **17.47 Å²**. Explicit xyz unwrap gives **0.074624 Å²** and is now
+  recorded by `msd_FeUp`. O MSD is unaffected (0.049907 Å² in both cases).
+- **Fix direction:** retain the explicit per-axis `pbc` argument. The shell
+  prints its choice and currently prioritizes dump flags → input `boundary` →
+  `surface_z` fallback, matching RDF. No deprecated `z_pbc` MSD alias is needed.
+- **Repro:** collected in `tests/test_msd.py::test_msd_bulk_z_crossing_and_explicit_slab`;
+  also covered by `tests/test_periodicity.py::test_msd_unwraps_z_only_when_periodic`.
 - **Done when:** the repro passes. A synthetic `p p f` case in the same test module
   shows that z is *not* unwrapped when z is non-periodic (no dependency on TEST-3).
   The MSD goldens are re-baselined in the PR's dedicated commit (TEST-2 rules).
 
-### PHYS-2 · P1 · MSD reselects atoms by type each frame (ACE spin swaps) — `open`
+### PHYS-2 · P1 · MSD reselects atoms by type each frame (ACE spin swaps) — `done (64a6084; local)`
 - **Where:** `analysis.py::analyze_msd`.
-- **Evidence (measured):** two static Fe atoms with types swapped → MSD 16.0 Å².
-  The spin fixture changes Fe_up 64 → 66, so those frames are silently skipped by
-  the `len(cur_pos) != n_atoms` check.
-- **Fix direction:** select IDs at frame 0, index by ID afterwards, warn if IDs go
-  missing.
-- **Repro:** `pending_review_findings.py::test_msd_tracks_ids_through_spin_swap`.
+- **Evidence (measured):** two static atoms with swapped types gave MSD 16.0 Å²
+  before the fix and give zero afterwards. The spin fixture now uses all 337
+  frames instead of silently skipping 305 population-changing frames.
+- **Implementation:** select IDs at frame 0, then index by ID. Missing tracked
+  IDs raise with timestep/ID details rather than hiding an unwrapping gap.
+- **Repro:** collected in `tests/test_msd.py::test_msd_tracks_ids_through_type_swap`.
 
 ### PHYS-4 · P1 · ACE "Fe" resolves to Fe_down only; unknown species are silent — `open`
 - **Where:** `shell.py::_analyze_msd` (`inv[v.split('_')[0]] = k`) and the RDF pair
@@ -269,7 +347,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   (`species=('O','O'), cutoff=1.8`) in the domain pack. Builds on PHYS-3 and PHYS-5.
 - **Done when:** the presets reproduce PHYS-3/5 results, and an `A–B` diatomic test passes.
 
-### GEN-6 · HPC site profiles — `open` (after HPC-1)
+### GEN-6 · HPC site profiles — `deferred (maintainer: early-to-mid November 2026 or later)` (after HPC-1)
 - **Target:** `sites/` profiles (`nus-pbs`, `slurm-generic`, `local`) own the
   scheduler header, modules, compiler env, scratch root and queue. Templates only
   contain the run logic.
