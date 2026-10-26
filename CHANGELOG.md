@@ -11,6 +11,19 @@ Changes since the last tagged state, grouped by migration stage
 (see `MIGRATION.md`). No version has been released from this section yet;
 REL-0 will tag a thesis-reproducible commit from it.
 
+### HPC job-script safety (HPC-1)
+
+- Generated PBS scripts check scratch creation, input staging and directory
+  changes before launching LAMMPS.
+- `LKPR_SCRATCH` optionally selects an absolute scratch path (the existing
+  `/hpctmp/$USER/$JOBID` default is unchanged). Scratch must be a fresh directory;
+  an existing directory or symlink is refused without modifying its contents.
+- Results (including hidden files) must copy successfully before scratch is
+  removed. Copy/archive failures report the retained scratch path and return a
+  nonzero exit status rather than printing success.
+- A failed LAMMPS run still returns its original failure status after a successful
+  archive. LAMMPS inputs, structures and site configuration are unchanged.
+
 ### Dump boundary metadata verification (PARSE-1)
 
 - Regression tests cover slab, fully periodic, mixed nonperiodic and absent

@@ -71,7 +71,7 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
 - **Done when:** a test writes 5,000 entries and the file holds ≤ 2,000 lines.
   `LKPR_NO_HISTORY=1` leaves HOME untouched.
 
-### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `open`
+### HPC-1 · P1 · Job script deletes scratch even when the copy back failed — `done (PR #9)`
 - **Where:** `lammps_pre/templates.py` PBS template (section "4. Copy Results").
 - **Evidence (measured, Codex):** injected `cp` failure → results lost, "Success"
   printed, exit 0. *(inferred)* The staging `cp`, `mkdir` and `cd` are also unchecked,
@@ -82,6 +82,25 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   `cp` on PATH. On copy failure, scratch is kept, its path is printed and the exit
   code is nonzero. On success, scratch is removed and the exit code is 0.
   `bash -n` passes.
+- **Implementation:** checked fresh scratch creation, staging and directory
+  changes; copy hidden files with `cp -a`; one `COPY_OK` gate before checked
+  cleanup. Copy failures retain scratch and its recovery path. An optional
+  absolute `LKPR_SCRATCH` override keeps the default site path unchanged.
+- **Verification (2026-10-25, measured):** 16 stubbed failure/success tests fail
+  against `origin/main`'s old renderer and pass with the fix, including partial
+  copies, archive/staging failures, stale/symlink scratch and cleanup failures.
+  Full verification: 69 passed, 0 failed, 1 skipped (native extension absent);
+  post analysis/plots and prep + `bash -n` passed. HPC tests also pass with
+  Python `-S` (no optional packages). Real HPC/LAMMPS execution, ShellCheck
+  (not installed), MDAnalysis and native parser paths were not verified.
+- **Integration verification (2026-10-26, measured):** combined with PARSE-1
+  from PR #10; full native verification and pytest both passed all 72 tests.
+  Forced NumPy mode passed 70 tests with 2 explicit native-test skips in both
+  runners. Full analysis/plots and prep + `bash -n` passed in both modes; all
+  three force-field job templates also passed `bash -n`. Evidence:
+  `/tmp/opencode/parse1-native-9tj0Xnpf/evidence-combined` and
+  `/tmp/opencode/lkpr-combined-fallback/20261026T134705-310566d-full`.
+  Real HPC/LAMMPS execution remains unverified.
 
 ### PARSE-1 · P3 · Dump parser discards `BOX BOUNDS` periodicity flags — `done (branch fix/parse-1-boundary-parity)`
 - **Implementation:** commit `0c0a21d` exposes dump boundary flags and adds
