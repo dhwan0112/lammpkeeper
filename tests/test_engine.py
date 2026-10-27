@@ -16,6 +16,7 @@ from _util import FIXTURE, have_numpy, noninteractive, section_hash, skip
 
 
 def _have_scipy():
+    """Probe the optional spatial backend so absence is an explicit test skip."""
     try:
         import scipy.spatial  # noqa: F401
         return True
@@ -24,21 +25,25 @@ def _have_scipy():
 
 
 def _lazy_fixture(**kw):
+    """Wrap the reference dump with caller-selected cache and frame limits."""
     from lammps_post.parsers import DumpReader, LazyFrames
     return LazyFrames(DumpReader(FIXTURE), **kw)
 
 
 def test_shared_pass_feeds_every_iterator_every_frame_once():
+    """Late joiners replay the full stream while early exits cannot deadlock peers."""
     if not have_numpy():
         skip('numpy not installed')
     if not os.path.exists(FIXTURE):
         skip(f'fixture not found: {FIXTURE}')
     frames = _lazy_fixture(cache_bytes=0, max_frames=60)
     expected = [f['timestep'] for f in frames]
+    # A separate sequential pass defines order before concurrent consumption begins.
     seen = {}
     gate = threading.Event()
 
     def consume(name, wait=False, stop_after=None):
+        """Record one consumer's sequence with controlled late joining or early exit."""
         if wait:
             gate.wait()
         steps = []
@@ -68,6 +73,7 @@ def test_shared_pass_feeds_every_iterator_every_frame_once():
 
 
 def test_shared_pass_propagates_parse_errors():
+    """Producer failure must reach consumers instead of looking like end of input."""
     if not have_numpy():
         skip('numpy not installed')
     if not os.path.exists(FIXTURE):
@@ -75,6 +81,7 @@ def test_shared_pass_propagates_parse_errors():
     frames = _lazy_fixture(cache_bytes=0, max_frames=10)
 
     def boom(fr):
+        """Inject a deterministic transform failure at the fourth indexed timestep."""
         if fr['timestep'] == frames.timesteps[3]:
             raise ValueError('bad frame')
         return fr
@@ -90,6 +97,7 @@ def test_shared_pass_propagates_parse_errors():
 
 
 def _analyze_all(load_opts):
+    """Run the same shell workload with only the loading/cache policy varied."""
     from lammps_post.shell import LammpsPostShell
     sh = LammpsPostShell()
     sh.state.output_dir = tempfile.mkdtemp(prefix='lkpr_test_')
@@ -100,6 +108,7 @@ def _analyze_all(load_opts):
 
 
 def test_shared_analyze_all_matches_sequential():
+    """Shared streaming must preserve every sequential analysis cache fingerprint."""
     if not have_numpy():
         skip('numpy not installed')
     if not os.path.exists(FIXTURE):
@@ -114,6 +123,7 @@ def test_shared_analyze_all_matches_sequential():
 
 
 def test_rdf_tree_path_bins_like_brute_force():
+    """Candidate acceleration must preserve exact RDF bins for bulk and slab PBC."""
     if not have_numpy():
         skip('numpy not installed')
     if not _have_scipy():
@@ -130,6 +140,7 @@ def test_rdf_tree_path_bins_like_brute_force():
     col_idx['type'] = len(col_idx)
 
     real = A._rdf_candidate_pairs
+    # Disable only candidate generation: binning and normalization remain production code.
     try:
         for ta, tb in ((1, 3), (3, 3)):
             for z_pbc in (False, True):

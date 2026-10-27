@@ -23,35 +23,41 @@ def _run(argv):
 
 
 def test_no_args_prints_help():
+    """Noninteractive empty arguments must show available modes and exit cleanly."""
     code, out, _ = _run([])
     assert code == 0
     assert 'lkpr' in out and 'prep' in out and 'post' in out
 
 
 def test_top_version():
+    """The unified entry point reports its own canonical version."""
     code, out, _ = _run(['--version'])
     assert code == 0
     assert f'lkpr {VERSION}' in out
 
 
 def test_unknown_command_exit_2():
+    """Invalid modes retain argparse's usage-error exit status."""
     code, _, _ = _run(['bogus'])
     assert code == 2
 
 
 def test_prep_delegation_preserves_subversion():
+    """Delegation leaves preprocessing version handling with the legacy CLI."""
     code, out, _ = _run(['prep', '--version'])
     assert code == 0
     assert 'lammps-pre' in out
 
 
 def test_post_delegation_preserves_subversion():
+    """Delegation leaves postprocessing version handling with the legacy CLI."""
     code, out, _ = _run(['post', '--version'])
     assert code == 0
     assert 'lammps-post' in out
 
 
 def test_unified_session_switches_and_keeps_state():
+    """Queued navigation reuses both states and propagates quit to the host shell."""
     import os
     import tempfile
     import lammpkeeper.shell as lk
@@ -66,6 +72,7 @@ def test_unified_session_switches_and_keeps_state():
             pre.histfile = os.path.join(tmp, 'pre')
             post.histfile = os.path.join(tmp, 'post')
             pre.cmdqueue = ['set temperature 500', 'post', 'back']
+            # Queues drive real navigation deterministically without interactive input.
             post.cmdqueue = ['set dpi 300', 'prep']
             assert sh._run('prep') is False          # back -> menu
             assert pre.state.temperature == 500 and post.state.dpi == 300
@@ -82,6 +89,7 @@ def test_unified_session_switches_and_keeps_state():
 
 
 def test_switch_commands_need_unified_session():
+    """A standalone shell explains unavailable host navigation without exiting."""
     from lammps_pre.shell import LammpsPreShell
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

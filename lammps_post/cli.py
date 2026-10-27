@@ -33,7 +33,12 @@ def main(argv=None):
     3. Batch: Use --batch <file> to execute a series of commands from
        a script file (one command per line, '#' for comments).
     4. One-shot: Use --analyze and/or --plot with file flags to run
-       analysis/plotting without entering the interactive shell.
+        analysis/plotting without entering the interactive shell.
+
+    ``argv=None`` reads process arguments; success returns None. Preload,
+    one-shot and batch command failures raise SystemExit(1). The shell counts
+    failures independently of cmd.Cmd's truthy stop signal, allowing batch
+    scripts to continue after recoverable errors and still exit unsuccessfully.
     """
     parser = argparse.ArgumentParser(
         description='LAMMPS-POST: Post-Processing Interactive CLI')
@@ -75,6 +80,8 @@ def main(argv=None):
     shell = LammpsPostShell()
     shell.state.output_dir = args.output
     one_shot = args.analyze is not None or args.plot is not None
+    # Missing values may use documented defaults in these modes, but must not
+    # block on stdin. The shell also treats non-TTY input as noninteractive.
     shell.noninteractive = one_shot or args.batch is not None or args.find is not None
 
     # Apply style flags before any plotting
@@ -87,6 +94,8 @@ def main(argv=None):
 
     # ── File search mode ──
     if args.find is not None:
+        # Search takes precedence over preload/analysis/batch. It calls the
+        # handler directly, unlike commands whose failures onecmd accumulates.
         shell.do_find(args.find)
         return
 
@@ -100,10 +109,13 @@ def main(argv=None):
         shell.onecmd(f'load data {shlex.quote(args.data)}')
 
     if shell.command_failures:
+        # Failed preloads must not start analyses against a partial session.
         raise SystemExit(1)
 
     # ── One-shot mode: analyze and/or plot, then exit ──
     if args.analyze is not None:
+        # A plot may still run after an analysis error; cumulative status below
+        # ensures that a later success cannot conceal the earlier failure.
         shell.onecmd(f'analyze {args.analyze}')
     if args.plot is not None:
         shell.onecmd(f'plot {args.plot}')
@@ -122,8 +134,11 @@ def main(argv=None):
                     if line and not line.startswith('#'):
                         print(f"{shell.prompt}{line}")
                         if shell.onecmd(line):
+                            # Only an explicit stop command ends the batch;
+                            # recoverable failures return False and are counted.
                             break
         except OSError as exc:
+            # Opening/reading the script is owned here, not by shell.onecmd.
             print(C.err(f'  {exc}'))
             raise SystemExit(1) from exc
         if shell.command_failures:
@@ -134,6 +149,7 @@ def main(argv=None):
     try:
         shell.cmdloop()
     except KeyboardInterrupt:
+        # Interactive interruption is a normal departure, not a batch failure.
         print(f"\n\n  {C.dim('Interrupted. Goodbye!')}\n")
 
 

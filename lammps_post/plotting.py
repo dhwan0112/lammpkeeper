@@ -8,11 +8,24 @@ Each analysis type has a corresponding plot function that:
   3. Saves to the output directory as PNG/PDF/SVG files
   4. Supports optional normalize and z_focus parameters
 
-All plot functions check HAS_MPL and return silently if matplotlib
-is not available, so they can be called unconditionally.
+Requested plots require matplotlib and fail visibly when it is unavailable;
+missing analysis data generally returns without writing a figure. Importing
+this module selects a headless backend and applies global style defaults when
+matplotlib is present. Each successful plot writes through _save_fig and closes
+its figure; analysis dictionaries are read as supplied, except the thermo and
+pressure views may add a missing scalar pressure from diagonal components.
+
+Shared arguments: output_dir is the destination directory, dpi controls raster
+resolution, and figsize overrides dimensions in inches. normalize selects
+existing population fractions (usually shown as percent), not new scientific
+normalization of the underlying analysis. z_focus crops display limits; it
+does not recompute analyses. The penetration-profile plot additionally uses
+that chosen z range for its display histograms. Times are already in ps in
+analysis dictionaries; thermo plots reconstruct them through _thermo_time.
+Plot labels and heuristic guides are not independent physical validation.
 
 Dependencies:
-  Required : numpy, matplotlib (lazy-loaded)
+  Required : numpy; matplotlib is optional at import but required for plotting
   Uses     : WONG_PALETTE, BAR_TO_GPA, DENSITY_CONVERSION from __init__
              progress_msg, C from display
 ═══════════════════════════════════════════════════════════════
@@ -72,7 +85,7 @@ def _setup_plot_style(theme='default'):
     Themes:
         'default'      — Grid on, standard font sizes, good for interactive QC.
         'publication'  — No grid, bold axis labels, black borders, 10pt base font.
-                         Follows journal submission guidelines (Nature, ACS, RSC).
+                         A publication-oriented preset, not journal compliance.
         'presentation' — Larger fonts, thicker lines, good for slides.
     """
     # Common base settings
@@ -148,11 +161,16 @@ def _save_fig(fig, outpath, dpi=150, save_format=None):
     Supports multiple output formats including vector (PDF/SVG) for
     publication-quality figures.
 
+    Format selection may replace outpath's extension; the legacy 'both' mode
+    writes PNG, PDF and SVG despite its name. An unrecognized format retains
+    the supplied path. Figure closing follows successful saves; write failures
+    propagate rather than reporting success or swallowing filesystem errors.
+
     Args:
         fig:         matplotlib.Figure — The figure to save
         outpath:     str — Full file path (e.g., './output/rdf_Fe_O.png')
         dpi:         int — Resolution in dots per inch (default: 150)
-        save_format: str or None — 'png', 'pdf', 'svg', or 'both' (png+pdf).
+        save_format: str or None — 'png', 'pdf', 'svg', or 'both' (png+pdf+svg).
                      None uses the module-level _SAVE_FORMAT default.
     """
     global _SAVE_FORMAT
@@ -189,12 +207,24 @@ def _save_fig(fig, outpath, dpi=150, save_format=None):
 
 
 def _require_matplotlib():
+    """Fail explicitly when a requested plot cannot use the optional backend.
+
+    Plot entry points call this before missing-data checks, so lack of plotting
+    support is not silently disguised as an empty analysis result.
+    """
     if not HAS_MPL:
         raise RuntimeError('matplotlib is required for requested plotting; install the post extra')
 
 
 def _thermo_time(log_data, dt_fs):
-    """Use parser-reconstructed MD increments, never optimizer/reset counters."""
+    """Return a finite row-aligned, nondecreasing MD timeline in ps.
+
+    Prefer parser-provided time_ps, otherwise convert elapsed_md_steps with
+    dt_fs. Legacy step fallback is allowed only without explicit ambiguity;
+    optimizer-only rows are rejected rather than interpreted as elapsed MD.
+    A missing dt_fs warns before assuming 1 fs. Duplicate times are allowed,
+    as at adjacent run boundaries, but decreasing times are not.
+    """
     step = np.asarray(log_data['step'], dtype=float)
     if 'elapsed_md_steps' in log_data and log_data['elapsed_md_steps'] is None:
         raise ValueError('Optimizer-only thermo has no elapsed MD timeline; plot iterations separately')
@@ -218,7 +248,12 @@ def _thermo_time(log_data, dt_fs):
 
 
 def _pressure_scale(unit_system, pressure_unit):
-    """Scale native LAMMPS pressure (metal: bar; real: atm) for display."""
+    """Return multiplicative native-to-display pressure scale and axis label.
+
+    LAMMPS metal pressure is bar and real pressure is atm; both can be shown
+    in bar or GPa. Reject unsupported styles/displays rather than applying a
+    conversion associated with a different unit system.
+    """
     native_gpa = {'metal': BAR_TO_GPA, 'real': ATM_TO_GPA}
     if unit_system not in native_gpa:
         raise ValueError(f'Unsupported LAMMPS pressure units style: {unit_system!r}')
@@ -230,7 +265,15 @@ def _pressure_scale(unit_system, pressure_unit):
 
 
 def _slab_volume_scale(log_data, slab_z_range, n_frames):
-    """Explicit z-aligned slab volume ratio; never infer height from volume."""
+    """Return per-sample Lz/thickness for an explicitly z-aligned slab.
+
+    Equal box/slab cross-sections cancel from the volume ratio. Validate any
+    supplied lengths/volume for consistency, but never infer Lz from volume.
+    Invalid requested bounds raise; missing/inconsistent per-sample geometry
+    instead warns and returns None so a caller can label uncorrected box P.
+    A valid ratio verifies geometry only, not the physical assumption that all
+    box stress belongs to the selected slab.
+    """
     bounds = np.asarray(slab_z_range, dtype=float)
     if bounds.shape != (2,) or not np.all(np.isfinite(bounds)) or bounds[1] <= bounds[0]:
         raise ValueError('slab_z_range must be finite (z_lo, z_hi) with z_hi > z_lo')
@@ -275,6 +318,12 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
     Each property is shown as a raw time series with a running average
     overlay for smoothing high-frequency fluctuations.
 
+    Running means weight samples, not elapsed intervals; they are visual
+    summaries rather than equilibrium tests. Mass/box-volume density includes
+    vacuum in slab cells. All pressure here is uncorrected box pressure; an
+    explicit slab range only adds a note. Missing scalar pressure is synthesized
+    in the supplied dictionary when all diagonal components are available.
+
     Args:
         log_data:        dict — Parsed log data from parse_log()
         output_dir:      str  — Output directory for saved plot
@@ -285,6 +334,7 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
         total_mass_amu:  float or None — Total system mass for density calculation
         figsize:         tuple or None — (width, height); None uses adaptive default
         unit_system:     str — Native LAMMPS units ('metal': bar, 'real': atm)
+        slab_z_range:    tuple or None — Explicit z bounds for a box-pressure note
 
     Output: thermo.png
     """
@@ -429,6 +479,11 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
     Temperature on the left axis (red), Pressure on the right axis (blue).
     Useful for slides and papers where a single figure is preferred.
 
+    A temperature series is required; the secondary pressure axis is optional
+    and uses native-unit conversion without slab-volume rescaling. The two
+    independent axis scales do not imply a quantitative temperature-pressure
+    correlation. Time validation is shared with the full thermo overview.
+
     Reference: md_stats_plot.py plot_thermostat()
 
     Args:
@@ -501,7 +556,13 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
                This is not a local/material pressure or surface-stress estimator.
                Missing/invalid geometry warns and displays uncorrected box P.
 
-    For bulk (fully periodic) systems, shows standard P with statistics.
+    Without an explicit slab range, show box pressure with descriptive running
+    statistics. No boundary flags are read here to classify slab versus bulk.
+    Supplying a slab range alone is not evidence that volume rescaling has a
+    physical material-pressure interpretation. If diagonal components are
+    absent, a scalar trace cannot establish the in-plane pressure and is left
+    uncorrected with a warning. A missing scalar pressure may be added to the
+    input dictionary from its diagonal components.
 
     Args:
         log_data:      dict  — Parsed log data from parse_log()
@@ -663,6 +724,10 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
     Plot Fe charge evolution over time (ReaxFF only).
     Left panel: average and max Fe charge vs time.
     Right panel: oxidized Fe count or fraction (if normalize=True).
+    Charges remain in elementary-charge units; normalization affects only the
+    population panel, using the analysis denominator. None produces no file.
+    The legacy count-axis threshold text is fixed at 0.3 even if the analysis
+    was computed with another cutoff; this plot does not recover that metadata.
     Output: charge_evolution.png
     """
     _require_matplotlib()
@@ -693,8 +758,11 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
 def plot_charge_z(data, output_dir, dpi=150, normalize=False, z_focus=None, figsize=None):
     """
     Plot z-direction charge distribution (ReaxFF only).
-    Shows Fe charge (scatter, left y-axis) and O density (fill, right y-axis)
+    Shows Fe charge (scatter, left y-axis) and O counts (fill, right y-axis)
     vs z-coordinate. The z_focus parameter crops the view to the relevant region.
+    Suppress empty-metal-bin zero charges using fe_count. Normalized oxygen
+    values sum to 100% over all supplied bins (or remain zero when empty),
+    not over just the cropped view; they are not volume-normalized densities.
     Output: charge_z_distribution.png
     """
     _require_matplotlib()
@@ -739,6 +807,13 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
 
     Without references, shows the MD g(r) with vertical reference lines
     at known oxide bond lengths.
+
+    Stacking divides each curve by its own maximum and adds arbitrary offsets:
+    peak positions/shapes remain comparable, but absolute g(r) amplitudes do
+    not. The simple view preserves g(r) and its ideal-gas baseline. Fe/O guide
+    markers are label-triggered heuristics, not phase identification. A display
+    label may change the title while the original pair label keeps filenames
+    stable. None produces no file.
 
     Args:
         data:     dict — RDF data from compute_rdf()
@@ -839,6 +914,9 @@ def plot_oar(data, output_dir, dpi=150, normalize=False, figsize=None):
     """
     Plot Oxygen Absorption Rate (OAR) over time.
     Left: OAR percentage. Right: absorbed O count or fraction.
+    Use the supplied instantaneous below-surface fraction; despite the legacy
+    "rate" name this is not a derivative. Normalizing the right panel repeats
+    that percentage rather than changing the left panel or its denominator.
     Output: oar.png
     """
     _require_matplotlib()
@@ -868,7 +946,10 @@ def plot_oar(data, output_dir, dpi=150, normalize=False, figsize=None):
 def plot_or(data, output_dir, dpi=150, figsize=None):
     """
     Plot Fe oxidation rate over time (ReaxFF only).
-    Shows the fraction of Fe atoms with charge > 0.3 e.
+    Shows the supplied fraction on a 0-to-1 scale, without differentiation or
+    conversion to percent. The retained title mentions the default 0.3 e cutoff
+    even when callers used a different analysis threshold. Partial-charge
+    classification does not by itself establish oxidation states or phases.
     Output: oxidation_rate.png
     """
     _require_matplotlib()
@@ -889,6 +970,11 @@ def plot_penetration(data, output_dir, dpi=150, normalize=False, figsize=None):
     (a) Maximum penetration depth vs time.
     (b) Adsorbed O count/fraction (below surface + near surface).
     (c) Penetration fraction (adsorbed / (adsorbed + near-surface)).
+    Panel (a) subtracts the deepest stored coordinate from the fixed surface;
+    negative depths remain visible if all atoms are above it, and NaNs form
+    gaps. In (b), normalized fractions use all selected oxygen; in (c), only
+    atoms in the two analysis bands enter the denominator. The deeper band
+    uses the analysis offset, not simply z < surface_z.
     Output: penetration.png
     """
     _require_matplotlib()
@@ -932,6 +1018,9 @@ def plot_density(data_list, output_dir, dpi=150, z_focus=None, figsize=None):
     Plot z-direction density profiles for one or more species.
     Each species (e.g., Fe, O, Fe_up, Fe_down) is drawn as a separate
     colored line. z_focus crops the view to the relevant surface region.
+    Values are already frame-averaged number densities in atoms/Å³; no mass
+    conversion, curve rescaling or bin reweighting occurs here. Each profile
+    retains its own supplied z grid. An empty collection produces no file.
     Output: density_profile.png
     """
     _require_matplotlib()
@@ -957,7 +1046,10 @@ def plot_dissociation(data, output_dir, dpi=150, normalize=False, figsize=None):
     """
     Plot O₂ dissociation tracking over time.
     Shows O₂ molecule count and dissociated O atom count (or fractions
-    if normalize=True). Reveals the kinetics of O₂ bond breaking.
+    if normalize=True). These are instantaneous distance-pair assignments,
+    not identity-resolved bond-breaking events or reaction-rate estimates.
+    Counts compare molecules against atoms; normalized values instead compare
+    atoms in pairs against unpaired atoms with the same oxygen denominator.
     Output: o2_dissociation.png
     """
     _require_matplotlib()
@@ -986,8 +1078,11 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     """
     Plot magnetic species evolution over time (ACE only).
     Top: Fe_up, Fe_down, O populations (counts or fractions).
-    Bottom: spin-up fraction with conditional 1:2 population guides, not phase identification
-    and antiferromagnetic (1/2) ideal values.
+    Bottom: spin-up fraction with conditional 1:2, reversed 2:1 and equal
+    population guides. Counts/fractions alone establish neither magnetic order
+    nor an oxide phase. In the normalized top panel Fe spin fractions use all
+    recognized Fe, while the O fraction uses all recognized atoms; the curves
+    therefore do not form one partition summing to 100%.
     Output: spin_evolution.png
     """
     _require_matplotlib()
@@ -1031,7 +1126,11 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
 def plot_msd(data, species_name, output_dir, dpi=150, figsize=None):
     """
     Plot Mean Square Displacement vs time for a given species.
-    MSD growth rate indicates diffusivity: steeper = more mobile atoms.
+    Values describe the analysis's fixed initial ID cohort, even after type
+    changes; species_name is an initial-selection label, not an instantaneous
+    spin channel. Display_label may clarify that distinction without renaming
+    the saved file. Interpreting slopes as diffusion requires a diffusive
+    regime and the correct dimensional factor; this routine fits neither.
     Output: msd_<species>.png (e.g., msd_Fe.png)
     """
     _require_matplotlib()
@@ -1051,6 +1150,10 @@ def plot_performance(stage_times, output_dir, dpi=150, figsize=None):
     Plot stage-wise wall time breakdown as a bar chart.
     Left: absolute time per stage (hours). Right: percentage distribution.
     Useful for identifying computational bottlenecks.
+    Parser stage times are seconds, converted to hours only for display. The
+    second panel is drawn for multiple stages, and percentages use their total
+    wall time, not aggregate CPU time. Input timings are assumed nonnegative
+    with a positive total when percentages are requested.
     Output: performance.png
     """
     _require_matplotlib()
@@ -1091,6 +1194,12 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
     Left: z-resolved atom type distribution (horizontal bar chart, binned
     by BCC lattice constant 2.87 A). Right: O atom z-histogram with
     Fe surface position marked.
+    Expects [id, type, x, y, z] rows. This legacy view uses Fe-specific binning
+    from z=0 and label-based oxygen inference (falling back to the largest
+    type ID); it is not a generic species or surface detector. Negative-z
+    atoms do not enter the left histogram. z_fixed/z_surface are optional
+    left-panel guides; the right guide instead uses the highest non-O z.
+    No periodic wrapping or volume normalization is applied.
     Output: structure.png
     """
     _require_matplotlib()
@@ -1153,6 +1262,11 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     Plot side-view (z-x plane) snapshots at selected trajectory frames.
     Fe atoms are shown in blue, O atoms in red. Default: 5 evenly-spaced
     frames across the trajectory. z_focus crops the vertical axis.
+    The x-z projection uses stored positions without unwrapping or depth
+    filtering. String-key element maps assume the parser's sorted-element
+    synthesized type ordering; absent recognizable labels retain the legacy
+    type-1/type-2 fallbacks. These display heuristics must not be used as a
+    scientific species assignment. Explicit indices are used as supplied.
     Output: snapshots.png (N panels side by side)
     """
     _require_matplotlib()
@@ -1215,7 +1329,7 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
 def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
                               z_focus=None, n_snapshots=8):
     """
-    Comprehensive O penetration profiling — generates 5 plots from
+    Comprehensive O penetration profiling — generates 6 plots from
     analyze_penetration_profile() output:
 
     1. o_trajectories.png       — Spaghetti plot of individual O atom z(t)
@@ -1228,6 +1342,20 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
        (b) Adsorption ratio (% below surface)
        (c) O distribution width (sigma_z)
        (d) Max penetration depth with sqrt(t) fit
+
+    Input columns are ID-union trajectories with NaNs for absence/type exit;
+    trajectory lines preserve those gaps. Histograms/position statistics use
+    only finite present samples, and an empty frame retains NaN position metrics.
+    Histogram colors/heights are counts per bin, not volume-normalized number
+    densities, despite the historical density titles. z_focus sets histogram
+    edges as well as display bounds, without restricting the metric reductions.
+
+    The cumulative timeline and t50 refer to the initial population when its
+    size is supplied; later-arriving IDs do not inflate that cohort's kinetics.
+    First-below observations include initially absorbed atoms and do not
+    interpolate missing crossings. The optional square-root curve is a visual
+    heuristic, not a diffusion coefficient, uncertainty estimate or mechanism
+    identification. None produces no files.
 
     Args:
         data:        dict — Output from analyze_penetration_profile()
@@ -1273,6 +1401,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
         z_lo, z_hi = z_focus
 
     # ── 1. Spaghetti plot: individual O trajectories ──
+    # Matplotlib breaks lines at NaNs: never connect observations across a
+    # missing ID/type-selection sample as if its intermediate path were known.
     fig, ax = plt.subplots(figsize=figsize or (12, 6))
     for j in range(o_z.shape[1]):
         ax.plot(time, o_z[:, j], lw=0.5, alpha=0.4, color=CLR['O'])
@@ -1291,6 +1421,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     z_centers = (z_edges[:-1] + z_edges[1:]) / 2
 
     heatmap = np.zeros((n_frames, n_zbins))
+    # A changing present population changes count intensity. Do not divide by
+    # union size or label the counts as atoms per unit volume.
     for i in range(n_frames):
         h, _ = np.histogram(o_z[i, np.isfinite(o_z[i])], bins=z_edges)
         heatmap[i] = h
@@ -1397,11 +1529,19 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     w = max(5, n_frames // 40)
 
     def _smooth(arr):
+        """Return valid-window sample means with centered original time labels.
+
+        Short series remain raw; long series lose edge samples. NaNs propagate
+        through windows instead of being interpolated or counted as zero.
+        Unequal time spacing does not change the equal-sample kernel.
+        """
         if len(arr) > w:
             return np.convolve(arr, np.ones(w) / w, mode='valid'), time[w // 2:w // 2 + len(arr) - w + 1]
         return arr, time
 
     # (a) Mean O z-position + std band
+    # Reduce over finite present IDs, not the eventual union denominator. The
+    # population standard deviation is a spatial spread, not a mean uncertainty.
     present = np.isfinite(o_z)
     present_count = np.sum(present, axis=1)
     mean_z = np.divide(np.sum(np.where(present, o_z, 0.), axis=1), present_count,
@@ -1449,7 +1589,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     ax = axes[1, 1]
     ax.plot(time, depth, color=CLR['avg'], lw=0.5, alpha=0.4)
     ax.plot(t_sm4, sm_depth, color=CLR['smooth'], lw=1.5, label='Max depth')
-    # Parabolic fit if significant penetration
+    # Show a median d/sqrt(t) scaling guide after the first >1 Å sample. This
+    # is not a least-squares fit or proof of parabolic/diffusion-controlled growth.
     onset_mask = depth > 1.0
     if np.sum(onset_mask) > 10:
         onset_idx = np.argmax(onset_mask)
@@ -1480,6 +1621,10 @@ def plot_penetration_trend(data, output_dir, dpi=150, figsize=None):
       (c) Max penetration depth — deepest O trajectory
 
     Each subplot shows a faint raw trace with a bold smoothed overlay.
+    Consume precomputed metrics without another smoothing pass. The shaded
+    ±sigma band is instantaneous population spread, not a confidence interval;
+    NaNs remain gaps. Surface_z is the fixed reference supplied to the trend
+    analysis, unlike the per-frame percentile surface in profile plots.
     Output: penetration_trend.png
     """
     _require_matplotlib()

@@ -2,8 +2,11 @@
 
 Synthetic coordinates deliberately give the two spin channels different MSDs
 and RDFs. No fixtures or numerical goldens are changed. In particular these
-tests preserve RDF's existing same-species factor and last-frame normalization;
-neither convention is being endorsed as a separate physics correction here.
+tests compare selection paths using the current RDF normalization. The
+historically named same-species equivalence check does not lock in the old
+extra division by two. The enumerated cross-species case and dedicated audit
+oracles independently check normalization; path agreement alone is not proof
+of physical correctness.
 """
 import contextlib
 import io
@@ -18,6 +21,7 @@ ACE = {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}
 
 
 def _frame(rows, step=0):
+    """Build a ten-unit cubic frame directly, independent of dump serialization."""
     import numpy as np
     return {'atoms': np.asarray(rows, dtype=float),
             'box': np.asarray(((0, 10), (0, 10), (0, 10)), dtype=float),
@@ -25,12 +29,14 @@ def _frame(rows, step=0):
 
 
 def _msd_frames():
+    """Provide squared displacements 1, 9 and 0 to distinguish channel unions."""
     # Final squared displacements are 1, 9, 0. Fe union = 5, not 9 or 10/3.
     return [_frame([[1, 1, 1, 1, 1], [2, 2, 4, 1, 1], [3, 3, 7, 1, 1]]),
             _frame([[1, 1, 2, 1, 1], [2, 2, 7, 1, 1], [3, 3, 7, 1, 1]], 100)]
 
 
 def _rdf_frames():
+    """Mix periodic neighbors and changing types to exercise per-frame group masks."""
     # Includes cross-boundary neighbors, unequal type populations, and distinct
     # channel distributions. Changing types in frame 2 checks per-frame masks.
     rows = [[1, 1, 0.2, 1, 1], [2, 2, 3.2, 1, 1],
@@ -44,6 +50,7 @@ def _rdf_frames():
 
 
 def _shell(frames=None, labels=None, ff='ace'):
+    """Create only analysis state, bypassing interactive history and user files."""
     from lammps_post.shell import LammpsPostShell
     from lammps_post.state import SessionState
     # Bypass readline/history setup entirely: this suite tests resolution, not
@@ -60,11 +67,13 @@ def _shell(frames=None, labels=None, ff='ace'):
 
 
 def _quiet(call):
+    """Suppress presentation output while preserving return values and exceptions."""
     with contextlib.redirect_stdout(io.StringIO()):
         return call()
 
 
 def _value_error(call, *needles):
+    """Require an explanatory rejection rather than silent species substitution."""
     try:
         _quiet(call)
     except ValueError as exc:
@@ -77,6 +86,7 @@ def _value_error(call, *needles):
 
 
 def _assert_rdf(actual, expected):
+    """Compare radial grids, normalized bins and the number of contributing frames."""
     import numpy as np
     np.testing.assert_allclose(actual['r'], expected['r'], rtol=1e-14, atol=1e-14)
     np.testing.assert_allclose(actual['g'], expected['g'], rtol=1e-13, atol=1e-13)
@@ -84,6 +94,7 @@ def _assert_rdf(actual, expected):
 
 
 def _flatten(frames, mapping):
+    """Relabel copied types simultaneously to form a legacy integer-API comparator."""
     result = []
     for frame in frames:
         copied = dict(frame, atoms=frame['atoms'].copy())
@@ -95,6 +106,7 @@ def _flatten(frames, mapping):
 
 
 def test_mapping_canonical_ace_species_sets():
+    """Canonical Fe resolves to both spin types while channel names stay singleton."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets, resolve_species
     expected = {'Fe': frozenset({1, 2}), 'Fe_up': frozenset({1}),
@@ -107,6 +119,7 @@ def test_mapping_canonical_ace_species_sets():
 
 
 def test_mapping_unknown_name_lists_valid_species():
+    """Unknown labels must fail with the available canonical selections listed."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import resolve_species
     _value_error(lambda: resolve_species('missing', ACE, ff='ace'),
@@ -114,6 +127,7 @@ def test_mapping_unknown_name_lists_valid_species():
 
 
 def test_mapping_duplicate_labels_merge_without_prefix_guessing():
+    """Identical labels form unions but underscore prefixes create no aliases."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets, resolve_species
     labels = {4: 'A_spin', 7: 'A_spin', 9: 'B'}
@@ -124,6 +138,7 @@ def test_mapping_duplicate_labels_merge_without_prefix_guessing():
 
 
 def test_mapping_generic_unknown_forcefield_uses_supplied_labels_only():
+    """Unrecognized presets cannot inject Fe/O assumptions into explicit labels."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets, resolve_species
     labels = {4: 'A', 7: 'A', 9: 'B'}
@@ -134,6 +149,7 @@ def test_mapping_generic_unknown_forcefield_uses_supplied_labels_only():
 
 
 def test_mapping_custom_ace_labels_do_not_inject_preset_species():
+    """User-supplied X/Y/Z labels outrank the preset's usual species vocabulary."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets, resolve_species
     labels = {1: 'X', 2: 'Y', 3: 'Z'}
@@ -144,6 +160,7 @@ def test_mapping_custom_ace_labels_do_not_inject_preset_species():
 
 
 def test_mapping_explicit_groups_and_conflicting_definitions():
+    """Groups may span known types but cannot redefine labels or reference unknown IDs."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets, resolve_species
     labels = {4: 'A', 7: 'A', 9: 'B'}
@@ -155,6 +172,7 @@ def test_mapping_explicit_groups_and_conflicting_definitions():
 
 
 def test_mapping_display_labels_distinguish_spin_union():
+    """Presentation distinguishes all-spin Fe from each channel without hiding errors."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_display_name
     assert species_display_name('Fe', ACE, ff='ace') == 'Fe (all spins)'
@@ -167,6 +185,7 @@ def test_mapping_display_labels_distinguish_spin_union():
 
 
 def test_mapping_legacy_tables_remain_unchanged():
+    """Group support must not alter legacy scalar mappings or ACE's Mn proxy slot."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import (FORCE_FIELDS, type_to_label,
                                             label_to_type, element_to_type,
@@ -180,6 +199,7 @@ def test_mapping_legacy_tables_remain_unchanged():
 
 
 def test_shell_msd_fe_selects_both_spin_channels():
+    """The Fe mean is (1 + 9)/2 = 5, excluding oxygen and neither spin channel."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_msd
@@ -192,6 +212,7 @@ def test_shell_msd_fe_selects_both_spin_channels():
 
 
 def test_shell_msd_explicit_channels_and_oxygen_match_integer_api():
+    """Each named singleton retains the scalar API's displacement and time arrays."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_msd
@@ -206,6 +227,7 @@ def test_shell_msd_explicit_channels_and_oxygen_match_integer_api():
 
 
 def test_shell_msd_metadata_preserves_raw_cache_key():
+    """Display-only spin formatting must not rename raw MSD cache identifiers."""
     _util.require_numpy()
     for name, display in (('Fe', 'Fe (all spins)'), ('Fe_up', 'Fe↑'),
                           ('Fe_down', 'Fe↓'), ('O', 'O')):
@@ -218,6 +240,7 @@ def test_shell_msd_metadata_preserves_raw_cache_key():
 
 
 def test_shell_msd_unknown_species_rejects_and_invalidates_only_target():
+    """Invalid selection removes its stale result without disturbing unrelated caches."""
     _util.require_numpy()
     shell = _shell()
     other = object()
@@ -230,6 +253,7 @@ def test_shell_msd_unknown_species_rejects_and_invalidates_only_target():
 
 
 def test_shell_msd_missing_species_value_rejects_and_clears_default_target():
+    """A valueless species option invalidates the default Fe target, not oxygen."""
     _util.require_numpy()
     shell = _shell()
     other = object()
@@ -240,6 +264,7 @@ def test_shell_msd_missing_species_value_rejects_and_clears_default_target():
 
 
 def test_shell_msd_generic_duplicate_labels_select_union():
+    """Generic repeated A labels yield the same analytic mean 5 without ACE aliases."""
     _util.require_numpy()
     import numpy as np
     frames = _flatten(_msd_frames(), {1: 4, 2: 7, 3: 9})
@@ -250,6 +275,7 @@ def test_shell_msd_generic_duplicate_labels_select_union():
 
 
 def test_shell_msd_does_not_invent_underscore_prefix_alias():
+    """X_up and X_down alone do not authorize an inferred X selection."""
     _util.require_numpy()
     shell = _shell(labels={1: 'X_up', 2: 'X_down', 3: 'Y'}, ff='unknown')
     _value_error(lambda: shell._analyze_msd(['--species', 'X'], _batch=True),
@@ -257,6 +283,7 @@ def test_shell_msd_does_not_invent_underscore_prefix_alias():
 
 
 def test_rdf_singleton_sets_are_numerically_identical_to_integer_types():
+    """Accepted singleton containers preserve exact scalar RDF grids and values."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -272,11 +299,13 @@ def test_rdf_singleton_sets_are_numerically_identical_to_integer_types():
 
 
 def test_rdf_group_union_matches_flattened_type_labels_per_frame():
+    """Selecting two types equals independently relabeling both into one scalar type."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     frames = _rdf_frames()
     kwargs = dict(r_max=4.5, n_bins=30, z_pbc=True)
     expected = compute_rdf(_flatten(frames, {1: 4, 2: 4}), COL,
+                           # Relabeling is an equivalence check, not an independent RDF oracle.
                            type_a=4, type_b=3, **kwargs)
     assert expected['n_frames'] == 2
     actual = compute_rdf(frames, COL, type_a={1, 2}, type_b={3}, **kwargs)
@@ -284,6 +313,7 @@ def test_rdf_group_union_matches_flattened_type_labels_per_frame():
 
 
 def test_rdf_same_group_preserves_legacy_same_species_normalization():
+    """Equivalent group orderings retain the scalar same-species normalization."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     frames = _rdf_frames()
@@ -295,6 +325,7 @@ def test_rdf_same_group_preserves_legacy_same_species_normalization():
 
 
 def test_rdf_group_union_has_analytic_cross_species_normalization():
+    """Four enumerated pair distances and shell volumes independently fix g(r)."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -313,6 +344,7 @@ def test_rdf_group_union_has_analytic_cross_species_normalization():
 
 
 def _rdf_paths(a, b):
+    """Compare candidate-tree and forced fallback results, reporting absent SciPy."""
     import lammps_post.analysis as analysis
     frames = _rdf_frames()
     kwargs = dict(type_a=a, type_b=b, r_max=4.5, n_bins=30, z_pbc=True)
@@ -320,6 +352,7 @@ def _rdf_paths(a, b):
     used_tree = []
 
     def observe(*args, **kwargs):
+        """Record actual candidate availability without modifying the pair results."""
         result = real(*args, **kwargs)
         used_tree.append(result is not None)
         return result
@@ -331,25 +364,30 @@ def _rdf_paths(a, b):
     assert fast['n_frames'] == slow['n_frames'] == 2, 'species unions must select atoms'
     _assert_rdf(fast, slow)
     if not any(used_tree):
+        # Fallback agreement alone does not establish accelerated-path coverage.
         _util.skip('scipy tree path unavailable; fallback equality was checked')
 
 
 def test_rdf_disjoint_group_tree_matches_fallback():
+    """Disjoint group acceleration must reproduce fallback pair counting."""
     _util.require_numpy()
     _rdf_paths({1, 2}, {3})
 
 
 def test_rdf_equal_group_tree_matches_fallback():
+    """Equal group acceleration must retain same-species pair handling."""
     _util.require_numpy()
     _rdf_paths({1, 2}, {2, 1})
 
 
 def test_rdf_partial_overlap_tree_matches_fallback():
+    """Overlapping selections must count pairs identically on both execution paths."""
     _util.require_numpy()
     _rdf_paths({1, 2}, {2, 3})
 
 
 def test_rdf_invalid_type_selections_raise():
+    """Empty, nonpositive and nonintegral selections fail on either side of a pair."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     invalid = (set(), [], 0, -1, 1.5, 'Fe', {0}, {-1}, {1.5})
@@ -361,6 +399,7 @@ def test_rdf_invalid_type_selections_raise():
 
 
 def test_shell_rdf_fe_oxygen_union_matches_flattened_integer_api():
+    """Shell Fe-O selection combines both spins like the relabeled scalar comparator."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     frames = _rdf_frames()
@@ -373,6 +412,7 @@ def test_shell_rdf_fe_oxygen_union_matches_flattened_integer_api():
 
 
 def test_shell_rdf_explicit_channels_and_oxygen_match_integer_api():
+    """Named channel and oxygen pairs preserve scalar RDF arithmetic."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     for a, b, type_a, type_b in (('Fe_up', 'O', 1, 3),
@@ -387,6 +427,7 @@ def test_shell_rdf_explicit_channels_and_oxygen_match_integer_api():
 
 
 def test_shell_rdf_metadata_preserves_raw_pair_and_cache_key():
+    """Human-friendly pair labels cannot change raw cache keys or result identifiers."""
     _util.require_numpy()
     for pair, displays in (('Fe-O', ('Fe (all spins)', 'O')),
                             ('Fe_up-O', ('Fe↑', 'O')),
@@ -402,6 +443,7 @@ def test_shell_rdf_metadata_preserves_raw_pair_and_cache_key():
 
 
 def test_shell_rdf_unknown_species_rejects_and_invalidates_only_target():
+    """Unknown species on either side clears only that pair's stale RDF."""
     _util.require_numpy()
     for pair in ('missing-O', 'Fe-missing'):
         shell = _shell(_rdf_frames())
@@ -416,6 +458,7 @@ def test_shell_rdf_unknown_species_rejects_and_invalidates_only_target():
 
 
 def test_shell_rdf_malformed_pair_rejects_and_invalidates_only_target():
+    """Malformed pair syntax must not preserve stale data or erase other pairs."""
     _util.require_numpy()
     for pair in ('Fe', 'Fe-O-O', 'Fe-', '-O', '-'):
         shell = _shell(_rdf_frames())
@@ -428,6 +471,7 @@ def test_shell_rdf_malformed_pair_rejects_and_invalidates_only_target():
 
 
 def test_shell_rdf_invalid_frame_count_rejects_and_invalidates_only_target():
+    """Missing, nonpositive or nonnumeric limits invalidate only the requested RDF."""
     _util.require_numpy()
     for opts in (['Fe-O', '--frames'], ['Fe-O', '--frames', '0'],
                  ['Fe-O', '--frames', '-1'], ['Fe-O', '--frames', 'bad']):
@@ -440,6 +484,7 @@ def test_shell_rdf_invalid_frame_count_rejects_and_invalidates_only_target():
 
 
 def test_shell_rdf_generic_duplicate_labels_select_union():
+    """Generic A-B grouping matches explicit relabeling without borrowing Fe aliases."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     frames = _flatten(_rdf_frames(), {1: 4, 2: 7, 3: 9})
@@ -452,12 +497,14 @@ def test_shell_rdf_generic_duplicate_labels_select_union():
 
 
 def test_shell_rdf_does_not_invent_underscore_prefix_alias():
+    """Generic spin-like names do not imply an undeclared X RDF group."""
     _util.require_numpy()
     shell = _shell(_rdf_frames(), {1: 'X_up', 2: 'X_down', 3: 'Y'}, ff='unknown')
     _value_error(lambda: shell._analyze_rdf(['X-Y'], _batch=True), 'X_up', 'X_down', 'Y')
 
 
 def test_numeric_apis_keep_existing_return_keys_without_shell_metadata():
+    """Display metadata belongs to shell results, not the legacy numeric return schema."""
     _util.require_numpy()
     from lammps_post.analysis import analyze_msd, compute_rdf
     assert set(analyze_msd(_msd_frames(), COL, species_type=1)) == {'time', 'msd'}
@@ -466,6 +513,7 @@ def test_numeric_apis_keep_existing_return_keys_without_shell_metadata():
 
 
 def test_explicit_groups_cannot_borrow_unrelated_preset_display_names():
+    """A reused preset name must not advertise spin semantics its membership lacks."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_display_name
     assert species_display_name('Fe', {3: 'O'}, ff='ace', groups={'Fe': {3}}) == 'Fe'
@@ -475,12 +523,14 @@ def test_explicit_groups_cannot_borrow_unrelated_preset_display_names():
 
 
 def test_explicit_group_conflicting_with_preset_alias_is_rejected():
+    """An explicit Fe subset cannot silently override the canonical all-spin alias."""
     _util.require_numpy()
     from lammpkeeper.common.mapping import species_type_sets
     _value_error(lambda: species_type_sets(ACE, ff='ace', groups={'Fe': {1}}), 'Fe')
 
 
 def test_msd_malformed_option_order_invalidates_requested_not_default_target():
+    """Unknown options cannot redirect stale-result invalidation from oxygen to Fe."""
     _util.require_numpy()
     for opts in (['--bad', '--species', 'O'], ['--species', 'O', '--bad']):
         shell = _shell()
@@ -492,6 +542,7 @@ def test_msd_malformed_option_order_invalidates_requested_not_default_target():
 
 
 def test_rdf_malformed_option_order_invalidates_requested_not_default_target():
+    """Pair detection for invalidation must survive option ordering and malformed limits."""
     _util.require_numpy()
     for opts in (['--bad', 'O-O'], ['O-O', '--bad'],
                  ['--frames', 'bad', 'O-O'], ['--frames', '2', '--bad', 'O-O']):
@@ -504,6 +555,7 @@ def test_rdf_malformed_option_order_invalidates_requested_not_default_target():
 
 
 def test_ambiguous_multiple_selection_targets_raise_without_erasing_either():
+    """Ambiguous requests must fail without guessing which cached result to erase."""
     _util.require_numpy()
     shell = _shell(_rdf_frames())
     cached = {'rdf_Fe-O': object(), 'rdf_O-O': object(),

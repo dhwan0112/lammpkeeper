@@ -11,6 +11,9 @@ from _util import FIXTURE, noninteractive, require
 
 
 def test_fixture_rdf_matches_explicit_per_frame_pair_normalization():
+    """Compare the last 20 fixture RDFs to full pair matrices with frame-local density."""
+    # The explicit Cartesian pair matrix is intentionally a slow independent
+    # oracle; missing opt-in or fixture data must be reported as a visible skip.
     require(os.environ.get('LKPR_SLOW') == '1', 'LKPR_SLOW=1 not set (RDF oracle)')
     require(os.path.exists(FIXTURE), 'ACE fixture not found')
     from lammps_post import analysis as a
@@ -31,10 +34,14 @@ def test_fixture_rdf_matches_explicit_per_frame_pair_normalization():
         pb = rows[rows[:, ci['type']] == 3][:, pos_cols]
         # Full ordered A-B displacement matrix, without production pair search.
         delta = pb[None, :, :] - pa[:, None, :]
+        # This reference call requests bulk periodicity on all three axes.
         delta -= lengths * np.rint(delta / lengths)
         distances = np.sqrt(np.sum(delta ** 2, axis=-1)).ravel()
         distances = distances[(distances > 0) & (distances < 6)]
         counts = np.bincount((distances / .03).astype(int), minlength=200)
+        # N_a*rho_b times shell volume is the expected ideal-gas pair count.
+        # Normalize each frame first: changing volume/population must not turn
+        # the arithmetic ensemble mean into a pooled-histogram estimator.
         exposure = len(pa) * len(pb) / np.prod(lengths)
         curves.append(counts / (exposure * shell_volumes))
     np.testing.assert_allclose(observed['g'], np.mean(curves, axis=0),

@@ -1,12 +1,12 @@
 """
 Top-level entry point for the `lkpr` command (LammpKeeper).
 
-Stage 1 design: a thin dispatcher. `lkpr prep ...` and `lkpr post ...` forward
-their remaining arguments verbatim to the existing `lammps_pre.cli.main` and
-`lammps_post.cli.main`, which keep their own argparse definitions and behavior.
-This preserves every existing flag, help text, and numeric output; the only
-change to those packages is that each sub-`main()` now accepts an optional
-`argv` list (defaulting to None -> sys.argv, i.e. unchanged when called bare).
+Keep routing separate from subcommand semantics: `lkpr prep ...` and
+`lkpr post ...` forward remaining arguments verbatim to `lammps_pre.cli.main`
+and `lammps_post.cli.main`. Those modules own option parsing, noninteractive
+execution, failure status and scientific behavior. The top-level parser owns
+only menu/help/version/unknown-command handling. It must not duplicate or
+partially reinterpret flags that belong to a sub-CLI.
 
 `lkpr` with no arguments (in a terminal) or `lkpr shell` opens the unified
 interactive session (lammpkeeper.shell), where prep and post are chosen and

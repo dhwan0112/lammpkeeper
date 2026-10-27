@@ -11,12 +11,14 @@ from lammps_post import parsers as p
 
 def _frame(step=0, rows=('1 1 1 2 3',), columns='id type x y z',
            flags='pp pp ff', bounds=('0 10', '0 10', '0 10')):
+    """Emit minimal dump text so malformed headers and metadata stay controlled."""
     return '\n'.join(['ITEM: TIMESTEP', str(step), 'ITEM: NUMBER OF ATOMS',
                       str(len(rows)), 'ITEM: BOX BOUNDS ' + flags, *bounds,
                       'ITEM: ATOMS ' + columns, *rows]) + '\n'
 
 
 def _error(fn, text=None, cls=ValueError):
+    """Require the intended exception category and, when supplied, diagnostic text."""
     try:
         fn()
     except cls as exc:
@@ -27,7 +29,10 @@ def _error(fn, text=None, cls=ValueError):
 
 
 def _paths(path, native, mode, **kwargs):
+    """Exercise streaming, indexed and lazy access with native parsing permitted or off."""
     reader = p.DumpReader(path, **kwargs)
+    # native=True permits the installed backend; it does not prove a native
+    # extension exists. False explicitly forces the portable parser.
     if not native:
         reader._native = None
     if mode == 'stream':
@@ -39,6 +44,7 @@ def _paths(path, native, mode, **kwargs):
 
 
 def test_audit_dump_geometry_every_backend_and_access():
+    """Every access route must reject lost tilt, changing boundaries and bad headers."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'trajectory.dump'
         for text, needle in (
@@ -55,6 +61,7 @@ def test_audit_dump_geometry_every_backend_and_access():
 
 
 def test_audit_dump_labels_precision_limits_and_counts():
+    """Preserve full species labels and reject lossy IDs or inconsistent row counts."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'trajectory.dump'
         label = 'CustomSpeciesLabelLong'
@@ -62,6 +69,8 @@ def test_audit_dump_labels_precision_limits_and_counts():
         for native in (False, True):
             for mode in ('stream', 'index', 'cached', 'uncached'):
                 assert _paths(path, native, mode)[0]['elements'].tolist() == [label]
+        # Above 2**24, adjacent integers collide in float32 and atom identity
+        # would be corrupted even though the original text IDs are distinct.
         path.write_text(_frame(rows=('16777216 1 1 2 3', '16777217 1 4 5 6')))
         for native in (False, True):
             for mode in ('stream', 'index', 'cached', 'uncached'):
@@ -76,6 +85,7 @@ def test_audit_dump_labels_precision_limits_and_counts():
 
 
 def test_audit_log_warning_reset_and_minimization():
+    """Keep thermo rows through warnings while separating optimizer and MD counters."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'log.lammps'
         block = 'Step Temp PotEng\n0 300 -10\nWARNING: neighbor warning\n10 301 -11\nLoop time of 1 on 1 procs\n'
@@ -93,6 +103,7 @@ def test_audit_log_warning_reset_and_minimization():
                         'run 10\nStep Temp PotEng\n12 302 -18\n22 303 -17\nLoop time of 1 on 1 procs\n')
         log = p.parse_log(path)
         assert log['step'].tolist() == [0, 10, 12, 22]
+        # Optimizer steps 10..12 change coordinates/energy but add no MD time.
         assert log['elapsed_md_steps'].tolist() == [0, 10, 10, 20]
         assert log['block_kinds'] == ['md', 'minimize', 'md']
         assert log['stages'][-1] != 'minimize'
@@ -104,6 +115,7 @@ def test_audit_log_warning_reset_and_minimization():
 
 
 def test_audit_data_sections_styles_and_corruption():
+    """Supported atom styles yield the same coordinates without reading later sections."""
     base = ('Test\n\n1 atoms\n1 atom types\n\n0 10 xlo xhi\n0 10 ylo yhi\n0 10 zlo zhi\n\n'
             'Masses\n\n1 12.0 # X\n\nPair Coeffs # lj/cut\n\n1 0.01 2.0\n\n')
     with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +137,7 @@ def test_audit_data_sections_styles_and_corruption():
 
 
 def test_audit_input_lexing_includes_variables_mapping_units():
+    """Resolve safe input expressions and relative includes without executing Python."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / 'nested').mkdir()
@@ -139,6 +152,8 @@ def test_audit_input_lexing_includes_variables_mapping_units():
         assert config['dt_fs'] == 4
         assert config['element_map'] == {1: 'X', 2: 'Y'}
         assert config['pair_coeff']['potential_file'] == 'other.yace'
+        # These expressions are parser inputs, not executable test code. Calls
+        # and unresolved/deleted variables must be rejected, never evaluated.
         for text, cls, needle in [('include absent.inc\n', OSError, None),
                                   ('include run.in\n', ValueError, 'include'),
                                   ('print "bad quote\n', ValueError, 'quote'),
@@ -162,6 +177,7 @@ def test_audit_input_lexing_includes_variables_mapping_units():
 
 
 def test_audit_explicit_dump_labels_override_heuristic():
+    """Explicit species metadata wins even when charge columns suggest a force field."""
     frame = {'atoms': np.array([[1, 1, 0], [2, 2, 0]], float), 'elements': np.array(['A', 'B'])}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
@@ -171,6 +187,7 @@ def test_audit_explicit_dump_labels_override_heuristic():
 
 
 def test_audit_spin_aliases_require_matching_canonical_slots():
+    """Canonical spin aliases apply only to matching element order and numeric slots."""
     from lammpkeeper.common.mapping import FORCE_FIELDS, type_to_label
 
     canonical = FORCE_FIELDS['ace']
@@ -190,6 +207,7 @@ def test_audit_spin_aliases_require_matching_canonical_slots():
 
 
 def test_audit_lazy_frames_inherit_reader_limits_and_allow_explicit_overrides():
+    """Lazy access inherits stride/limits unless explicitly overridden, including unlimited."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'trajectory.dump'
         path.write_text(''.join(_frame(k) for k in range(7)))
@@ -220,6 +238,7 @@ def test_audit_lazy_frames_inherit_reader_limits_and_allow_explicit_overrides():
 
 
 def test_audit_abandoned_shared_iterator_and_changed_source():
+    """An unused consumer cannot stall a shared pass or leave stale file data readable."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'trajectory.dump'
         path.write_text(''.join(_frame(k) for k in range(8)))
@@ -230,6 +249,8 @@ def test_audit_abandoned_shared_iterator_and_changed_source():
             unused.close()
             thread = threading.Thread(target=lambda: seen.extend(f['timestep'] for f in frames), daemon=True)
             thread.start()
+            # A bounded join turns producer deadlock into a deterministic
+            # assertion instead of hanging the entire regression process.
             thread.join(timeout=2)
             assert not thread.is_alive(), 'unused iterator stalled shared producer'
         assert seen == list(range(8))

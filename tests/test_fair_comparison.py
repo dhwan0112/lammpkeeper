@@ -19,6 +19,7 @@ FIELDS = ('ace', 'reaxff2010', 'reaxff2015')
 
 
 def _have_ase():
+    """Probe the optional structure builder rather than passing an unbuilt system."""
     try:
         import ase  # noqa: F401
         return True
@@ -45,11 +46,13 @@ def _build(ff):
 
 
 def test_all_force_fields_build_identical_coordinates():
+    """A fixed seed and geometry must yield bit-identical atoms across presets."""
     _util.require(_have_ase(), 'ase not installed')
     _util.require_numpy()
     import numpy as np
 
     builds = {ff: _build(ff) for ff in FIELDS}
+    # Compare coordinates directly, not derived energies that legitimately differ by FF.
     assert all(b is not None for b in builds.values())
 
     ref_ff = FIELDS[0]

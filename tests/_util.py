@@ -22,6 +22,7 @@ FIXTURE = os.path.join(
 
 
 def have_numpy():
+    """Probe the core numeric dependency without turning absence into a test pass."""
     try:
         import numpy  # noqa: F401
         return True
@@ -58,6 +59,7 @@ def require(condition, reason):
 
 
 def require_numpy():
+    """Report a named dependency skip before a test imports NumPy-specific code."""
     require(have_numpy(), 'numpy not installed')
 
 
@@ -65,10 +67,10 @@ def require_numpy():
 def noninteractive():
     """Silence stdout and make stdin look empty.
 
-    `LammpsPostShell.do_load` calls `_suggest_output_dir`, which prompts via
-    `input()`. `_ask` treats EOF as "use the default", so an empty stdin keeps
-    the shell on its default path. pytest replaces sys.stdin with an object that
-    raises OSError instead of EOFError, so the tests must supply their own.
+    Shell dispatch treats this non-TTY stream as noninteractive, avoiding load
+    prompts and using explicit defaults. pytest may supply an input-capture
+    object that raises OSError on reads; providing our own stream makes both
+    runners exercise the same predictable no-input contract.
     """
     saved = sys.stdin
     sys.stdin = io.StringIO('')
@@ -80,7 +82,14 @@ def noninteractive():
 
 
 def canon(o):
-    """Canonicalize numbers / numpy arrays for a stable fingerprint."""
+    """Normalize nested numeric results for stable regression fingerprints.
+
+    Array shape is retained and values are rounded to eight decimals to avoid
+    testing insignificant floating-point serialization differences. This tests
+    reproducibility, not physical correctness; rebaselines need an independent
+    oracle and explicit approval. Non-doc string literals here are part of the
+    existing fingerprint format and must not change during annotation.
+    """
     import numpy as np
     if isinstance(o, dict):
         return {str(k): canon(v) for k, v in sorted(o.items(), key=lambda x: str(x[0]))}

@@ -8,6 +8,7 @@ import _util
 
 
 def test_parsed_md_timeline_not_absolute_optimizer_or_reset_steps_is_plotted():
+    """Rendered x data use accumulated MD steps across resets and minimization."""
     import numpy as np
     from lammps_post.parsers import parse_log
     from test_audit_references_plots import _capture_plots
@@ -33,11 +34,14 @@ def test_parsed_md_timeline_not_absolute_optimizer_or_reset_steps_is_plotted():
                                        (p.plot_pressure, 'pressure_analysis.png')):
                 function(log, tmp, dt_fs=2.)
                 fig = figures[filename]
+                # Two ten-step MD segments at 2 fs span 0.04 ps; reset or
+                # optimizer counters consume no extra physical MD duration.
                 np.testing.assert_allclose(fig.axes[0].lines[0].get_xdata(), [0, .02, .02, .04])
                 p.plt.close(fig)
 
 
 def test_optimizer_only_thermo_cannot_be_labeled_elapsed_md_time():
+    """Optimizer iterations cannot be converted into a physical MD time axis."""
     from lammps_post import plotting as p
     _util.require(p.HAS_MPL, 'matplotlib not installed (real Agg artist checks)')
     from lammps_post.parsers import parse_log
@@ -58,6 +62,7 @@ def test_optimizer_only_thermo_cannot_be_labeled_elapsed_md_time():
 
 
 def test_duplicate_step_counters_do_not_infer_ambiguous_slab_heights():
+    """Repeated step labels cannot safely join log samples to run-specific boxes."""
     import numpy as np
     from lammps_post import shell as sm
     from test_audit_workflow import _dump, _shell, _load, _quiet
@@ -76,6 +81,7 @@ def test_duplicate_step_counters_do_not_infer_ambiguous_slab_heights():
 
 
 def test_log_only_and_mixed_source_plots_use_explicit_log_units_and_timestep():
+    """An unrelated dump must not override real-unit log pressure or time scaling."""
     import numpy as np
     from test_audit_references_plots import _capture_plots
     from test_audit_workflow import _dump, _shell, _load, _quiet
@@ -102,12 +108,15 @@ def test_log_only_and_mixed_source_plots_use_explicit_log_units_and_timestep():
                     _quiet(lambda: getattr(shell, '_iplot_' + name)([], _batch=True))
                 fig = figures[filename]
                 pressure = fig.axes[pressure_index].lines[0]
+                # In real units pressure is atm: 1 atm = 1.01325 bar.
+                # The log's 2 fs timestep gives 0.002 ps per step.
                 np.testing.assert_allclose(pressure.get_ydata(), 1.01325)
                 np.testing.assert_allclose(pressure.get_xdata(), np.arange(12) * .002)
                 p.plt.close(fig)
 
 
 def test_unknown_or_conflicting_log_metadata_is_not_silently_interpreted():
+    """Unconfirmed or conflicting units/timesteps must not become one false timeline."""
     import numpy as np
     from lammps_post.shell import LammpsPostShell
     from lammps_post.parsers import parse_log
@@ -142,12 +151,15 @@ def test_unknown_or_conflicting_log_metadata_is_not_silently_interpreted():
 
 
 def test_requested_cli_plot_without_matplotlib_fails_instead_of_success_without_output():
+    """A requested image without a renderer must produce a nonzero CLI failure."""
     from lammps_post import plotting as p
     from lammps_post.cli import main
     from test_audit_workflow import _dump, _quiet
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'traj.dump'
         _dump(path)
+        # Simulate dependency absence deliberately; this checks failure routing,
+        # whereas the artist tests exercise real Agg figures when available.
         with patch.object(p, 'HAS_MPL', False):
             try:
                 _quiet(lambda: main(['--dump', str(path), '--plot', 'msd', '--output', tmp]))

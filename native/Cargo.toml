@@ -1,16 +1,25 @@
+# Optional accelerator only: the Python NumPy parser remains the reference path.
+# Cargo's crate version is independent of the Python package release version.
 [package]
 name = "lkpr_native"
 version = "0.1.0"
 edition = "2021"
+# This crate is built into the local Python extension, not published to crates.io.
 publish = false
 
 [lib]
+# Match the Python import and PyO3 module registration exactly.
 name = "_dumpparse"
+# A C-compatible dynamic library is required for Python to load the module.
 crate-type = ["cdylib"]
 
 [dependencies]
+# abi3 targets the supported Python 3.9 floor without binding each build to one
+# newer CPython minor version; NumPy arrays are assembled on the Python side.
 pyo3 = { version = "0.26", features = ["extension-module", "abi3-py39"] }
 
 [profile.release]
+# Favor optimized parsing code over incremental-build throughput for this small
+# optional extension. These flags do not change the Python fallback contract.
 lto = true
 codegen-units = 1

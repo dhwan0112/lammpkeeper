@@ -3,6 +3,10 @@ LAMMPS input script and PBS run script templates.
 
 Renders force-field-specific input scripts from PreState parameters.
 Templates reproduce the exact structure of the production atlas scripts.
+
+The multiline bodies are generated artifacts: Python-side documentation stays
+outside them so maintenance notes do not change submitted LAMMPS/Bash inputs.
+These renderers return text only; no solver, scheduler, or shell is executed.
 """
 
 import math
@@ -17,7 +21,13 @@ from lammpkeeper.common.mapping import element_order
 # ═══════════════════════════════════════════════════════════════
 
 def render_input_script(build, state):
-    """Dispatch to force-field-specific template."""
+    """Validate finite nonnegative ps durations, then select an oxidation protocol.
+
+    Zero-length stages are allowed. Dense-dump duration is checked even for a
+    non-ACE preset; ACE clamps the dense interval to total oxidation duration
+    inside LAMMPS. Unknown force fields raise instead of guessing a template.
+    Geometry freshness is checked by writer callers, not this renderer.
+    """
     for name, value in (('equilibration time', state.get_eq_ps()),
                         ('oxidation time', state.get_ox_ps()),
                         ('spin time', state.get_spin_ps()),
@@ -34,7 +44,22 @@ def render_input_script(build, state):
 
 
 def _render_ace(build, state):
-    """ACE input script: 4-stage (spin eq -> minimize -> eq -> oxidation)."""
+    """Render ACE spin equilibration, minimization, thermal EQ, and oxidation.
+
+    Metal units make native dt and requested durations both ps. Fe types 1/2
+    encode up/down states, not two chemical species; the Mn slot carries Fe
+    mass. Fixed Fe is set down, mobile Fe starts approximately half up, and
+    semi-grand atom swaps operate only on mobile Fe. A compatible lateral MPI
+    grid is resolved before rendering, with one processor layer along z.
+
+    Region includes provide Angstrom heights. Initial static groups partition
+    frozen Fe, lower NVT Fe, middle NVE Fe, and upper NVT gas; the lower oxygen
+    wall isolates gas until oxidation, while the upper wall remains. Dense and
+    ordinary oxidation dumps append to one file without negative run lengths.
+    Dump element order follows the shared spin mapping, and IDs are sorted.
+    ``build`` is API context; geometry is read through the generated data/include
+    files rather than interpolated from its coordinate arrays here.
+    """
     s = state
     ff = s.ff
     names = get_filenames(s)
@@ -225,7 +250,18 @@ print "========== ${{label}} Complete =========="
 
 
 def _render_reaxff(build, state):
-    """ReaxFF input script: 3-stage (minimize -> eq -> oxidation)."""
+    """Render reactive minimization, thermal equilibration, and oxidation.
+
+    Real units use fs dt, so requested ps are multiplied by 1000 before rounding
+    to steps. The force-field version selects the external potential filename;
+    type 1 is Fe and type 2 is O, with QEq every ten steps rather than ACE spin
+    swaps. Thermostat damping is rendered as 100 timesteps.
+
+    Static groups and walls use the same region include geometry as ACE. The
+    gas-isolating lower wall is removed only for oxidation; the frozen layer
+    and upper reflecting wall remain. ``build`` is not dereferenced because
+    coordinates and boundaries are read from companion files at runtime.
+    """
     s = state
     ff = s.ff
     names = get_filenames(s)
@@ -367,7 +403,29 @@ print "========== ${{label}} Complete =========="
 # ═══════════════════════════════════════════════════════════════
 
 def render_run_script(build, state):
-    """Render PBS job submission script."""
+    """Render the site-specific PBS/MPI launcher and recovery lifecycle.
+
+    CPU validation (and ACE grid compatibility) happens before text is returned.
+    Data, region, input, and potential files must already exist in the submission
+    directory. Module/compiler paths are site assumptions, not portable discovery;
+    an unavailable configured LAMMPS binary falls back to lmp/lmp_mpi on PATH.
+
+    The emitted Bash always uses scratch: LKPR_SCRATCH overrides the default
+    /hpctmp user/job path, and the path must be absolute. Exclusive mkdir refuses
+    stale directories or symlinks; staging failures preserve scratch for manual
+    recovery. Successful solver output copies to the working directory, while
+    failed runs require exclusive creation of a failed_JOBID archive, preventing
+    accidental mixing with an older failure. Hidden outputs are copied as child
+    entries so source-root permissions do not replace destination permissions.
+
+    Scratch is deleted only after copyback succeeds and the script leaves it.
+    Copy/cleanup failures are visible and nonzero; solver failures retain their
+    status when recovery succeeds. Runtime directory paths and copied children
+    are quoted, but required-file/module/variable lists intentionally use shell
+    word splitting and configuration is interpolated as trusted shell text.
+    The use_scratch state flag is not consulted by this template. ``build`` is
+    retained for the renderer API rather than used to regenerate coordinates.
+    """
     s = state
     ff = s.ff
     names = get_filenames(s)
@@ -378,13 +436,15 @@ def render_run_script(build, state):
     wt = s.get_walltime_hr()
     job_name = s.get_job_name()
 
-    # Required files list
+    # Input is staged separately; these whitespace-delimited companion names
+    # include the external potential, which Python's write_all does not supply.
     required = [names['data'], names['regions']]
     if ff.get('potential_file'):
         required.append(ff['potential_file'])
     required_str = ' '.join(required)
 
-    # LAMMPS command-line variables
+    # Keep runtime variables aligned with the selected template. ReaxFF's seed
+    # remains embedded in its input, whereas ACE also passes it on the command.
     if s.forcefield == 'ace':
         lammps_vars = f'-var T {s.temperature} -var SEED {s.velocity_seed}'
     elif s.forcefield == 'reaxff2010':

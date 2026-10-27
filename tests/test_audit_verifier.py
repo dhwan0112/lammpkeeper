@@ -9,6 +9,12 @@ import _util  # noqa: F401
 
 
 def _run_verifier(case, mode='full'):
+    """Run the real verifier against controlled subprocess outputs in a fake checkout.
+
+    The embedded interpreter is a fault-injection fixture, not a solver or
+    renderer: each case changes artifact presence or reported success while
+    the verifier's own evidence checks remain real.
+    """
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='lkpr-verifier-') as tmp:
         checkout = Path(tmp) / 'checkout'
@@ -19,6 +25,8 @@ def _run_verifier(case, mode='full'):
         fixture.parent.mkdir(parents=True)
         fixture.write_text('synthetic fixture; fake interpreter never reads it\n')
         fake = Path(tmp) / 'python'
+        # Keep this embedded executable unchanged: the failure matrix depends
+        # on its exact simulated commands, filenames and zero-exit omissions.
         fake.write_text('''#!/usr/bin/env python3
 import os
 from pathlib import Path
@@ -58,6 +66,8 @@ else:
     raise SystemExit('unexpected fake interpreter arguments: ' + repr(args))
 ''')
         fake.chmod(0o755)
+        # Route all verifier Python work to the fixture; isolate HOME and the
+        # evidence directory so no real preparation or plot generation runs.
         env = dict(os.environ, PYTHON=str(fake), VERIFIER_CASE=case,
                    HOME=tmp, LKPR_VERIFY_DIR=str(Path(tmp) / 'evidence'))
         proc = subprocess.run(['bash', str(script), mode], cwd=checkout,
@@ -75,40 +85,48 @@ else:
 
 
 def test_verifier_rejects_empty_prep_output():
+    """A zero-exit preparation command with no artifacts is not verification success."""
     code, summary = _run_verifier('empty_prep')
     assert code != 0 and 'FAIL prep' in summary, summary
 
 
 def test_verifier_rejects_logged_prep_failure_even_with_zero_exit():
+    """Logged write errors must fail verification even when files and exit zero exist."""
     code, summary = _run_verifier('logged_error')
     assert code != 0 and 'FAIL prep' in summary, summary
 
 
 def test_verifier_rejects_zero_collected_tests():
+    """An empty passing test run supplies no regression evidence and must fail."""
     code, summary = _run_verifier('zero_tests')
     assert code != 0 and 'FAIL tests' in summary, summary
 
 
 def test_verifier_rejects_missing_requested_plots():
+    """A nominally successful plot command must produce its requested artifacts."""
     code, summary = _run_verifier('empty_post')
     assert code != 0 and 'FAIL post' in summary, summary
 
 
 def test_verifier_rejects_partial_requested_plots():
+    """One nonempty plot cannot stand in for the complete requested plot set."""
     code, summary = _run_verifier('partial_post')
     assert code != 0 and 'FAIL post' in summary, summary
 
 
 def test_verifier_requires_analysis_evidence_in_quick_mode():
+    """Quick mode may omit images but cannot omit the requested analysis summary."""
     code, summary = _run_verifier('empty_quick', mode='quick')
     assert code != 0 and 'FAIL post' in summary, summary
 
 
 def test_verifier_accepts_complete_nonempty_smoke_outputs():
+    """The complete synthetic artifact set is a positive control for verifier checks."""
     code, summary = _run_verifier('complete')
     assert code == 0 and 'PASS prep' in summary and 'PASS post' in summary, summary
 
 
 def test_verifier_accepts_quick_analysis_evidence_without_requested_plots():
+    """A complete quick summary passes without requiring unrequested plot artifacts."""
     code, summary = _run_verifier('complete', mode='quick')
     assert code == 0 and 'PASS post' in summary and 'FAIL' not in summary, summary

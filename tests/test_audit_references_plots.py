@@ -15,6 +15,7 @@ import _util
 
 
 def test_magnetite_stoichiometry_and_periodic_coordination():
+    """Validate the spinel cell by stoichiometry, coordination and analytic bond lengths."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import CRYSTAL_DB
@@ -60,6 +61,7 @@ Fe1 Fe 0 0 0
 
 
 def test_cif_missing_symmetry_requires_established_p1():
+    """Absent symmetry operators are safe only with unambiguous P1 metadata."""
     _util.require_numpy()
     from lammps_post.references import parse_cif
     with tempfile.TemporaryDirectory() as tmp:
@@ -82,6 +84,7 @@ def test_cif_missing_symmetry_requires_established_p1():
 
 
 def test_cif_explicit_centering_is_expanded():
+    """An explicit body-centering operation must generate the second fractional site."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import parse_cif
@@ -101,12 +104,14 @@ _space_group_symop_operation_xyz
 
 @contextmanager
 def _capture_plots():
+    """Capture real rendered figures without image writes, closing every captured artist."""
     _util.require_numpy()
     from lammps_post import plotting as p
     _util.require(p.HAS_MPL, 'matplotlib not installed (real Agg artist checks)')
     captured = {}
 
     def save(fig, path, dpi):
+        """Draw through Agg before retaining the figure for numerical artist assertions."""
         fig.canvas.draw()  # Actual Agg renderer, not mocked axes.
         captured[os.path.basename(path)] = fig
 
@@ -119,6 +124,7 @@ def _capture_plots():
 
 
 def _thermo_data(length_z=100., native_pressure=1.):
+    """Supply constant pressure with volume-consistent boxes to isolate plot scaling."""
     import numpy as np
     n = 12
     return dict(step=np.arange(n), time_ps=np.arange(n, dtype=float),
@@ -130,6 +136,7 @@ def _thermo_data(length_z=100., native_pressure=1.):
 
 
 def test_real_and_metal_pressure_artists_have_correct_units():
+    """Artist values and labels must implement atm-to-bar and bar-to-GPa conversion."""
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):
@@ -137,6 +144,8 @@ def test_real_and_metal_pressure_artists_have_correct_units():
                 ('thermo', p.plot_thermo, 3, 'thermo.png'),
                 ('thermostat', p.plot_thermostat_summary, 1, 'thermostat_summary.png'),
                 ('pressure', p.plot_pressure, 1, 'pressure_analysis.png')):
+            # LAMMPS metal pressure is bar; real pressure is atm. GPa divides
+            # bar by 10000. Inspect line data, not only conversion helper output.
             for native, bar_scale in (('metal', 1.), ('real', 1.01325)):
                 for display, scale in (('bar', 1.), ('gpa', 1e-4)):
                     function(_thermo_data(), 'unused', pressure_unit=display,
@@ -151,9 +160,12 @@ def test_real_and_metal_pressure_artists_have_correct_units():
 
 
 def test_slab_pressure_uses_per_frame_lz_over_thickness():
+    """Vacuum correction scales each frame by box height over occupied slab height."""
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):
+        # With a shared lateral cross-section, V_box/V_slab = Lz/thickness;
+        # native pressure 10 and thickness 10 make the expected curve equal Lz.
         for length in (100., 200.):
             p.plot_pressure(_thermo_data(length, 10.), 'unused', slab_z_range=(0., 10.))
             fig = captured['pressure_analysis.png']
@@ -171,6 +183,7 @@ def test_slab_pressure_uses_per_frame_lz_over_thickness():
 
 
 def test_slab_pressure_missing_or_invalid_geometry_is_visibly_uncorrected():
+    """Unusable heights or stress components must retain raw values and warn visibly."""
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):
@@ -201,6 +214,7 @@ def test_slab_pressure_missing_or_invalid_geometry_is_visibly_uncorrected():
 
 
 def _profile_data(n_o, crossing_times, o_z=None):
+    """Provide explicit uptake events and optional ID-aligned NaN trajectory gaps."""
     import numpy as np
     if o_z is None:
         o_z = np.full((3, n_o), 12.)
@@ -210,9 +224,12 @@ def _profile_data(n_o, crossing_times, o_z=None):
 
 
 def test_t50_requires_half_initial_population_and_correct_event_index():
+    """Population half-time is the ceil(N/2)-th crossing, only after enough events."""
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):
+        # Half of an odd population rounds up; using the median of observed
+        # events alone would falsely establish t50 for incomplete uptake.
         for population, times, expected in ((100, [1., 2.], None),
                                              (100, np.arange(1, 101), 50.),
                                              (5, np.arange(1, 6), 3.),
@@ -232,6 +249,7 @@ def test_t50_requires_half_initial_population_and_correct_event_index():
 
 
 def test_profile_union_nan_trajectories_and_present_population_metrics():
+    """Plot all union IDs while computing metrics only from atoms present per frame."""
     _util.require_numpy()
     import numpy as np
     # Initial n_o=2, but the ID union has three columns. Empty frames must
@@ -254,6 +272,7 @@ def test_profile_union_nan_trajectories_and_present_population_metrics():
 
 
 def test_profile_later_arrivals_cannot_establish_initial_cohort_t50():
+    """Three later arrivals cannot turn one of four initial crossings into half-time."""
     _util.require_numpy()
     import numpy as np
     o_z = np.array([[12., 12., 12., 12., np.nan, np.nan, np.nan],
@@ -270,6 +289,7 @@ def test_profile_later_arrivals_cannot_establish_initial_cohort_t50():
 
 
 def test_normalized_spin_legend_states_different_denominators():
+    """Spin and oxygen fractions must label their different reference populations."""
     _util.require_numpy()
     import numpy as np
     data = dict(time=np.arange(3), up_fraction=np.full(3, .25),
@@ -283,6 +303,7 @@ def test_normalized_spin_legend_states_different_denominators():
 
 
 def test_pressure_unit_validation_and_slab_metadata_consistency():
+    """Reject unsupported pressure units and inconsistent volume/height corrections."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import plotting as p

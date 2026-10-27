@@ -17,6 +17,7 @@ from _util import FIXTURE, have_numpy, noninteractive, section_hash, skip
 # Representation only — the physics fingerprints below are byte-identical
 # across that change, and _guess_o_type still returns 3.
 GOLDEN_FAST = {
+   # Hashes certify reproducibility only; analytic tests supply independent checks.
    'post_ff_info': 'a89e3dee6928721b',
    'post_guess_o_type': '4e07408562bedb8b',
    'spin': 'bf7fa759103f2883',
@@ -44,10 +45,12 @@ GOLDEN_SLOW = {
 
 
 def _available():
+    """Require NumPy and the reference trajectory before checking fingerprints."""
     return have_numpy() and os.path.exists(FIXTURE)
 
 
 def _load_state():
+    """Load the committed ACE example through the same shell path used by users."""
     from lammps_post.shell import LammpsPostShell
     sh = LammpsPostShell()
     with noninteractive():
@@ -56,6 +59,7 @@ def _load_state():
 
 
 def test_numeric_regression_fast():
+    """Metadata and spin hashes detect baseline drift, not independent physical truth."""
     if not _available():
         skip('numpy not installed or fixture not found')
     from lammps_post import analysis as A
@@ -67,6 +71,7 @@ def test_numeric_regression_fast():
 
 
 def test_numeric_regression_rdf_msd_slow():
+    """Opt-in bulk RDF/MSD fingerprints preserve the documented reference arithmetic."""
     if os.environ.get('LKPR_SLOW') != '1':
         skip('LKPR_SLOW=1 not set (opt-in RDF/MSD golden)')
     if not _available():

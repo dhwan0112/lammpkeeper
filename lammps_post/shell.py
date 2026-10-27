@@ -75,6 +75,11 @@ from lammps_post.state import SessionState
 # find_spec only locates the package; importing pandas/scipy/MDAnalysis here
 # would keep hundreds of MB resident for a banner line. Import at point of use.
 def _has_module(name):
+    """Probe optional-package presence without importing its heavy dependency tree.
+
+    Invalid or partially initialized import specs count as unavailable; a True
+    result is only a discovery hint, not proof that importing will succeed.
+    """
     try:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
@@ -89,19 +94,24 @@ class _PerThreadStdout:
     """sys.stdout stand-in that sends each thread's writes to its own buffer."""
 
     def __init__(self, real):
+        """Retain the actual stream and give each worker its own redirect slot."""
         self._real = real
         self._local = threading.local()
 
     def redirect(self, buf):
+        """Route subsequent writes from this thread to its supplied text buffer."""
         self._local.buf = buf
 
     def write(self, s):
+        """Write text to this thread's buffer or the original fallback stream."""
         return getattr(self._local, 'buf', self._real).write(s)
 
     def flush(self):
+        """Flush the destination selected for the calling thread."""
         getattr(self._local, 'buf', self._real).flush()
 
     def __getattr__(self, name):
+        """Delegate stream capabilities such as isatty to the original stdout."""
         return getattr(self._real, name)
 
 # Lazy import: only need plt if HAS_MPL is True
@@ -122,6 +132,12 @@ for name, flag in [('rich', HAS_RICH), ('pandas', HAS_PANDAS),
 
 
 class LammpsPostShell(HostedShellMixin, cmd.Cmd):
+    """Coordinate legacy post commands, session transitions and user interaction.
+
+    Numerical kernels remain in analysis modules. This layer resolves species
+    groups and metadata, owns result-cache keys, and turns raised command errors
+    into recoverable shell failures that cli.main can report as a failing exit.
+    """
     # Wrap ANSI escape codes in \x01..\x02 so readline correctly computes
     # the visible prompt length. Without this, history navigation (up/down)
     # corrupts the displayed line because readline miscounts cursor position.
@@ -130,6 +146,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     shell_name = 'post'
 
     def __init__(self):
+        """Create an unloaded session and initialize command status and history."""
         super().__init__()
         self.state = SessionState()
         self.noninteractive = False
@@ -139,10 +156,17 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     @property
     def _no_prompt(self):
+        """Forbid input prompts in explicit batch modes or when stdin is not a TTY."""
         return getattr(self, 'noninteractive', False) or not sys.stdin.isatty()
 
     def onecmd(self, line):
-        """Keep interactive errors recoverable, and expose batch failure status."""
+        """Execute one command, counting exceptions without stopping cmd.Cmd.
+
+        Return the command's stop signal on success, or False on a recoverable
+        Exception. last_command_ok describes only this call; command_failures
+        is cumulative so a later success cannot mask a batch failure. Keyboard
+        interrupts and SystemExit are not swallowed here.
+        """
         self.last_command_ok = True
         try:
             return super().onecmd(line)
@@ -153,7 +177,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return False
 
     def _invalidate_metadata(self):
-        """Invalidate every derived result before recomputing geometry metadata."""
+        """Drop results/focus and recompute only automatically owned surfaces.
+
+        A manual surface survives species/force-field metadata changes. A full
+        dump unload resets that choice separately because its geometry is gone.
+        """
         s = self.state
         s.clear_cache()
         s.z_focus = None
@@ -163,7 +191,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     # ─── Interactive prompt helper ───
     def _ask(self, prompt, default=None):
-        """Prompt user for input. Returns None if empty and no default."""
+        """Return stripped input/default, or None on interactive cancellation.
+
+        Noninteractive calls return an available default without reading stdin;
+        missing defaults raise ValueError instead of hanging or guessing values.
+        """
         if self._no_prompt:
             if default is None:
                 raise ValueError(f'{prompt}: an explicit value is required in noninteractive mode')
@@ -177,7 +209,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return ans if ans else default
 
     def _ask_yn(self, prompt, default='y'):
-        """Ask yes/no question. Returns True for yes."""
+        """Resolve a yes/no prompt through _ask; cancellation is False.
+
+        The default also governs noninteractive auto-analysis consent, so those
+        paths can compute missing data without opening an input prompt.
+        """
         ans = self._ask(f"{prompt} (y/n)", default)
         return ans is not None and ans.lower() in ('y', 'yes')
 
@@ -187,6 +223,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """
         Apply parsed input file configuration to enhance/override ff_info.
         Called after 'load input' and also after 'load dump' if input is already loaded.
+
+        Explicit units, timestep and element slots outrank dump heuristics. A
+        complete preset slot match restores analysis labels (including ACE spin
+        channels); an arbitrary explicit map remains authoritative as written.
+        Derived geometry must be invalidated only after the new species land.
         """
         s = self.state
         config = s.input_config
@@ -268,6 +309,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     # ─── Requirement checks with interactive fallback ───
     def _require_dump(self):
+        """Require trajectory data, offering an interactive load or raising in batch."""
         if self.state.dump_frames is not None:
             return True
         print(C.warn("  No dump file loaded."))
@@ -282,6 +324,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return False
 
     def _require_log(self):
+        """Require thermo data, offering an interactive load or raising in batch."""
         if self.state.log_data is not None:
             return True
         print(C.warn("  No log file loaded."))
@@ -296,6 +339,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return False
 
     def _require_charge(self):
+        """Gate charge-dependent work on dump capability, not force-field name alone."""
         if self.state.has_charge:
             return True
         print(C.warn("  Charge data not available (requires ReaxFF dump with q column)."))
@@ -308,7 +352,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return False
 
     def _require_surface_z(self):
-        """Ensure surface_z is set, ask user if not."""
+        """Require an Angstrom surface plane, preserving automatic/manual ownership.
+
+        Existing values are accepted; interactive input can request automatic
+        detection or set a manual plane. No noninteractive default is invented.
+        """
         if self.state.surface_z is not None:
             return True
         print(C.warn("  Surface z not set."))
@@ -351,7 +399,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return (True, True, s.surface_z is None), 'surface_z'
 
     def _require_data(self):
-        """Ensure data file is loaded, ask user if not."""
+        """Require nonempty static atoms, with interactive loading via _ask.
+
+        Without a default path, _ask raises in noninteractive mode; an
+        interactive cancellation or unsuccessful load returns False.
+        """
         if self.state.data_atoms is not None and len(self.state.data_atoms) > 0:
             return True
         print(C.warn("  No data file loaded."))
@@ -375,6 +427,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
           --cache-mb N   parsed-frame memory budget (default 128); larger dumps stream
         Multiple files: load dump f1.dump, log f2.log, data f3.data
         Auto-detect:    load <filepath>  (detects type from extension)
+
+        Each branch publishes its parsed source and clears derived results.
+        Dump metadata starts from detection, then any loaded input overrides it;
+        log thermo metadata remains attached to the log, not copied into ff_info.
+        Loading is not a transaction across comma-separated files: an earlier
+        successful segment remains loaded if a later segment raises.
         """
         parts = shlex.split(arg) if arg.strip() else []
 
@@ -486,6 +544,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Synthesizing 'type' column from elements: {elem_to_type}")
 
                 def add_type_column(fr, lookup=lookup):
+                    """Attach numeric types lazily, rejecting unmapped later species.
+
+                    Capture the load-time lookup so each subsequently parsed
+                    frame follows the same identity convention as frame zero.
+                    """
                     elements = fr['elements']
                     type_arr = np.zeros((len(elements), 1), dtype=fr['atoms'].dtype)
                     for e, t in lookup.items():
@@ -542,6 +605,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
 
         elif ftype == 'log':
+            # Keep log-owned unit/time provenance in log_data: a separately
+            # loaded trajectory may describe an entirely different run.
             progress_msg(f"Loading log: {fpath} ...")
             log_data = parse_log(fpath)
             if log_data is None:
@@ -560,6 +625,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Stages: {stages}")
 
         elif ftype == 'data':
+            # Static structure mass belongs to this file's counts and Masses;
+            # incomplete masses must not leave an old total available.
             progress_msg(f"Loading data file: {fpath} ...")
             atoms, box, masses = parse_data_file(fpath)
             if len(atoms) == 0:
@@ -588,6 +655,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 mass_str = ', '.join(f"type {k}: {v}" for k, v in masses.items())
                 progress_msg(f"Masses: {mass_str}")
         elif ftype == 'input':
+            # Re-seed from the current dump/defaults before overlaying the new
+            # input, preventing metadata from an older input from leaking in.
             progress_msg(f"Loading input: {fpath} ...")
             config = parse_input(fpath)
             s = self.state
@@ -637,6 +706,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._suggest_output_dir(fpath)
 
     def complete_load(self, text, line, begidx, endidx):
+        """Complete source kinds first, then filesystem paths for load arguments."""
         tokens = line.split()
         if len(tokens) == 2 and not text:
             return ['dump ', 'log ', 'data ', 'input ']
@@ -647,7 +717,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return []
 
     def do_unload(self, arg):
-        """Unload a file: unload dump|log|data|input|all"""
+        """Unload dump|log|data|input|all and invalidate dependent state.
+
+        Dump removal resets its geometry and manual surface flag, then restores
+        any still-loaded input metadata. Input removal instead re-detects from
+        the retained dump. Log/data removal leaves unrelated sources loaded;
+        plot recipes survive all branches as session preferences.
+        """
         ftype = arg.strip().lower()
         if ftype == 'all':
             self.do_unload('dump')
@@ -695,12 +771,17 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             raise ValueError('Usage: unload dump|log|data|input|all')
 
     def complete_unload(self, text, line, begidx, endidx):
+        """Complete unloadable source kinds, including the all-sources action."""
         return [t for t in ['dump', 'log', 'data', 'input', 'all'] if t.startswith(text)]
 
     # ─── INFO / SHOW ───
 
     def do_info(self, arg):
-        """Show session summary."""
+        """Display loaded-source inventory and current analysis/presentation settings.
+
+        Values summarize mutable session state; the displayed auto label is not
+        a complete provenance record for later input or manual overrides.
+        """
         s = self.state
         pairs = [
             ('Force Field', f"{s.ff.upper()} ({'auto' if s.dump_frames else 'N/A'})"),
@@ -764,7 +845,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print_kv(pairs, 'Session Info')
 
     def do_show(self, arg):
-        """Show details: show thermo|columns|types|frames|box|composition|stages"""
+        """Inspect thermo|columns|types|frames|box|composition|stages without caching.
+
+        Box dimensions come from frame zero; composition defaults to the last
+        frame and reports individual type channels, not merged species groups.
+        Thermo statistics retain native log units; stage times are wall seconds.
+        """
         parts = arg.strip().split()
         if not parts:
             print("  Usage: show thermo|columns|types|frames|box|composition|stages")
@@ -858,6 +944,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print(f"  Unknown: '{what}'. Options: thermo|columns|types|frames|box|composition|stages")
 
     def complete_show(self, text, line, begidx, endidx):
+        """Complete inspection subcommands rather than requiring loaded sources."""
         opts = ['thermo', 'columns', 'types', 'frames', 'box', 'composition', 'stages']
         return [o for o in opts if o.startswith(text)]
 
@@ -866,6 +953,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def do_set(self, arg):
         """
         Set a parameter. Configures analysis, output, and plot style settings.
+
+        Geometry/species/time edits invalidate numerical caches; style-only
+        edits affect subsequent rendering. Manual surface ownership survives
+        metadata refreshes until the dump is unloaded. Type labels are validated
+        as groups before publication, including repeated labels and ACE channels.
 
         Usage:
             set output <dir>                    — Output directory for plots/exports
@@ -1216,6 +1308,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Run all applicable analyses. If no dump is loaded, prompts
         the user to load one first. If surface_z is not set, offers
         auto-detection before running surface-dependent analyses.
+
+        This remains an Fe-O convenience workflow: defaults include Fe-O RDF
+        and Fe MSD, not arbitrary user chemistry. Shared-pass failures clear
+        partial caches and propagate to onecmd; sequential failures propagate
+        immediately and may leave earlier successful analyses cached.
         """
         s = self.state
 
@@ -1239,6 +1336,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         if s.dump_frames:
             jobs = []
+            # Zero-argument closures defer computation until the sequential or
+            # shared runner executes them; _batch=True fixes prompt-free choices.
             if s.has_charge:
                 jobs.append(lambda: self._analyze_charge([]))
                 jobs.append(lambda: self._analyze_charge_z([], _batch=True))
@@ -1276,10 +1375,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if s.surface_z is not None:
                 progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
         if s.surface_z is not None:
+            # Defer all surface consumers so they see the plane resolved above.
             jobs.append(lambda: self._analyze_oar([]))
             jobs.append(lambda: self._analyze_penetration([]))
             jobs.append(lambda: self._analyze_penetration_trend([]))
         else:
+            # Keep the skip notice in job order even with thread-local output.
             jobs.append(lambda: print(C.warn(
                 "  Skipping OAR/penetration (surface_z unknown). "
                 "Use 'set surface_z <value>' to enable.")))
@@ -1288,9 +1389,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             # three profiles reading the trajectory one after another.
             jobs.append(lambda: self._density_one(None, 'all'))
             for name, type_id in self._density_species().items():
+                # Bind loop values now; late binding would repeat the last group.
                 jobs.append(lambda n=name, t=type_id: self._density_one(t, n))
         else:
+            # The unsplit job intentionally performs profiles one after another.
             jobs.append(lambda: self._analyze_density([], _batch=True))
+        # These closures likewise delay whole-trajectory work until the runner.
         jobs.append(lambda: self._analyze_dissociation([]))
         if s.ff == 'ace':
             jobs.append(lambda: self._analyze_spin([]))
@@ -1302,6 +1406,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         Each job's output is buffered and printed afterwards in job order, so
         the transcript reads the same as a sequential run.
+
+        Worker exceptions are collected rather than raised inside a thread.
+        After joining every worker, restore stdout, report failures, discard all
+        partial results and raise once so CLI failure accounting sees the error.
         """
         frames = self.state.dump_frames
         progress_msg(f"Trajectory exceeds the {frames.cache_bytes / 1024 ** 2:.0f} MB frame "
@@ -1311,10 +1419,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         proxy = _PerThreadStdout(sys.stdout)
 
         def run(i, job):
+            """Run one indexed job, retaining its transcript and exception for joining."""
             proxy.redirect(outputs[i])
             try:
                 job()
             except Exception:
+                # The joining caller owns reporting and cache rollback; letting
+                # this escape the thread would not fail the shell command.
                 errors[i] = traceback.format_exc()
 
         saved = sys.stdout
@@ -1328,6 +1439,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 for t in threads:
                     t.join()
         finally:
+            # Restore process-global stdout even if shared-pass setup or joining
+            # fails, so later interactive commands are not left redirected.
             sys.stdout = saved
         for out, err in zip(outputs, errors):
             sys.stdout.write(out.getvalue())
@@ -1340,9 +1453,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                      f"for all analyses")
 
     def _density_species(self):
+        """Resolve profile labels to type unions, preserving ACE group semantics."""
         return species_type_sets(self.state.atom_types, ff=self.state.ff)
 
     def _density_one(self, species_type, species_name):
+        """Cache one z-density profile for a type set, or all atoms when None.
+
+        Separate jobs let every species profile participate in a shared frame
+        pass; the requested label determines the density_<label> cache key.
+        """
         s = self.state
         progress_msg(f"Computing density profile (species: {species_name})...")
         s.cache[f'density_{species_name}'] = compute_density_profile(
@@ -1350,6 +1469,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             species_type=species_type, species_name=species_name)
 
     def _analyze_charge(self, opts):
+        """Cache Fe-group charge/oxidized counts using the session fs step and e cutoff."""
         if not self._require_dump() or not self._require_charge():
             return
         s = self.state
@@ -1368,6 +1488,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Compute z-direction charge distribution for a single frame.
         Interactive: if no frame index is given and _batch=False, asks
         the user to choose. In batch mode, defaults to the last frame.
+
+        Resolve all Fe and O type channels explicitly; charge_z holds only the
+        most recently selected frame, not a frame-indexed cache family.
         """
         if not self._require_dump() or not self._require_charge():
             return
@@ -1397,6 +1520,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Interactive: if no pair is given and _batch=False, shows available
         species and asks the user to choose. Also prompts for number of frames.
         When _batch=True (called from _analyze_all), uses defaults without prompting.
+
+        Species labels resolve to type sets, while the exact requested pair
+        remains the cache key and a separate display_label identifies grouped
+        or spin-resolved curves. The requested key is removed before validation
+        and computation so a failed retry cannot expose an older result.
         """
         if not self._require_dump():
             return
@@ -1517,6 +1645,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok(f"  Done. Use 'plot rdf {pair_str}' to visualize."))
 
     def _analyze_oar(self, opts):
+        """Cache oxygen absorption relative to the current Angstrom surface plane."""
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1531,6 +1660,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot oar' to visualize."))
 
     def _analyze_or(self, opts):
+        """Cache the oxidized Fe-group fraction using the partial-charge threshold in e."""
         if not self._require_dump() or not self._require_charge():
             return
         s = self.state
@@ -1544,6 +1674,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot or' to visualize."))
 
     def _analyze_penetration(self, opts):
+        """Cache O z-extrema/counts against the current surface, with fs-derived time."""
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1561,6 +1692,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot penetration' to visualize."))
 
     def _analyze_penetration_trend(self, opts):
+        """Cache smoothed surface-relative O trends and report their frame-window size."""
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1581,6 +1713,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Interactive: if no --species flag is given and _batch=False,
         asks whether to run for all species or a specific one.
         In batch mode, defaults to all species.
+
+        'all' produces a combined profile plus one per resolved species group.
+        A specific request uses its original label in the density_<label> key;
+        invalid requests remove that key before failing rather than reuse it.
         """
         if not self._require_dump():
             return
@@ -1642,6 +1778,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot density' to visualize."))
 
     def _analyze_dissociation(self, opts):
+        """Replace O2 tracking using resolved oxygen types and per-axis PBC provenance."""
         if not self._require_dump():
             return
         s = self.state
@@ -1658,6 +1795,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot dissociation' to visualize."))
 
     def _analyze_spin(self, opts):
+        """Cache ACE-specific type-channel spin evolution; reject other force fields."""
         if not self._require_dump():
             return
         s = self.state
@@ -1675,6 +1813,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Interactive: if no --species flag is given and _batch=False,
         shows available species and asks the user to choose.
         In batch mode, defaults to 'Fe'.
+
+        Resolve the requested label to a type group for the ID-tracking kernel,
+        but retain the request in the msd_<label> key and attach a descriptive
+        display label separately. Unwrapping uses only resolved periodic axes.
+        Failed validation/computation must not leave that key's old curve.
         """
         if not self._require_dump():
             return
@@ -1732,6 +1875,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok(f"  Done. Use 'plot msd' to visualize."))
 
     def _analyze_performance(self, opts):
+        """Cache stage wall-clock seconds from the log, not simulated trajectory time."""
         if not self._require_log():
             return
         s = self.state
@@ -1743,6 +1887,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot performance' or 'show stages' to view."))
 
     def _analyze_structure(self, opts):
+        """Cache static per-type structure statistics and the matching plotting atoms.
+
+        Prefer the loaded data file; otherwise adapt the final dump frame to
+        [id, type, x, y, z]. Missing dump IDs are synthesized only for this static
+        snapshot, not for atom-tracked time-series analyses.
+        """
         s = self.state
 
         # Prefer data file if loaded; otherwise use last dump frame
@@ -1777,6 +1927,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.ok("  Done. Use 'plot structure' to visualize."))
 
     def complete_analyze(self, text, line, begidx, endidx):
+        """Suggest analysis names filtered by legacy force-field applicability.
+
+        Completion is advisory; actual handlers separately validate loaded
+        capabilities, which need not agree with a manually overridden FF label.
+        """
         analyses = ['charge', 'charge_z', 'rdf', 'oar', 'or', 'penetration',
                      'density', 'dissociation', 'spin', 'msd', 'performance',
                      'structure', 'all']
@@ -1795,6 +1950,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         applicable to the current session state.
         'ready' is True if the required data is already cached or loaded.
         Used by the interactive plot prompt.
+
+        This menu is a readiness hint, not a promise that every selected plot
+        will succeed: handlers still validate required sources and metadata.
         """
         s = self.state
         available = []
@@ -1871,6 +2029,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         Types: thermo, charge, charge_z, rdf, oar, or, penetration, density,
                dissociation, spin, msd, performance, structure, snapshot, all
+
+        Recipes are session-local settings, not frozen numerical results. Redo
+        suppresses prompts and reuses settings where the selected handler reads
+        them; it does not reload original sources or replay every global style.
+        Direct noninteractive selections may auto-analyze; plot-all intentionally
+        limits cache-dependent plots to available results.
         """
         parts = shlex.split(arg) if arg.strip() else []
 
@@ -1890,6 +2054,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # ── plot save_defaults <type>: save recipe as session defaults ──
         if len(parts) >= 2 and parts[0] == 'save_defaults':
+            # Only the shared preference subset is promoted. Hidden provenance
+            # fields and plot-specific options do not become global defaults.
             recipe_key = parts[1].lower()
             recipe = self.state.plot_recipes.get(recipe_key)
             if not recipe:
@@ -1909,6 +2075,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # ── plot redo <type>: regenerate with saved recipe ──
         if len(parts) >= 2 and parts[0] == 'redo':
+            # Rewrite the selection, not the saved data: downstream handlers
+            # render current caches and selectively consult their recipe keys.
             redo_type = parts[1].lower()
             recipe = self.state.plot_recipes.get(redo_type)
             if not recipe:
@@ -2056,6 +2224,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         If a previous recipe exists for this plot_name, uses those values
         as defaults. In edit_mode, shows the saved settings and only asks
         for changes.
+
+        Recipe keys normalize spaces/hyphens to underscores. z_focus is in
+        Angstrom and figsize in inches; the actual line-width key is ``lw``.
+        Invalid optional numeric edits retain their previous values. Saving
+        these preferences does not invalidate any numerical analysis cache.
         """
         s = self.state
         recipe_key = plot_name.lower().replace(' ', '_').replace('-', '_')
@@ -2101,6 +2274,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 lo, hi = ans.split(':', 1)
                 opts['z_focus'] = (float(lo), float(hi))
             except ValueError:
+                # Optional display edits retain the existing crop on malformed
+                # input; this is not scientific-data validation or cache repair.
                 pass
         elif ',' in ans:
             try:
@@ -2123,7 +2298,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return opts
 
     def _save_recipe(self, plot_name, extra=None):
-        """Save plot-specific parameters to recipe store for redo/edit."""
+        """Merge options into a normalized recipe and record hidden output metadata.
+
+        _output_dir/_dpi document the last save but are not automatically replayed
+        into global settings. Recipes may hold in-memory reference RDF arrays;
+        they are not a serialized or source-independent reproducibility record.
+        """
         s = self.state
         recipe_key = plot_name.lower().replace(' ', '_').replace('-', '_')
         recipe = s.plot_recipes.get(recipe_key, {})
@@ -2135,7 +2315,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s.plot_recipes[recipe_key] = recipe
 
     def _ensure_cache(self, key, analyzer_name, analyzer_args=None):
-        """Auto-run analysis if data is missing from cache. Returns True if data available."""
+        """Check a result family, optionally run its analyzer, then report key presence.
+
+        Exact keys or '<key>_' prefixes count as available, even if their value
+        is None; the renderer owns result usability. _ask_yn's default permits
+        noninteractive computation, and signature inspection avoids passing an
+        unsupported _batch argument. Analyzer errors propagate to onecmd.
+        """
         s = self.state
         if key in s.cache:
             return True
@@ -2156,7 +2342,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return False
 
     def _thermo_plot_metadata(self):
-        """Thermo units belong to the log, not an independently loaded dump."""
+        """Return (native unit-system name, timestep in fs) for thermo rendering.
+
+        Prefer log-owned units/time, then explicit input metadata. Conflicting
+        explicit log/input values raise; trajectory/session fallbacks warn
+        because independently loaded files need not describe the same run.
+        Missing units without either explicit input or a trajectory raise.
+        """
         s = self.state
         log = s.log_data or {}
         input_units = (s.input_config or {}).get('units')
@@ -2187,7 +2379,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return units, dt_fs
 
     def _iplot_thermo(self, opts, _batch=False, _edit_mode=False):
-        """Interactive thermo plot — passes dt_fs, pressure_unit, total_mass_amu, figsize."""
+        """Render native-log thermo with resolved time/units and optional mass density.
+
+        Session pressure units and mass in amu are display inputs, not inferred
+        log provenance; no per-plot prompts or common recipe options are used.
+        """
         s = self.state
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
@@ -2201,7 +2397,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._save_recipe('thermo', {'pressure_unit': s.pressure_unit})
 
     def _iplot_thermostat(self, opts, _batch=False, _edit_mode=False):
-        """Interactive thermostat twinx summary plot."""
+        """Render temperature/pressure QC on paired axes using log-owned time/units.
+
+        The pressure-unit preference is recorded, while current session style
+        and figure size remain the rendering inputs even for redo.
+        """
         s = self.state
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
@@ -2214,7 +2414,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._save_recipe('thermostat', {'pressure_unit': s.pressure_unit})
 
     def _iplot_pressure(self, opts, _batch=False, _edit_mode=False):
-        """Interactive pressure analysis plot — shows stress tensor and slab correction."""
+        """Render pressure/stress, optionally correcting a user-selected slab volume.
+
+        The slab interval is in Angstrom and comes from a prompt or saved recipe.
+        Prefer log Lz; supplement missing heights only when dump and thermo steps
+        uniquely match. Never substitute the final box for an entire history.
+        The plotting layer owns validation of correction geometry and native
+        pressure conversion; absent stress components permit a scalar plot.
+        """
         s = self.state
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
@@ -2275,7 +2482,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         })
 
     def _iplot_charge(self, opts, _batch=False, _edit_mode=False):
-        """Interactive charge evolution plot."""
+        """Render Fe charge evolution, optionally replacing counts with fractions.
+
+        Ensure analysis exists first. Batch/redo reads charge_evolution recipe
+        normalization/line width; interactive options are stored under that key.
+        """
         s = self.state
         if not self._ensure_cache('charge', '_analyze_charge'):
             return
@@ -2296,7 +2507,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                               normalize=popts['normalize'], figsize=s.figsize_override)
 
     def _iplot_charge_z(self, opts, _batch=False, _edit_mode=False):
-        """Interactive charge z-distribution plot."""
+        """Render the cached single-frame charge profile with an Angstrom z focus.
+
+        Batch/redo reuses charge_z_distribution preferences when available;
+        choosing display options does not change the analyzed frame.
+        """
         s = self.state
         if not self._ensure_cache('charge_z', '_analyze_charge_z'):
             return
@@ -2320,7 +2535,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                       figsize=s.figsize_override)
 
     def _iplot_rdf(self, opts, _batch=False, _edit_mode=False):
-        """Interactive RDF plot — asks which pairs to plot, with optional reference overlays."""
+        """Render requested/cached RDF pairs and optionally overlay crystal references.
+
+        An explicit pair targets its exact requested cache label and can trigger
+        analysis. Otherwise interactive selection chooses cached curves and
+        built-in/CIF references; batch renders all cached pairs using any stored
+        reference arrays. Those arrays are reused, not recomputed on redo.
+        """
         from lammps_post.references import (
             compute_reference_rdf, get_available_phases, get_phases_for_pair, parse_cif
         )
@@ -2455,7 +2676,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._save_recipe('rdf')
 
     def _iplot_oar(self, opts, _batch=False, _edit_mode=False):
-        """Interactive OAR plot."""
+        """Render surface-relative oxygen absorption with optional count normalization.
+
+        Interactive shared options are stored under oxygen_absorption_rate;
+        the batch path uses current session normalization directly.
+        """
         s = self.state
         if not self._ensure_cache('oar', '_analyze_oar'):
             return
@@ -2472,7 +2697,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 figsize=s.figsize_override)
 
     def _iplot_or(self, opts, _batch=False, _edit_mode=False):
-        """Interactive oxidation rate plot."""
+        """Render the charge-threshold Fe oxidation fraction after ensuring its cache.
+
+        Only interactive mode asks for line width; invalid input retains the
+        session width, and this handler does not save a dedicated recipe.
+        """
         s = self.state
         if not self._ensure_cache('or', '_analyze_or'):
             return
@@ -2491,7 +2720,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         plot_or(s.cache['or'], s.output_dir, s.dpi, figsize=s.figsize_override)
 
     def _iplot_penetration(self, opts, _batch=False, _edit_mode=False):
-        """Interactive penetration plot — asks normalize and z_focus."""
+        """Render cached oxygen penetration with count/fraction display selection.
+
+        Interactive common options also collect z_focus, but this renderer is
+        passed normalization and figure size only; batch uses session defaults.
+        """
         s = self.state
         if not self._ensure_cache('penetration', '_analyze_penetration'):
             return
@@ -2508,7 +2741,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                          normalize=popts['normalize'], figsize=s.figsize_override)
 
     def _iplot_penetration_trend(self, opts, _batch=False, _edit_mode=False):
-        """Interactive penetration trend plot — smoothed trend lines."""
+        """Render already-smoothed penetration trends without changing their window.
+
+        Interactive mode changes line width via shared options and records a
+        recipe; batch renders the existing result with current global styling.
+        """
         s = self.state
         if not self._ensure_cache('penetration_trend', '_analyze_penetration_trend'):
             return
@@ -2526,7 +2763,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._save_recipe('penetration_trend')
 
     def _iplot_penetration_profile(self, opts, _batch=False, _edit_mode=False):
-        """Interactive penetration profiling — generates 5 detailed plots."""
+        """Lazily cache atom-resolved O profiling and generate its five plot views.
+
+        Oxygen/Fe groups and the fs timestep belong to the analysis; z_focus
+        only crops rendering. No-O results are reported without caching None,
+        and neither batch nor interactive calls ask additional plot questions.
+        """
         s = self.state
         if s.dump_frames is None:
             print(C.warn("  No dump file loaded. Use 'load dump' first."))
@@ -2553,7 +2795,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._save_recipe('penetration_profile')
 
     def _iplot_density(self, opts, _batch=False, _edit_mode=False):
-        """Interactive density profile plot — asks species and z_focus."""
+        """Overlay cached species-group density profiles with an Angstrom z crop.
+
+        Interactive mode can run missing analyses and select profile subsets;
+        batch skips an empty family and otherwise overlays every cached profile.
+        Selection/crop choices here are not persisted as a dedicated recipe.
+        """
         s = self.state
         dens_keys = [k for k in s.cache if k.startswith('density_')]
         if not dens_keys:
@@ -2616,7 +2863,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                      figsize=s.figsize_override)
 
     def _iplot_dissociation(self, opts, _batch=False, _edit_mode=False):
-        """Interactive dissociation plot."""
+        """Render cached O2 tracking as counts or fractions without reclassifying bonds.
+
+        Interactive preferences use the o2_dissociation key; batch draws using
+        session normalization rather than replaying those common options.
+        """
         s = self.state
         if not self._ensure_cache('dissociation', '_analyze_dissociation'):
             return
@@ -2633,7 +2884,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                           normalize=popts['normalize'], figsize=s.figsize_override)
 
     def _iplot_spin(self, opts, _batch=False, _edit_mode=False):
-        """Interactive spin evolution plot."""
+        """Render ACE spin-channel populations with optional fractional normalization.
+
+        Cache creation owns force-field validation; interactive style choices
+        are recorded under spin_evolution, while batch uses session defaults.
+        """
         s = self.state
         if not self._ensure_cache('spin', '_analyze_spin'):
             return
@@ -2650,7 +2905,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                   normalize=popts['normalize'], figsize=s.figsize_override)
 
     def _iplot_msd(self, opts, _batch=False, _edit_mode=False):
-        """Interactive MSD plot — asks which species."""
+        """Render a requested species-group MSD or select among cached MSD curves.
+
+        Exact requested labels select cache keys; display labels live in result
+        metadata. An explicit missing selection can auto-analyze, whereas an
+        empty family in the batch helper is skipped. No recipe is saved here.
+        """
         s = self.state
         msd_keys = [k for k in s.cache if k.startswith('msd_')]
 
@@ -2711,7 +2971,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                         figsize=s.figsize_override)
 
     def _iplot_performance(self, opts, _batch=False, _edit_mode=False):
-        """Interactive performance plot."""
+        """Render cached stage wall-time shares, computing log analysis if consented."""
         s = self.state
         if not self._ensure_cache('performance', '_analyze_performance'):
             return
@@ -2719,7 +2979,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                              figsize=s.figsize_override)
 
     def _iplot_structure(self, opts, _batch=False, _edit_mode=False):
-        """Interactive structure plot — uses data file or last dump frame."""
+        """Render structure atoms from analysis, then data file, then final dump.
+
+        Cache invalidation clears the adapted structure array to prevent stale
+        source reuse. Interactive mode can change the Angstrom z crop; batch
+        uses computed focus and the global figure-size override.
+        """
         s = self.state
         # Prefer _structure_atoms if analyze structure was run; else data_atoms; else last dump
         atoms = getattr(s, '_structure_atoms', None)
@@ -2759,7 +3024,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                        z_surface=s.surface_z, z_focus=zf)
 
     def _iplot_snapshot(self, opts, _batch=False, _edit_mode=False):
-        """Interactive snapshot plot — asks frame indices, z_focus, marker size."""
+        """Render z-x atom snapshots from explicit indices or representative frames.
+
+        Explicit arguments must parse as integers. Interactive input filters
+        indices to the trajectory and falls back on representative frames for
+        invalid numbers; the z-focus crop is a display-only Angstrom interval.
+        """
         s = self.state
         if not self._require_dump():
             return
@@ -2819,7 +3089,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                       figsize=s.figsize_override)
 
     def _plot_all(self):
-        """Generate all applicable plots using _batch=True (no interactive prompts)."""
+        """Render available log/structure/snapshot data and cached analysis families.
+
+        _batch=True suppresses plot-option prompts, but this is not analyze-all:
+        absent RDF/density/MSD caches are skipped. Multi-key families are rendered
+        once per family below rather than once for each cache entry.
+        """
         s = self.state
         s.apply_plot_style()
         print(f"\n  {C.bold('Generating all plots...')}")
@@ -2873,6 +3148,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(f"\n  {C.ok('All plots saved to:')} {s.output_dir}/")
 
     def complete_plot(self, text, line, begidx, endidx):
+        """Suggest legacy plot names; actual dispatch owns capability validation."""
         plots = ['thermo', 'thermostat', 'charge', 'charge_z', 'rdf', 'oar', 'or',
                  'penetration', 'penetration_trend', 'penetration_profile',
                  'density', 'dissociation', 'spin', 'msd',
@@ -2882,7 +3158,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # ─── EXPORT ───
 
     def do_export(self, arg):
-        """Export data: export csv|latex|summary <analysis> [filename]"""
+        """Dispatch export csv|latex|summary <analysis> [filename] without analysis.
+
+        Preserve cache-key case for grouped/spin labels. Summary interprets its
+        positional value as a filename, unlike tabular exports. Missing data,
+        pandas or unsupported formats are printed by legacy handlers rather
+        than consistently raised as command failures.
+        """
         parts = shlex.split(arg)
         if len(parts) < 2:
             print("  Usage: export csv|latex|summary <analysis> [filename]")
@@ -2903,6 +3185,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print(f"  Unknown format: {fmt}. Use csv|latex|summary.")
 
     def _export_csv(self, what, fname):
+        """Export one cached result's 1-D arrays through pandas, without an index.
+
+        Prefer an exact cache key, otherwise the first insertion-order prefix
+        match; this is not a multi-result export or an ambiguity resolver. Only
+        1-D ndarray fields are included, so scalars/metadata/nested arrays are
+        omitted and unequal column lengths may raise from pandas. Explicit
+        filenames are used as given; defaults live under output_dir.
+        """
         s = self.state
         if not HAS_PANDAS:
             print(C.err("  pandas not available. Install with: pip install pandas"))
@@ -2925,6 +3215,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             fname = os.path.join(s.output_dir, f'{what}.csv')
 
         # Convert to DataFrame
+        # Do not flatten atom histories or nested results: their axes cannot be
+        # represented safely as columns without an analysis-specific schema.
         df_data = {}
         for k, v in data.items():
             if isinstance(v, np.ndarray) and v.ndim == 1:
@@ -2938,6 +3230,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print(C.warn("  No exportable array data found."))
 
     def _export_latex(self, what, fname):
+        """Write exact-key cached 1-D arrays as a four-decimal pandas LaTeX table.
+
+        Unlike CSV, no prefix lookup is attempted. Metadata/scalars and nested
+        arrays are omitted; columns must have compatible lengths. Missing pandas
+        or cache data prints a message, while conversion/write errors propagate.
+        """
         s = self.state
         if not HAS_PANDAS:
             print(C.err("  pandas not available. Install with: pip install pandas"))
@@ -2964,6 +3262,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             progress_msg(f"Exported: {C.ok(fname)}")
 
     def _export_summary(self, fname):
+        """Write session metadata and numeric cache summaries, not full raw results.
+
+        A name ending in .txt is used verbatim; other values select the default
+        output_dir/summary.txt. Array min/max/mean reductions assume nonempty
+        numeric data; unsupported cache layouts are not normalized here.
+        """
         s = self.state
         os.makedirs(s.output_dir, exist_ok=True)
         if not fname.endswith('.txt'):
@@ -3007,6 +3311,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         progress_msg(f"Summary exported: {C.ok(fname)}")
 
     def complete_export(self, text, line, begidx, endidx):
+        """Complete export formats, case-sensitive cache keys, then output paths."""
         tokens = line.split()
         if len(tokens) == 2:
             return [t for t in ['csv', 'latex', 'summary'] if t.startswith(text)]
@@ -3017,7 +3322,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # ─── UTILITY ───
 
     def do_files(self, arg):
-        """List files in directory: files [path] [pattern]"""
+        """List files [path] [pattern], or expand a glob when path is not a directory.
+
+        Sizes use decimal B/KB/MB/GB display units; this command only inspects
+        files and does not load them into session state.
+        """
         parts = shlex.split(arg) if arg else ['.']
         path = parts[0] if parts else '.'
         pattern = parts[1] if len(parts) > 1 else '*'
@@ -3050,6 +3359,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def do_find(self, arg):
         """
         Search for LAMMPS files recursively.
+
+        Deduplicate by absolute path, group by filename conventions and offer
+        interactive loading. The conservative load-all gate avoids obvious
+        competing runs but cannot prove that files share run provenance. This
+        handler still reaches a required _ask when matches exist, so calling it
+        with noninteractive mode does not provide an automatic load selection.
 
         Usage:
             find                    — Search for all dump/log/data files from cwd
@@ -3192,15 +3507,19 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return [o for o in opts if o.startswith(text)] + dirs
 
     def do_pwd(self, arg):
-        """Print working directory."""
+        """Print the process working directory used to resolve relative paths."""
         print(f"  {os.getcwd()}")
 
     def do_ls(self, arg):
-        """List directory contents."""
+        """Provide the ls alias using the same path/glob rules as files."""
         self.do_files(arg)
 
     def do_cd(self, arg):
-        """Change directory."""
+        """Change the process working directory, defaulting to the user's home.
+
+        Existing relative source/output paths are not rebased. Missing paths
+        are reported locally; other chdir errors propagate to command handling.
+        """
         path = arg.strip()
         if not path:
             path = os.path.expanduser('~')
@@ -3211,11 +3530,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print(C.err(f"  Directory not found: {path}"))
 
     def do_clear(self, arg):
-        """Clear terminal screen."""
+        """Request platform terminal clearing without modifying session results."""
         os.system('clear' if os.name != 'nt' else 'cls')
 
     def do_quit(self, arg):
-        """Exit the tool."""
+        """Set the hosted-shell quit destination and return cmd.Cmd's stop signal.
+
+        A truthy return means stop, not failure; batch exit status is derived
+        separately from accumulated command_failures.
+        """
         print(f"\n  {C.dim('Goodbye!')}\n")
         self._next = 'quit'
         return True
@@ -3224,14 +3547,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     do_q = do_quit
 
     def do_EOF(self, arg):
-        """Handle Ctrl+D."""
+        """Translate Ctrl+D/EOF to the same hosted quit transition as quit."""
         print()
         return self.do_quit(arg)
 
     # ─── HELP ───
 
     def do_help(self, arg):
-        """Show help for a command or list all commands."""
+        """Show command docstrings for a topic, or legacy plus hosted command help."""
         if arg:
             super().do_help(arg)
             return
@@ -3312,7 +3635,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # ─── Path completion helper ───
 
     def _complete_path(self, text):
-        """Complete file/directory paths for tab completion."""
+        """Return prefix-matching paths with trailing slashes for directories.
+
+        An unreadable parent yields no suggestions rather than interrupting the
+        command line; completion does not open or validate candidate data files.
+        """
         if not text:
             text = './'
         dirname = os.path.dirname(text) or '.'
@@ -3332,9 +3659,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return matches
 
     def default(self, line):
-        """Handle unknown commands."""
+        """Raise for an unknown command so onecmd records a visible batch failure."""
         raise ValueError(f"Unknown command: '{line}'. Type 'help' for available commands.")
 
     def emptyline(self):
-        """Do nothing on empty input."""
+        """Ignore blank input instead of cmd.Cmd's default replay of the last command."""
         pass

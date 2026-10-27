@@ -17,19 +17,23 @@ CHAIN = [[1, 2, 5, 5, 5], [2, 2, 6., 5, 5],
 
 
 def _frame(rows, box=BOX, step=0):
+    """Supply a controlled orthogonal frame for geometric, not chemical, pairing."""
     import numpy as np
     return {'atoms': np.asarray(rows, float).reshape((-1, 5)),
             'box': np.asarray(box, float), 'timestep': step}
 
 
 def _far(n=17):
+    """Add isolated atoms to cross the candidate-search size threshold harmlessly."""
     return [[10 + k, 2, 20 + (k % 4) * 4, 20 + (k // 4) * 4, 30]
             for k in range(n)]
 
 
 def _assert_counts(result, pairs, totals):
+    """Enforce atom conservation and finite zero-population fractions per sample."""
     import numpy as np
     pairs, totals = np.asarray(pairs), np.asarray(totals)
+    # Each accepted geometric pair consumes exactly two selected atoms.
     dissociated = totals - 2 * pairs
     np.testing.assert_array_equal(result['n_o2'], pairs)
     np.testing.assert_array_equal(result['n_total_o'], totals)
@@ -43,7 +47,12 @@ def _assert_counts(result, pairs, totals):
 
 
 def _reference(frame, pbc, cutoff, types=(4, 7), with_ids=True):
-    """Enumerate 27 (or fewer) images, then sort every candidate globally."""
+    """Independently enumerate images and greedily consume distance/tie-sorted pairs.
+
+    Canonical coordinates make adjacent images sufficient, even when the input
+    positions have been translated by several boxes. No production MIC or tree
+    helper participates in this expected-answer calculation.
+    """
     import numpy as np
     rows = frame['atoms'][np.isin(frame['atoms'][:, 1], list(types))]
     lengths = frame['box'][:, 1] - frame['box'][:, 0]
@@ -63,6 +72,8 @@ def _reference(frame, pbc, cutoff, types=(4, 7), with_ids=True):
                 tuple(pos[i]), tuple(pos[j]))
             low, high = sorted(keys)
             candidates.append((distance, low, high, i, j))
+    # A global ordering defines this heuristic; maximizing pair count would
+    # produce a different answer for the chain counterexample below.
     used, count = set(), 0
     for _, _, _, i, j in sorted(candidates):
         if i not in used and j not in used:
@@ -72,6 +83,7 @@ def _reference(frame, pbc, cutoff, types=(4, 7), with_ids=True):
 
 
 def test_o2_count_independent_of_total_o_count():
+    """Distant spectators cannot change pairs when a size-dependent path switches."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     # Original pending PHYS-5 repro, unchanged physical expectation.
@@ -83,6 +95,7 @@ def test_o2_count_independent_of_total_o_count():
 
 
 def test_o2_global_shortest_first_is_not_maximum_cardinality():
+    """The central shortest edge consumes two atoms and leaves just one pair."""
     _util.require_numpy()
     from lammps_post import analysis
     for extra in ([], _far()):
@@ -96,6 +109,7 @@ def test_o2_global_shortest_first_is_not_maximum_cardinality():
 
 
 def test_o2_row_permutations_do_not_change_unique_distance_pairing():
+    """All row orders must preserve the uniquely shortest central chain edge."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for rows in itertools.permutations(CHAIN):
@@ -106,6 +120,7 @@ def test_o2_row_permutations_do_not_change_unique_distance_pairing():
 
 
 def test_o2_exact_distance_ties_use_atom_ids_not_row_order():
+    """ID tie-breaking determines one versus two pairs regardless of row order."""
     _util.require_numpy()
     from lammps_post import analysis
     # All nearest gaps are exactly 1. Center IDs (1,2) must win in the first
@@ -122,6 +137,7 @@ def test_o2_exact_distance_ties_use_atom_ids_not_row_order():
 
 
 def test_o2_without_id_column_uses_stable_coordinate_ties():
+    """Absent identity metadata, canonical coordinate order gives two chain pairs."""
     _util.require_numpy()
     from lammps_post import analysis
     columns = {name: index for name, index in COL.items() if name != 'id'}
@@ -137,6 +153,7 @@ def test_o2_without_id_column_uses_stable_coordinate_ties():
 
 
 def test_o2_without_ids_uses_canonical_ties_for_shifted_periodic_images():
+    """Whole-box translations must not change coordinate-based tie resolution."""
     _util.require_numpy()
     from lammps_post import analysis
     columns = {name: index for name, index in COL.items() if name != 'id'}
@@ -158,6 +175,7 @@ def test_o2_without_ids_uses_canonical_ties_for_shifted_periodic_images():
 
 
 def test_o2_random_frames_match_independent_image_greedy_reference():
+    """Both search paths match image-enumerated pairs for every PBC combination."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis
@@ -188,10 +206,13 @@ def test_o2_random_frames_match_independent_image_greedy_reference():
 
 
 def test_o2_tree_and_forced_fallback_agree_with_scipy_available():
+    """Prove a real SciPy tree ran before comparing its count to forced fallback."""
     _util.require_numpy()
     try:
         from scipy.spatial import cKDTree
     except ImportError:
+        # Without SciPy, fallback correctness remains covered but equality of
+        # two distinct implementations cannot honestly be claimed.
         _util.skip('scipy not installed: accelerated/fallback equality')
     from lammps_post import analysis
     with patch('scipy.spatial.cKDTree', wraps=cKDTree) as tree:
@@ -207,6 +228,7 @@ def test_o2_tree_and_forced_fallback_agree_with_scipy_available():
 
 
 def test_o2_empty_singleton_and_multiframe_populations_are_preserved():
+    """Instantaneous counts retain empty samples and convert fs steps to ps."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import detect_o2_dissociation
@@ -221,6 +243,7 @@ def test_o2_empty_singleton_and_multiframe_populations_are_preserved():
 
 
 def test_o2_cutoff_is_strict_including_tree_radius_margin():
+    """Only distances strictly below cutoff pair, including adjacent float values."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis
@@ -236,6 +259,7 @@ def test_o2_cutoff_is_strict_including_tree_radius_margin():
 
 
 def test_o2_numeric_type_groups_accept_iterables_and_numpy_integer():
+    """Union selection pairs across types while scalar selection excludes others."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import detect_o2_dissociation
@@ -251,6 +275,7 @@ def test_o2_numeric_type_groups_accept_iterables_and_numpy_integer():
 
 
 def test_o2_instantaneous_counts_allow_types_and_id_population_to_change():
+    """Unlike MSD, dissociation counts follow each frame's current selected atoms."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     frames = [_frame([[1, 4, 1, 1, 1], [2, 7, 2, 1, 1]]),
@@ -261,6 +286,7 @@ def test_o2_instantaneous_counts_allow_types_and_id_population_to_change():
 
 
 def test_o2_does_not_modify_input_atoms_or_boxes():
+    """Canonicalization must work on copies, including read-only caller arrays."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis

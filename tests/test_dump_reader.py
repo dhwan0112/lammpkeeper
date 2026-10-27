@@ -13,6 +13,7 @@ from _util import have_numpy, skip
 
 
 def _frame(step, rows, cols='id type q x y z', box=((0, 10), (0, 10), (0, 20))):
+    """Serialize explicit rows without relying on the production dump writer."""
     head = [
        'ITEM: TIMESTEP', str(step),
        'ITEM: NUMBER OF ATOMS', str(len(rows)),
@@ -22,6 +23,7 @@ def _frame(step, rows, cols='id type q x y z', box=((0, 10), (0, 10), (0, 20))):
 
 
 def _write(text):
+    """Persist a synthetic dump; the calling test owns its temporary path."""
     fd, path = tempfile.mkstemp(suffix='.dump')
     with os.fdopen(fd, 'w') as f:
         f.write(text)
@@ -36,6 +38,7 @@ REAX_ROWS = [
 
 
 def _expect_value_error(fn, needle):
+    """Require malformed input to fail visibly with the relevant diagnostic."""
     try:
         fn()
     except ValueError as e:
@@ -45,6 +48,7 @@ def _expect_value_error(fn, needle):
 
 
 def test_type_charge_layout_without_elements():
+    """Charge-bearing numeric dumps retain column indices, precision and box."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -64,6 +68,7 @@ def test_type_charge_layout_without_elements():
 
 
 def test_single_and_zero_atom_frames_keep_2d_shape():
+    """Small populations must not collapse the atom matrix into a vector."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import parse_dump
@@ -77,6 +82,7 @@ def test_single_and_zero_atom_frames_keep_2d_shape():
 
 
 def test_column_selection_and_float32():
+    """Numeric projection preserves requested precision and separate elements."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -98,6 +104,7 @@ def test_column_selection_and_float32():
 
 
 def test_stride_and_max_frames():
+    """Frame limits apply after stride selection; zero retains legacy no-limit behavior."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import DumpReader
@@ -111,6 +118,7 @@ def test_stride_and_max_frames():
 
 
 def test_empty_file_matches_legacy_return():
+    """Empty input keeps the public empty-result tuple rather than inventing metadata."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import parse_dump
@@ -122,6 +130,7 @@ def test_empty_file_matches_legacy_return():
 
 
 def test_truncated_final_frame_raises():
+    """A missing final atom must identify its timestep, not silently drop a frame."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import parse_dump
@@ -134,6 +143,7 @@ def test_truncated_final_frame_raises():
 
 
 def test_partial_last_line_raises():
+    """A cut numeric row is corruption even when it occurs at end of file."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import parse_dump
@@ -145,6 +155,7 @@ def test_partial_last_line_raises():
 
 
 def _frames_equal(a, b):
+    """Compare frame metadata, numeric dtype and values across reader paths."""
     import numpy as np
     assert a['timestep'] == b['timestep'] and a['natoms'] == b['natoms']
     assert np.array_equal(a['box'], b['box'])
@@ -156,6 +167,7 @@ def _frames_equal(a, b):
 
 
 def test_lazy_frames_match_parse_dump_at_any_cache_size():
+    """Streaming, eviction and full caching retain eager-reader access semantics."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -179,6 +191,7 @@ def test_lazy_frames_match_parse_dump_at_any_cache_size():
 
 
 def test_lazy_frames_transform_survives_eviction():
+    """Re-read uncached frames must receive the transform just like iteration."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import DumpReader, LazyFrames
@@ -193,6 +206,7 @@ def test_lazy_frames_transform_survives_eviction():
 
 
 def test_lazy_frames_raise_on_truncated_frame_access():
+    """Indexing may discover a frame header, but accessing corrupt atoms must fail."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import DumpReader, LazyFrames
@@ -214,6 +228,7 @@ def test_shell_streaming_load_matches_golden():
     if not os.path.exists(FIXTURE):
         skip(f'fixture not found: {FIXTURE}')
     from test_regression_numeric import GOLDEN_FAST
+    # Fingerprints catch cache-policy drift; they are not independent physics oracles.
     from lammps_post import analysis as A
     from lammps_post.shell import LammpsPostShell
     sh = LammpsPostShell()
@@ -234,6 +249,7 @@ def test_native_parser_matches_loadtxt():
     import numpy as np
     from lammps_post import parsers
     if parsers._native is None:
+        # Without the extension, NumPy-only equality would falsely imply native coverage.
         skip('native parser not built (run native/build.sh)')
     from _util import FIXTURE
     rows = [(7, 'Fe', 1.5e-3, -2.5, 3.0000000000000004, '0.1'),
@@ -272,6 +288,7 @@ def test_native_parser_matches_loadtxt():
 
 
 def test_shell_load_skips_unused_columns_unless_asked():
+    """Projection saves memory without losing velocity metadata or z coordinates."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -297,6 +314,7 @@ def test_shell_load_skips_unused_columns_unless_asked():
 
 
 def test_layout_change_raises():
+    """A changing column schema cannot be interpreted using the first-frame map."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import parse_dump

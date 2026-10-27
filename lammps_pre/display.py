@@ -8,6 +8,9 @@ backward-compatible re-export so existing imports
 and the `python -m lammps_pre` / `lammps-pre.py` entry points keep working
 unchanged. The single source of truth now lives in
 lammpkeeper/common/display.py.
+
+Re-export the original objects rather than wrappers, preserving their terminal
+color handling and optional Rich behavior for legacy prep callers.
 """
 from lammpkeeper.common.display import (  # noqa: F401
     C,

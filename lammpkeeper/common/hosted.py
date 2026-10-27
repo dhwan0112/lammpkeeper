@@ -28,6 +28,12 @@ def history_enabled():
 
 
 class HostedShellMixin:
+    """Share navigation/history policy without owning either shell's data.
+
+    A hosted command exits the child cmdloop via its boolean return, leaving a
+    target in ``_next`` for the outer session. Standalone shells have no host to
+    consume that target, so navigation is informational rather than destructive.
+    """
     shell_name = None       # 'prep' or 'post'
     histfile = None         # readline history file of this shell
     _host = None            # LkprShell when hosted
@@ -53,6 +59,11 @@ class HostedShellMixin:
         atexit.register(self._save_history_if_standalone)
 
     def _save_history_if_standalone(self):
+        """Persist only the history this standalone shell owns, honoring opt-out.
+
+        Hosted sessions swap the process-global readline buffer themselves;
+        writing it from an atexit child callback would mix the shells' commands.
+        """
         # Hosted shells share readline with lkpr, which swaps history per shell.
         if self._host is None and readline is not None and history_enabled():
             try:
@@ -62,6 +73,11 @@ class HostedShellMixin:
                 pass
 
     def _leave(self, target):
+        """Request host navigation without clearing the current shell's state.
+
+        True is cmd.Cmd's stop signal, not an analysis success/error code.
+        Unsupported standalone switches and self-switches leave cmdloop running.
+        """
         if self._host is None:
             print(f"  '{target}' works inside the unified session; start it with 'lkpr'.")
             return False
@@ -84,6 +100,7 @@ class HostedShellMixin:
         return self._leave('post')
 
     def _hosted_help(self):
+        """Advertise host-only navigation only when an outer session can honor it."""
         if self._host is None:
             return ''
         return (f"\n{C.bold('SESSION')}\n"

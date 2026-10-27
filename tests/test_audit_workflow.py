@@ -21,12 +21,14 @@ import lammps_post.shell as shell_module
 
 
 def _quiet(call):
+    """Retain command output for assertions without flooding the shared test runner."""
     with contextlib.redirect_stdout(io.StringIO()) as out:
         result = call()
     return result, out.getvalue()
 
 
 def _dump(path, zs=(10, 30, 50)):
+    """Write two ID-stable frames whose first two atoms move one and three units."""
     rows = [[i + 1, i + 1, i + 1, 1, z] for i, z in enumerate(zs)]
     text = ''
     for step in (0, 100):
@@ -43,22 +45,26 @@ def _dump(path, zs=(10, 30, 50)):
 
 
 def _input(path, elements='Fe Mn O'):
+    """Supply explicit metal-unit timing and a configurable ordered species map."""
     path.write_text('units metal\nboundary p p f\natom_style atomic\n'
                     'pair_style pace\npair_coeff * * test.yace %s\n'
                     'timestep 0.002\n' % elements)
 
 
 def _shell(directory):
+    """Keep shell outputs within the caller's temporary regression directory."""
     shell = LammpsPostShell()
     shell.state.output_dir = str(directory / 'plots')
     return shell
 
 
 def _load(shell, kind, path, extra=''):
+    """Exercise shell load parsing with safely quoted paths and captured diagnostics."""
     return _quiet(lambda: shell.do_load(f'{kind} {shlex.quote(str(path))}{extra}'))
 
 
 def _cli(args):
+    """Run CLI entry points with closed stdin and disabled persistent history."""
     return subprocess.run([sys.executable, *args], input='', text=True,
                           capture_output=True, timeout=30,
                           env=dict(os.environ, LKPR_NO_HISTORY='1',
@@ -66,6 +72,7 @@ def _cli(args):
 
 
 def test_audit_input_preserves_canonical_spin_union_and_invalidates_time():
+    """Loading input refreshes timing without splitting the canonical Fe ID cohort."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -77,6 +84,8 @@ def test_audit_input_preserves_canonical_spin_union_and_invalidates_time():
         assert 'msd_Fe' not in shell.state.cache
         assert shell.state.atom_types == {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}
         _quiet(lambda: shell._analyze_msd(['--species', 'Fe'], _batch=True))
+        # The Fe union moves by 1 and 3: mean squared displacement is
+        # (1**2 + 3**2)/2 = 5; 100 metal steps at 0.002 ps total 0.2 ps.
         np.testing.assert_allclose(shell.state.cache['msd_Fe']['msd'], [0, 5])
         np.testing.assert_allclose(shell.state.cache['msd_Fe']['time'], [0, 0.2])
         _quiet(lambda: shell.do_set('forcefield reaxff'))
@@ -84,6 +93,7 @@ def test_audit_input_preserves_canonical_spin_union_and_invalidates_time():
 
 
 def test_audit_surface_mapping_applies_in_both_load_orders():
+    """Surface inference follows explicit species mappings regardless of load order."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -98,6 +108,7 @@ def test_audit_surface_mapping_applies_in_both_load_orders():
 
 
 def test_audit_structure_cache_replacement_and_unload():
+    """Replacing or unloading dump provenance must prevent stale structure dispatch."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'a.dump')
@@ -116,6 +127,7 @@ def test_audit_structure_cache_replacement_and_unload():
 
 
 def test_audit_density_union_and_malformed_flags():
+    """Union density integrates to two atoms; malformed selectors leave no cache."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -124,6 +136,8 @@ def test_audit_density_union_and_malformed_flags():
         _quiet(lambda: shell.do_set('types 1=A 2=A 3=B'))
         _quiet(lambda: shell._analyze_density(['--species', 'A'], _batch=True))
         density = shell.state.cache['density_A']
+        # Integrate number density over bin thickness and lateral box area;
+        # this verifies selection independently of the histogram's shape.
         count = np.sum(density['density']) * np.diff(density['z'])[0] * 100 * 100
         assert np.isclose(count, 2), count
         for opts in (['--species'], ['--speceis', 'A'],
@@ -139,6 +153,7 @@ def test_audit_density_union_and_malformed_flags():
 
 
 def test_audit_oxygen_union_reaches_all_dependent_calls():
+    """Every oxygen-dependent command receives both configured oxygen type IDs."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -153,6 +168,8 @@ def test_audit_oxygen_union_reaches_all_dependent_calls():
                  ('_analyze_dissociation', 'detect_o2_dissociation'),
                  ('_iplot_penetration_profile', 'analyze_penetration_profile')]
         for method, function in calls:
+            # The sentinel stops numerical work after capturing dispatch; real
+            # analysis correctness is checked separately by analytic tests.
             with patch.object(shell_module, function, side_effect=ValueError('sentinel')) as calc:
                 try:
                     _quiet(lambda: getattr(shell, method)([]))
@@ -162,6 +179,7 @@ def test_audit_oxygen_union_reaches_all_dependent_calls():
 
 
 def test_audit_surface_species_union_reaches_charge_and_profile_calls():
+    """Charge and profile dispatch preserve the two-type canonical surface union."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -182,6 +200,7 @@ def test_audit_surface_species_union_reaches_charge_and_profile_calls():
 
 
 def test_audit_cli_errors_spaces_and_batch_quit():
+    """CLI errors stay nonzero, spaced paths load intact and quit prevents later edits."""
     with tempfile.TemporaryDirectory(prefix='lk workflow ') as temp:
         root = Path(temp)
         _dump(root / 'with space.dump')
@@ -204,6 +223,7 @@ def test_audit_cli_errors_spaces_and_batch_quit():
 
 
 def test_audit_shared_failures_do_not_claim_complete():
+    """Shared-pass analysis failures propagate without printing a false completion."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -223,6 +243,7 @@ def test_audit_shared_failures_do_not_claim_complete():
 
 
 def test_audit_noninteractive_plot_uses_defaults_without_input():
+    """Noninteractive plot dispatch uses defaults and must never request stdin."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -237,6 +258,7 @@ def test_audit_noninteractive_plot_uses_defaults_without_input():
 
 
 def test_audit_one_shot_plot_runs_without_prompts_even_on_a_tty():
+    """One-shot CLI intent suppresses prompts even when stdin advertises a terminal."""
     from lammps_post.cli import main
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
@@ -250,6 +272,7 @@ def test_audit_one_shot_plot_runs_without_prompts_even_on_a_tty():
 
 
 def test_audit_pressure_dispatch_uses_units_and_box_height():
+    """Plot dispatch forwards pressure provenance and uniquely matched dump height."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -261,6 +284,8 @@ def test_audit_pressure_dispatch_uses_units_and_box_height():
         for name, backend in (('thermo', 'plot_thermo'),
                               ('thermostat', 'plot_thermostat_summary'),
                               ('pressure', 'plot_pressure')):
+            # Backend mocks check routing only; real pressure artist conversion
+            # is covered in test_audit_references_plots, not inferred here.
             with patch.object(shell_module, backend) as plot:
                 _quiet(lambda: getattr(shell, f'_iplot_{name}')([], _batch=True))
                 assert plot.call_args.kwargs['unit_system'] == 'real'
@@ -270,6 +295,7 @@ def test_audit_pressure_dispatch_uses_units_and_box_height():
 
 
 def test_audit_unload_input_discards_cache_and_restores_dump_metadata():
+    """Removing input restores dump inference while explicit manual geometry still wins."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         _dump(root / 'traj.dump')
@@ -290,6 +316,7 @@ def test_audit_unload_input_discards_cache_and_restores_dump_metadata():
 
 
 def test_audit_log_data_provenance_invalidates_performance_mass_and_box():
+    """Replacement sources refresh runtime, mass and structure instead of merging stale data."""
     with tempfile.TemporaryDirectory(prefix='lk-workflow-') as temp:
         root = Path(temp)
         shell = _shell(root)

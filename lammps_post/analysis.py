@@ -2,19 +2,21 @@
 ═══════════════════════════════════════════════════════════════
 Section 3: Analysis Functions
 ═══════════════════════════════════════════════════════════════
-Pure functions that take parsed data and return analysis results
-as dictionaries. All functions are force-field-aware and handle
-edge cases (empty frames, missing columns) gracefully.
+Numerical analyses that take parsed data and return result dictionaries.
+Most species selections accept explicit type unions; the spin analysis
+deliberately retains the ACE domain mapping. Missing optional charge data
+returns None, while invalid geometry or atom identity raises where checked.
 
-Each analysis function returns a dict containing:
-  - Time series arrays ('time', plus result-specific keys)
-  - Both raw counts AND normalized fractions for cross-simulation
-    comparison (the 'normalize' toggle in the CLI selects which
-    to display in plots)
+Time-series results use picoseconds, assuming caller-supplied dt_fs is valid
+for the represented steps. Most population analyses use absolute dump steps;
+MSD and the ID-resolved penetration profile instead start at the first frame.
+Spatial analyses assume Angstrom coordinates. Position-based slab metrics
+use the supplied z coordinates without unwrapping or following a moving
+surface unless explicitly stated. Empty-selection behavior is metric-specific.
 
 Dependencies:
   Required : numpy
-  Optional : scipy.spatial.cKDTree (lazy-loaded for O2 dissociation)
+  Optional : scipy.spatial.cKDTree (loaded when finding RDF/O2 candidates)
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -29,7 +31,12 @@ from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
 
 
 def _type_ids(selection, name):
-    """Validate a scalar or union selection without guessing species labels."""
+    """Return a nonempty immutable union of positive integer type IDs.
+
+    Reject booleans rather than accepting their integer representation. Repeated
+    IDs collapse to one member; no element or force-field inference is attempted.
+    ``name`` identifies the caller's selection in validation errors.
+    """
     if isinstance(selection, (int, np.integer)):
         members = [selection]
     else:
@@ -45,7 +52,12 @@ def _type_ids(selection, name):
 
 
 def _orthogonal_box(frame, analysis):
-    """Reject retained tilt rather than silently treating it as orthogonal."""
+    """Return finite orthogonal bounds and their three positive side lengths.
+
+    Check both the bounds shape and retained tilt metadata: a (3, 2) bounds
+    array alone does not prove orthogonality. Tilt already discarded upstream
+    cannot be recovered here. ``analysis`` supplies context for visible errors.
+    """
     box = np.asarray(frame['box'], dtype=float)
     tilted = any(np.any(np.asarray(frame.get(key, 0), dtype=float) != 0)
                  for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))
@@ -66,13 +78,15 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
 
     In ReaxFF simulations, Fe atoms gain positive charge upon oxidation.
     This function tracks:
-    - Average Fe charge across all frames
+    - Average Fe charge within each frame
     - Maximum Fe charge (most oxidized atom)
     - Count and fraction of "oxidized" Fe atoms (charge > q_thr)
 
-    An Fe atom with q > 0.3 e is considered oxidized (the threshold
-    0.3 is empirically chosen to distinguish metallic Fe (~0 e) from
-    oxidized Fe²⁺ (~0.8-1.2 e) and Fe³⁺ (~1.2-1.8 e)).
+    The default charge cutoff is a domain heuristic, not a formal oxidation
+    state or a phase classifier; partial charges depend on the force field.
+    Selection is repeated per frame, so type changes and slab entry/exit alter
+    the population. Empty selections produce zero statistics and fractions.
+    A requested z restriction is applied only when a z column is available.
 
     Args:
         frames:  list[dict] — Parsed trajectory frames from parse_dump
@@ -139,8 +153,11 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     - Average Fe charge in each bin (shows where oxidation is occurring)
     - O atom count in each bin (shows O penetration profile)
 
-    This provides a spatial view of oxidation: bins near the Fe surface
-    will show higher Fe charges where O has penetrated and reacted.
+    Charge/count overlap can highlight candidate reaction regions, but does
+    not establish bonding or an oxide phase. Coordinates are binned as supplied;
+    bins exclude the upper box boundary with the digitize convention used here.
+    Empty metal bins report zero mean charge, distinguished by fe_count == 0.
+    If type selections overlap, the metal branch takes precedence for counts.
 
     Args:
         frame:   dict — A single frame from parse_dump output
@@ -180,6 +197,8 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     valid = (bin_idx >= 0) & (bin_idx < z_bins)
 
     for i in np.where(valid)[0]:
+        # Average over the atoms in each occupied bin, not over the whole slab:
+        # count and local mean charge convey different spatial information.
         bi = bin_idx[i]
         if types[i] in fe_types:
             fe_q_sum[bi] += charges[i]
@@ -248,12 +267,14 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
 
     The RDF describes how atomic density varies as a function of distance
     from a reference atom. It reveals characteristic bond lengths and
-    coordination shells. For Fe-O systems, the first peak position
-    indicates the oxide phase:
+    coordination shells. Approximate Fe-O first-shell comparison markers are:
         - ~1.76 A → amorphous FeO
         - ~1.95 A → Fe₂O₃ (hematite)
         - ~2.06 A → Fe₃O₄ (magnetite)
         - ~2.16 A → FeO (wustite)
+
+    These distances are contextual guides, not unique phase fingerprints:
+    temperature, strain, disorder and mixed phases can shift/overlap peaks.
 
     Algorithm:
     1. For each reference atom of type_a, compute distances to all type_b atoms
@@ -271,6 +292,14 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     With scipy, a periodic cKDTree finds the candidate pairs within r_max and
     their distances are recomputed with the same minimum-image formula as the
     brute-force fallback (used without scipy), so both paths bin identically.
+    The distance is the nearest orthogonal-box image, not a sum over repeated
+    images. The caller must choose a cutoff suitable for the periodic cell;
+    full spherical shells cease to be represented beyond its inscribed radius.
+    Exactly coincident pairs and r == r_max are excluded in both paths.
+    Empty species frames warn and do not enter the average; if none contribute,
+    the returned g array is zero and n_frames is zero. Overlapping, unequal
+    type unions retain directed A-to-B counting rather than the identical-set
+    optimization; zero-distance self contributions are still excluded.
 
     Args:
         frames:     list[dict] — Trajectory frames
@@ -315,7 +344,8 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     r_centers = (bins_edge[:-1] + bins_edge[1:]) / 2
     shell_vol = (4 / 3) * np.pi * np.diff(bins_edge ** 3)
 
-    # Use only the last max_frames frames to focus on equilibrated data
+    # Restrict to the requested tail; choosing a tail does not establish that
+    # it is equilibrated, and its frames receive equal (not elapsed-time) weight.
     use_frames = frames[-max_frames:] if len(frames) > max_frames else frames
 
     for fr in use_frames:
@@ -380,8 +410,10 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
 
     OAR is defined as the fraction of O atoms that have penetrated below
     the Fe surface z-coordinate. An OAR of 0.5 means 50% of O atoms are
-    below the surface. This metric quantifies the progress of oxidation —
-    a rising OAR indicates ongoing O absorption into the Fe slab.
+    below the surface. Despite the historical name "rate", this is an
+    instantaneous population fraction, not a time derivative or reaction flux.
+    The fixed surface and instantaneous selected population define the metric;
+    an empty population returns zero. No boundary wrapping or bond test is used.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -425,9 +457,11 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     Compute the Oxidation Rate (OR) over time. ReaxFF-only.
 
     OR is the fraction of Fe atoms whose partial charge exceeds q_thr.
-    This is a direct measure of how many Fe atoms have been oxidized.
-    Unlike OAR (which counts O positions), OR uses charge information
-    to identify actual chemical bonding/electron transfer.
+    Unlike OAR (which counts O positions), OR uses a partial-charge threshold.
+    It is a force-field-dependent oxidation proxy, not proof of a formal charge,
+    chemical bond or oxide phase, and is not a time derivative. Selection and
+    its denominator are recomputed per frame; empty selections return zero.
+    As in charge evolution, a z restriction requires an available z column.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -476,6 +510,12 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     3. Near-surface O count: O atoms within NEAR_SURFACE_A of the surface
        (in the reaction zone but not yet fully absorbed).
 
+    The surface is fixed, and positions are not unwrapped. The function returns
+    min_O_z rather than a derived depth; consumers subtract it from surface_z.
+    An empty selection gives NaN for that position but zero counts/fractions.
+    The adsorbed and near-surface bands are disjoint, with all other atoms
+    remaining in the total-population denominator.
+
     Args:
         frames:    list[dict] — Trajectory frames
         col_idx:   dict       — Column index mapping
@@ -487,10 +527,10 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
         dict with keys:
             'time'              : np.array — Time in picoseconds
             'o_min_z'           : np.array — Minimum O z-coordinate per frame
-            'n_adsorbed'        : np.array — O atoms below surface_z
+            'n_adsorbed'        : np.array — O atoms below surface_z - NEAR_SURFACE_A
             'n_near_surface'    : np.array — O atoms within 3 A of surface
             'n_total_o'         : np.array — Total O atom count
-            'frac_adsorbed'     : np.array — Fraction of O below surface
+            'frac_adsorbed'     : np.array — Fraction below surface_z - NEAR_SURFACE_A
             'frac_near_surface' : np.array — Fraction of O near surface
             'surface_z'         : float    — The surface z used
     """
@@ -541,6 +581,12 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
     Provides the same fundamental metrics as analyze_penetration() but adds
     running-average smoothing for cleaner trend visualization. Designed for
     single-panel line graphs that clearly show oxidation progress.
+
+    Here adsorption means strictly below surface_z, unlike the deeper offset
+    band in analyze_penetration(). Depth is clipped at zero when all selected
+    atoms are above the surface. Statistics describe each instantaneous
+    population, not fixed atom identities. Smoothing averages frame samples,
+    not physical-duration intervals, and propagates NaNs across its window.
 
     Args:
         frames:    list[dict] — Trajectory frames
@@ -604,6 +650,11 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
     window = min(window, n)
 
     def _smooth(arr, w):
+        """Keep sample alignment with an endpoint-padded moving average.
+
+        Do not impute missing measurements: a NaN contaminates every window
+        containing it. A series no longer than the window is returned unsmoothed.
+        """
         if len(arr) <= w:
             return arr.copy()
         kernel = np.ones(w) / w
@@ -645,6 +696,15 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     Density is computed as: rho(z) = N_atoms_in_bin / (Lx * Ly * dz)
     where Lx*Ly is the cross-sectional area and dz is the bin width.
     Units: atoms/Angstrom^3.
+
+    All frames share fixed laboratory-z bin edges, spanning the union of box
+    bounds when no range is given. Each histogram is divided by its own frame's
+    cross-sectional area before arithmetic averaging: this is a mean of
+    instantaneous densities, not total counts divided by a mean volume.
+    Empty selected populations still contribute a zero-density frame. Coordinates
+    outside the range are excluded; no wrapping, comoving rescaling or boundary
+    correction is performed. Only orthogonal boxes are accepted. Callers must
+    supply a usable range for an empty trajectory and a positive bin count.
 
     Args:
         frames:       list[dict] — Trajectory frames
@@ -692,6 +752,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
         Ly = fr['box'][1][1] - fr['box'][1][0]
         area = Lx * Ly
 
+        # Normalize before accumulating to preserve equal configuration weight
+        # when a barostat changes the x/y area between frames.
         h, _ = np.histogram(z_coords, bins=n_bins, range=z_range)
         density_sum += h / (area * dz)
         n_used += 1
@@ -893,6 +955,11 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
     MC atom/swap moves dynamically adjust spin states during the simulation,
     so this function tracks how the magnetic structure equilibrates.
 
+    This counts instantaneous labels, not persistent spin histories or spatial
+    correlations. total_atoms here is the sum of the three recognized ACE
+    populations, not any additional/unrecognized types. Empty denominators
+    produce zero fractions; no magnetic moment magnitudes are inferred.
+
     Args:
         frames:  list[dict] — Trajectory frames
         col_idx: dict       — Column index mapping
@@ -1005,6 +1072,11 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         raise ValueError('MSD requires an explicit atom ID (id) column to track the initial cohort')
 
     def sorted_atoms(frame):
+        """Validate every frame ID and return rows/IDs in common sorted order.
+
+        Whole-frame uniqueness is necessary even for a smaller tracked cohort:
+        searchsorted must identify one unambiguous row for every selected ID.
+        """
         atoms = frame['atoms']
         ids = atoms[:, id_col]
         step = frame['timestep']
@@ -1018,6 +1090,7 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         return atoms[order], ids
 
     def box_lengths(frame):
+        """Reuse the orthogonal-geometry guard for each unwrapping increment."""
         _box, lengths = _orthogonal_box(frame, 'MSD')
         return lengths
 
@@ -1057,6 +1130,10 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         if not np.all(np.isfinite(cur_pos)):
             raise ValueError(f"MSD timestep {fr['timestep']}: selected positions must be finite")
 
+        # Accumulate consecutive displacements rather than applying MIC once
+        # against the initial position, so multiple resolved crossings survive.
+        # This uses the current frame's lengths; it is not a subtraction of
+        # affine cell motion or a general variable-cell diffusion correction.
         delta = cur_pos - prev_pos
         for dim in wrap_dims:
             delta[:, dim] -= lengths[dim] * np.round(delta[:, dim] / lengths[dim])
@@ -1079,6 +1156,9 @@ def analyze_stage_performance(log_data):
     have separate 'Loop time' values for each 'run' command. This function
     returns the accumulated wall time per stage for performance analysis.
 
+    Aggregation belongs to the parser: this accessor returns its mapping
+    unchanged (not a copy), and None when the mapping is absent or empty.
+
     Args:
         log_data: dict or None — Output from parse_log()
 
@@ -1099,9 +1179,11 @@ def analyze_structure(atoms_array, z_fixed=None, z_surface=None):
     Analyze the final (relaxed) structure from a LAMMPS data file.
 
     Computes z-resolved statistics for each atom type: count, z-range
-    (min/max/mean). This reveals the spatial distribution of different
-    species along the z-axis — useful for identifying oxide layer
-    thickness, interfacial mixing, and structural ordering.
+    (min/max/mean). These are descriptive per-type extents, not automatic
+    interface detection or certification of crystallographic ordering.
+    Coordinates are used as stored, without periodic wrapping or species unions.
+    z_fixed and z_surface are compatibility parameters and do not change these
+    statistics; corresponding annotations are handled by plotting code.
 
     Args:
         atoms_array: np.array shape (N, 5) — [id, type, x, y, z]
@@ -1143,6 +1225,13 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
     selected metal z-coordinates, with NaN and a warning if none are present.
     "Crossing" times are first observed below-surface times, including atoms
     initially below it; missing samples do not imply an interpolated crossing.
+
+    Unlike the fixed initial MSD cohort, type membership is evaluated in every
+    frame and an ID may enter or leave the instantaneous selection. The percentile
+    surface is a moving coordinate-based proxy, not a local interface mesh. Coordinates
+    are not unwrapped, so this slab metric requires a consistent z convention.
+    initial_cross_times separates initial-population observations from later
+    arrivals; n_o is the union size, not a suitable initial-cohort denominator.
 
     This provides the raw data for four visualization modes:
       1. Individual O atom z-trajectories (spaghetti plot)
@@ -1228,6 +1317,8 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
     if not selected_ids:
         return None
 
+    # Discover the complete ID union before allocating columns, allowing late
+    # arrivals without changing column identity or filling absent samples with 0.
     o_ids = np.asarray(sorted(selected_ids), dtype=np.int64)
     n_o = len(o_ids)
     o_z_traj = np.full((len(samples), n_o), np.nan)
@@ -1240,7 +1331,9 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
     time_arr = np.array(time_arr)
     surface_arr = np.array(surface_arr)
 
-    # Compute adsorption timeline: when each O first crosses the surface
+    # NaN positions/surfaces compare false: no event is invented in a sampling
+    # gap. The first observed below-surface sample is not an interpolated event
+    # time, and an atom already below at the start is counted at time zero.
     cross_times, initial_cross_times = [], []
     initial_ids = set(samples[0][0])
     for j in range(n_o):

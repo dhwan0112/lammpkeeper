@@ -16,6 +16,14 @@ from lammps_pre.display import C
 
 
 def main(argv=None):
+    """Apply CLI settings, then choose matrix, one-shot, batch, or shell mode.
+
+    Matrix takes precedence over one-shot actions, which precede batch input.
+    Commands share shell validation; failures raise SystemExit(1), including
+    through legacy launchers that ignore return values. Paths and compound
+    boundary values are shell-quoted before passing through shlex again.
+    Batch quit/EOF stops command consumption rather than executing later lines.
+    """
     parser = argparse.ArgumentParser(
         description='LAMMPS-PRE: Pre-Processing Interactive CLI')
 
@@ -57,6 +65,11 @@ def main(argv=None):
                                 args.write is not None or args.preview)
 
     def run(command):
+        """Execute one shell command, preserving stop signals and failing fast.
+
+        A truthy result means quit, not failure; the separate failure flag is
+        what makes malformed setup and generation fail noninteractive callers.
+        """
         stop = shell.onecmd(command)
         if shell.last_command_failed:
             # Legacy entrypoints call main() without sys.exit(main()), so errors

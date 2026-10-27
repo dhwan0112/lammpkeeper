@@ -20,6 +20,9 @@ ACE_ELEMENTS = ' '.join(element_order('ace'))       # 'Fe Mn O'
 # Force Field Presets
 # ═══════════════════════════════════════════════════════════════
 
+# This is the current Fe/O protocol table, including site resource defaults.
+# Masses are amu for both supported unit styles. ACE's type-2 Mn potential slot
+# is a second Fe spin state (same mass), while charge-style presets use Fe/O.
 FF_PRESETS = {
     'ace': {
         'label': 'ACE',
@@ -160,7 +163,14 @@ WALL_CUTOFF = max(p['rc'] for p in FF_PRESETS.values())     # 7.0 A (ACE)
 # ═══════════════════════════════════════════════════════════════
 
 class PreState:
-    """Container for all simulation setup parameters."""
+    """Mutable Fe/O setup with preset defaults and explicit user overrides.
+
+    Geometry lengths are Angstrom, requested durations are ps, and displayed
+    timesteps are fs. Native timestep/damping values use ps for metal (ACE) or
+    fs for real (ReaxFF). Presets describe this oxidation workflow, not arbitrary
+    elements: ACE's second type is an Fe spin state in a Mn potential slot and
+    retains the Fe mass. Selecting a preset does not copy or reset overrides.
+    """
 
     _GEOMETRY_FIELDS = (
         'surface', 'nx', 'ny', 'nz', 'a_fe', 'n_o2', 'o2_bond',
@@ -169,6 +179,7 @@ class PreState:
     )
 
     def __setattr__(self, name, value):
+        """Invalidate cached coordinates when an existing geometry setting changes."""
         # Cover both interactive setters and direct Python API edits. Force-field
         # selection is deliberately excluded: every preset shares the geometry.
         if name in self._GEOMETRY_FIELDS and name in self.__dict__:
@@ -177,14 +188,24 @@ class PreState:
         object.__setattr__(self, name, value)
 
     def geometry_signature(self):
-        """Configuration attached to a build, also checked by the writers."""
+        """Snapshot geometry inputs in fixed order for writer stale-build checks.
+
+        Force-field and temperature settings are excluded: they change the run
+        protocol or representation, not the shared initial coordinates.
+        """
         return tuple(getattr(self, name) for name in self._GEOMETRY_FIELDS)
 
     def __init__(self):
+        """Initialize through reset so fresh and explicitly reset shells agree."""
         self.reset()
 
     def reset(self):
-        """Reset all parameters to defaults."""
+        """Discard builds and overrides, restoring the default oxidation setup.
+
+        None-valued timing/output/HPC settings defer to the selected preset.
+        The boundary string is emitted into LAMMPS; the slab/gas builder itself
+        assumes lateral periodic geometry and a nonperiodic vertical direction.
+        """
         # ── Structure ──
         self.surface = '100'
         self.nx = 10
@@ -243,7 +264,11 @@ class PreState:
         self.set_ff('reaxff2010')
 
     def set_ff(self, ff_name):
-        """Apply a force field preset."""
+        """Select a case-insensitive preset without changing geometry or overrides.
+
+        Return False for unknown names without changing the active preset. The
+        selected dictionary is shared with FF_PRESETS rather than deep-copied.
+        """
         ff_name = ff_name.lower()
         if ff_name not in FF_PRESETS:
             return False
@@ -255,14 +280,17 @@ class PreState:
 
     @property
     def ff(self):
+        """Expose the selected preset, including its type labels and native units."""
         return self._ff_preset
 
     @property
     def unit_system(self):
+        """Return the LAMMPS unit style used for native time conversion."""
         return self._ff_preset.get('unit_system', 'metal')
 
     @property
     def atom_style(self):
+        """Choose charge-bearing ReaxFF records or atomic ACE spin-type records."""
         return self._ff_preset.get('atom_style', 'atomic')
 
     @property
@@ -282,39 +310,53 @@ class PreState:
 
     @property
     def dt_display_fs(self):
+        """Return the preset timestep in fs, independent of its native unit style."""
         return self._ff_preset.get('dt_display_fs', 0.25)
 
     @property
     def has_spin(self):
+        """Indicate whether the protocol uses Fe type swaps as Ising spin states."""
         return self._ff_preset.get('has_spin', False)
 
     @property
     def has_qeq(self):
+        """Indicate whether the preset requires reactive charge equilibration."""
         return self._ff_preset.get('has_qeq', False)
 
     def get_eq_ps(self):
+        """Resolve equilibration duration in ps, preserving an explicit zero."""
         return self.eq_ps if self.eq_ps is not None else self._ff_preset.get('eq_ps', 100)
 
     def get_ox_ps(self):
+        """Resolve oxidation duration in ps; rendering validates its range."""
         return self.ox_ps if self.ox_ps is not None else self._ff_preset.get('ox_ps', 200)
 
     def get_spin_ps(self):
+        """Resolve spin-equilibration ps, normally zero for non-spin presets."""
         return self.spin_ps if self.spin_ps is not None else self._ff_preset.get('spin_ps', 0)
 
     def get_thermo_interval(self):
+        """Resolve thermodynamic output cadence in steps, not physical time."""
         return self.thermo_interval if self.thermo_interval is not None else self._ff_preset.get('thermo_interval', 100)
 
     def get_dump_interval(self):
+        """Resolve ordinary trajectory cadence in steps, outside ACE's dense phase."""
         return self.dump_interval if self.dump_interval is not None else self._ff_preset.get('dump_interval', 1000)
 
     def get_ncpus(self):
+        """Resolve MPI ranks and reject nonpositive/noninteger values, including bool."""
         value = self.ncpus if self.ncpus is not None else self._ff_preset.get('ncpus', 24)
         if not isinstance(value, Integral) or isinstance(value, bool) or value < 1:
             raise ValueError('ncpus must be a positive integer')
         return value
 
     def get_processor_grid(self):
-        """Use an explicit compatible grid, or let LAMMPS partition the plane."""
+        """Resolve the lateral processor grid, with one rank layer along z.
+
+        Explicit x/y counts must both be positive integers whose product equals
+        ncpus. A compatible preset grid is retained; otherwise wildcards let
+        LAMMPS partition x/y automatically rather than emitting a stale grid.
+        """
         ncpus = self.get_ncpus()
         if self.nproc_x is not None or self.nproc_y is not None:
             grid = (self.nproc_x, self.nproc_y)
@@ -330,12 +372,15 @@ class PreState:
         return ('*', '*')
 
     def get_memory_gb(self):
+        """Resolve total PBS memory in GB without changing the stored override."""
         return self.memory_gb if self.memory_gb is not None else self._ff_preset.get('memory_gb', 48)
 
     def get_walltime_hr(self):
+        """Resolve PBS walltime in hours rather than simulation duration."""
         return self.walltime_hr if self.walltime_hr is not None else self._ff_preset.get('walltime_hr', 72)
 
     def get_job_name(self):
+        """Prefer an explicit PBS name, else label the preset/O2/temperature case."""
         if self.job_name:
             return self.job_name
         ff_short = {'ace': 'ace', 'reaxff2010': 'rx2010', 'reaxff2015': 'rx2015'}
@@ -343,7 +388,12 @@ class PreState:
         return f"{name}_o2_{self.n_o2}_{self.temperature}K"
 
     def ps_to_steps(self, ps):
-        """Convert picoseconds to simulation steps."""
+        """Round requested ps to whole steps using the preset's native timestep.
+
+        Metal dt is already ps; the non-metal branch assumes the fs timestep
+        used by the supported real-unit presets. This helper does not validate
+        durations or add support for other LAMMPS unit styles.
+        """
         if self.unit_system == 'metal':
             dt_ps = self._ff_preset['dt']
             return round(ps / dt_ps)

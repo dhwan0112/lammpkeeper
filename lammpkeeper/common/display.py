@@ -32,6 +32,8 @@ _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|[\x01\x02]')
 def visible_width(text):
     """Terminal columns `text` occupies: ANSI codes count 0, CJK/fullwidth 2."""
     width = 0
+    # Measure rendered cells, not code points: a combining mark decorates the
+    # preceding character, while a wide/fullwidth glyph occupies two cells.
     for ch in _ANSI_RE.sub('', str(text)):
         if unicodedata.combining(ch) or unicodedata.category(ch) in ('Mn', 'Me', 'Cf'):
             continue
@@ -60,6 +62,7 @@ def banner(lines, min_width=62, color=None):
 
 
 def _rich_text(value):
+    """Preserve our ANSI styles without interpreting user values as Rich markup."""
     # Text.from_ansi turns our own C.* colour codes into styles, so rich
     # measures the visible text; raw escapes would be counted as columns and
     # push the right border out of line. It also stops '[...]' in values
@@ -90,17 +93,34 @@ class C:
     RESET = '\033[0m'      # Reset all attributes to terminal default
 
     @staticmethod
-    def ok(msg):    return f"{C.GREEN}{msg}{C.RESET}"    # Success/positive
+    def ok(msg):
+        """Mark a successful status, resetting styling so later output is unaffected."""
+        return f"{C.GREEN}{msg}{C.RESET}"
+
     @staticmethod
-    def warn(msg):  return f"{C.YELLOW}{msg}{C.RESET}"   # Warning/caution
+    def warn(msg):
+        """Highlight a caution without making a decision about process exit status."""
+        return f"{C.YELLOW}{msg}{C.RESET}"
+
     @staticmethod
-    def err(msg):   return f"{C.RED}{msg}{C.RESET}"      # Error/failure
+    def err(msg):
+        """Color an error message; callers remain responsible for propagating failure."""
+        return f"{C.RED}{msg}{C.RESET}"
+
     @staticmethod
-    def info(msg):  return f"{C.CYAN}{msg}{C.RESET}"     # Informational
+    def info(msg):
+        """Style informational text without changing the supplied message content."""
+        return f"{C.CYAN}{msg}{C.RESET}"
+
     @staticmethod
-    def bold(msg):  return f"{C.BOLD}{msg}{C.RESET}"     # Emphasized text
+    def bold(msg):
+        """Emphasize a heading while keeping the style local to this string."""
+        return f"{C.BOLD}{msg}{C.RESET}"
+
     @staticmethod
-    def dim(msg):   return f"{C.DIM}{msg}{C.RESET}"      # De-emphasized text
+    def dim(msg):
+        """De-emphasize secondary details without hiding them or filtering output."""
+        return f"{C.DIM}{msg}{C.RESET}"
 
 
 def print_table(headers, rows, title=None):
