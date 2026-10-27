@@ -15,6 +15,7 @@ the manual 'load' step. Example:
 """
 
 import argparse
+import shlex
 
 from lammps_post import VERSION
 from lammps_post.display import C
@@ -73,6 +74,8 @@ def main(argv=None):
     # Create the interactive shell instance
     shell = LammpsPostShell()
     shell.state.output_dir = args.output
+    one_shot = args.analyze is not None or args.plot is not None
+    shell.noninteractive = one_shot or args.batch is not None or args.find is not None
 
     # Apply style flags before any plotting
     if args.theme:
@@ -88,33 +91,43 @@ def main(argv=None):
         return
 
     # ── Pre-load files if specified ──
-    max_arg = f' --max {args.max_frames}' if args.max_frames else ''
+    max_arg = f' --max {args.max_frames}' if args.max_frames is not None else ''
     if args.dump:
-        shell.do_load(f'dump {args.dump}{max_arg}')
+        shell.onecmd(f'load dump {shlex.quote(args.dump)}{max_arg}')
     if args.log:
-        shell.do_load(f'log {args.log}')
+        shell.onecmd(f'load log {shlex.quote(args.log)}')
     if args.data:
-        shell.do_load(f'data {args.data}')
+        shell.onecmd(f'load data {shlex.quote(args.data)}')
+
+    if shell.command_failures:
+        raise SystemExit(1)
 
     # ── One-shot mode: analyze and/or plot, then exit ──
-    one_shot = args.analyze is not None or args.plot is not None
-
     if args.analyze is not None:
-        shell.do_analyze(args.analyze)
+        shell.onecmd(f'analyze {args.analyze}')
     if args.plot is not None:
-        shell.do_plot(args.plot)
+        shell.onecmd(f'plot {args.plot}')
 
     if one_shot:
+        if shell.command_failures:
+            raise SystemExit(1)
         return  # Exit without entering interactive shell
 
     # ── Batch mode ──
     if args.batch:
-        with open(args.batch) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    print(f"{shell.prompt}{line}")
-                    shell.onecmd(line)
+        try:
+            with open(args.batch) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        print(f"{shell.prompt}{line}")
+                        if shell.onecmd(line):
+                            break
+        except OSError as exc:
+            print(C.err(f'  {exc}'))
+            raise SystemExit(1) from exc
+        if shell.command_failures:
+            raise SystemExit(1)
         return
 
     # ── Interactive mode ──
