@@ -27,7 +27,39 @@ from lammpkeeper.common.mapping import label_to_type
 from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
                          O2_BOND_CUTOFF_A)
 
-def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E):
+
+def _type_ids(selection, name):
+    """Validate a scalar or union selection without guessing species labels."""
+    if isinstance(selection, (int, np.integer)):
+        members = [selection]
+    else:
+        try:
+            members = list(selection)
+        except TypeError:
+            raise ValueError(f'{name} must be an integer or iterable of type IDs') from None
+    if not members or any(isinstance(t, (bool, np.bool_))
+                          or not isinstance(t, (int, np.integer)) or t <= 0
+                          for t in members):
+        raise ValueError(f'{name} must contain positive integer type IDs')
+    return frozenset(map(int, members))
+
+
+def _orthogonal_box(frame, analysis):
+    """Reject retained tilt rather than silently treating it as orthogonal."""
+    box = np.asarray(frame['box'], dtype=float)
+    tilted = any(np.any(np.asarray(frame.get(key, 0), dtype=float) != 0)
+                 for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))
+    if box.shape != (3, 2) or tilted or frame.get('triclinic', False):
+        raise ValueError(f"{analysis} timestep {frame['timestep']}: requires orthogonal (3, 2) "
+                         'bounds; triclinic geometry is unsupported')
+    lengths = box[:, 1] - box[:, 0]
+    if not np.all(np.isfinite(box)) or not np.all(np.isfinite(lengths)) or np.any(lengths <= 0):
+        raise ValueError(f"{analysis} timestep {frame['timestep']}: box lengths must be finite and positive")
+    return box, lengths
+
+
+def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E,
+                             fe_type=1):
     """
     Track the evolution of Fe atomic partial charges over time.
     ReaxFF-only analysis — requires the 'q' column in dump data.
@@ -48,6 +80,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
         dt_fs:   float      — Timestep in femtoseconds (0.25 for ReaxFF)
         z_range: tuple or None — (zlo, zhi) to restrict analysis to a z-slab
         q_thr:   float      — Charge threshold for "oxidized" classification (e)
+        fe_type: int or iterable[int] — Explicit metal species type(s).
 
     Returns:
         dict with keys:
@@ -65,11 +98,12 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     if qi is None:
         return None  # No charge data available — not a ReaxFF dump
 
+    fe_types = _type_ids(fe_type, 'fe_type')
     time, avg, mx, n_ox, n_fe = [], [], [], [], []
     for fr in frames:
         atoms = fr['atoms']
         # Select Fe atoms (type 1 in standard ReaxFF Fe-O systems)
-        fe_mask = atoms[:, ti].astype(int) == 1
+        fe_mask = np.isin(atoms[:, ti], list(fe_types))
         # Optionally restrict to a z-slab (e.g., surface region only)
         if z_range is not None and zi is not None:
             z = atoms[:, zi]
@@ -96,7 +130,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
             'n_total_fe': n_fe, 'frac_oxidized': frac_ox}
 
 
-def analyze_charge_z(frame, col_idx, z_bins=50):
+def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     """
     Compute the z-direction charge distribution for a single frame.
     ReaxFF-only analysis — requires the 'q' column.
@@ -112,6 +146,7 @@ def analyze_charge_z(frame, col_idx, z_bins=50):
         frame:   dict — A single frame from parse_dump output
         col_idx: dict — Column name -> index mapping
         z_bins:  int  — Number of bins along z-axis (default: 50)
+        fe_type, o_type: int or iterable[int] — Explicit species type(s).
 
     Returns:
         dict with keys:
@@ -127,6 +162,8 @@ def analyze_charge_z(frame, col_idx, z_bins=50):
     if qi is None or zi is None:
         return None
 
+    fe_types = _type_ids(fe_type, 'fe_type')
+    o_types = _type_ids(o_type, 'o_type')
     atoms = frame['atoms']
     zlo, zhi = frame['box'][2]
     bins = np.linspace(zlo, zhi, z_bins + 1)
@@ -144,10 +181,10 @@ def analyze_charge_z(frame, col_idx, z_bins=50):
 
     for i in np.where(valid)[0]:
         bi = bin_idx[i]
-        if types[i] == 1:
+        if types[i] in fe_types:
             fe_q_sum[bi] += charges[i]
             fe_n[bi] += 1
-        elif types[i] == 2:
+        elif types[i] in o_types:
             o_n[bi] += 1
 
     fe_q_avg = np.divide(fe_q_sum, fe_n, where=fe_n > 0, out=np.zeros(z_bins))
@@ -205,7 +242,7 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
 
 
 def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
-                max_frames=20, label_a='Fe', label_b='O', z_pbc=False):
+                max_frames=20, label_a='Fe', label_b='O', z_pbc=False, pbc=None):
     """
     Compute the radial distribution function g(r) between two atom types.
 
@@ -220,9 +257,16 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
 
     Algorithm:
     1. For each reference atom of type_a, compute distances to all type_b atoms
-    2. Apply minimum image convention (PBC) for x and y directions
+    2. Apply minimum image convention on explicitly periodic axes
     3. Histogram the distances into radial bins
-    4. Normalize by ideal gas density: g(r) = hist / (N_frames * N_a * shell_vol * rho_b)
+    4. Normalize each frame by N_a * shell_vol * (N_b / V), then take the
+       arithmetic mean of those instantaneous RDFs. Equal frame weighting is
+       appropriate for equally sampled configurations, including changing volume
+       or populations; this is not a pooled-pair/exposure-weighted estimator.
+       Same-species histograms count both ordered directions, with no extra /2.
+       Using rho_b=N_b/V gives the finite-N ideal-gas plateau (N_b-1)/N_b
+       for identical selections. Nonperiodic boundaries use the same global
+       density convention, without a finite-boundary shell-volume correction.
 
     With scipy, a periodic cKDTree finds the candidate pairs within r_max and
     their distances are recomputed with the same minimum-image formula as the
@@ -240,6 +284,8 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         label_b:    str        — Name of target species for plot labels
         z_pbc:      bool       — Apply PBC in z-direction (default: False).
                                  Set to False for slab geometries (boundary p p f).
+        pbc:        three bools or None — Explicit x/y/z flags override z_pbc.
+                    None retains the legacy (True, True, z_pbc) convention.
 
     Returns:
         dict with keys:
@@ -248,34 +294,32 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
             'label'    : str      — Pair label (e.g., 'Fe-O')
             'n_frames' : int      — Number of frames used in averaging
     """
-    def type_set(selection):
-        if isinstance(selection, (int, np.integer)):
-            members = [selection]
-        else:
-            try:
-                members = list(selection)
-            except TypeError:
-                raise ValueError('RDF selections must be integer type IDs or iterables of type IDs') from None
-        if not members or any(isinstance(t, (bool, np.bool_))
-                              or not isinstance(t, (int, np.integer)) or t <= 0
-                              for t in members):
-            raise ValueError('RDF selections must contain positive integer type IDs')
-        return frozenset(map(int, members))
-
-    types_a, types_b = type_set(type_a), type_set(type_b)
+    types_a, types_b = _type_ids(type_a, 'type_a'), _type_ids(type_b, 'type_b')
+    try:
+        periodic = (True, True, z_pbc) if pbc is None else tuple(pbc)
+    except TypeError:
+        raise ValueError('RDF pbc must contain exactly three booleans') from None
+    if len(periodic) != 3 or not all(isinstance(v, (bool, np.bool_)) for v in periodic):
+        raise ValueError('RDF pbc must contain exactly three booleans')
+    if not np.isfinite(r_max) or r_max <= 0:
+        raise ValueError('RDF r_max must be finite and positive')
+    for name, value in (('n_bins', n_bins), ('max_frames', max_frames)):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value <= 0:
+            raise ValueError(f'RDF {name} must be a positive integer')
     same_species = types_a == types_b
     xi, yi, zi, ti = col_idx['x'], col_idx['y'], col_idx['z'], col_idx['type']
     dr = r_max / n_bins       # Bin width in Angstroms
-    hist_total = np.zeros(n_bins)  # Accumulated distance histogram across all frames
+    g_total = np.zeros(n_bins)
     n_frames_used = 0         # Number of frames contributing to the average
-    n_a_last = 0              # Number of type_a atoms (for normalization)
-    n_b_last = 0              # Number of type_b atoms (for density calculation)
-    vol_last = 0              # Box volume (for ideal gas normalization)
+    bins_edge = np.linspace(0, r_max, n_bins + 1)
+    r_centers = (bins_edge[:-1] + bins_edge[1:]) / 2
+    shell_vol = (4 / 3) * np.pi * np.diff(bins_edge ** 3)
 
     # Use only the last max_frames frames to focus on equilibrated data
     use_frames = frames[-max_frames:] if len(frames) > max_frames else frames
 
     for fr in use_frames:
+        box, L = _orthogonal_box(fr, 'RDF')
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
         # Keep singleton arithmetic unchanged while allowing explicit unions.
@@ -285,75 +329,47 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         # Extract xyz positions for both species
         pos_a = atoms[mask_a][:, [xi, yi, zi]]
         pos_b = atoms[mask_b][:, [xi, yi, zi]]
+        if not np.all(np.isfinite(pos_a)) or not np.all(np.isfinite(pos_b)):
+            raise ValueError(f"RDF timestep {fr['timestep']}: selected positions must be finite")
 
         if len(pos_a) == 0 or len(pos_b) == 0:
-            continue  # Skip frames with no atoms of either type
-
-        box = fr['box']
-        L = box[:, 1] - box[:, 0]  # Box lengths [Lx, Ly, Lz]
-        n_a_last = len(pos_a)
-        n_b_last = len(pos_b)
-        vol_last = L[0] * L[1] * L[2]  # Total box volume
+            warnings.warn(f"RDF timestep {fr['timestep']}: empty species selection; "
+                          'frame excluded from RDF average', RuntimeWarning, stacklevel=2)
+            continue
 
         pairs = _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
-                                     same_species=same_species)
+                                     same_species=same_species, pbc=periodic)
+        hist = np.zeros(n_bins)
         if pairs is not None:
             # cKDTree only nominates pairs; distances are recomputed below with
             # the brute-force formula so every r lands in the same bin as before.
             ia, ib, weight = pairs
             d = pos_b[ib] - pos_a[ia]
-            d[:, 0] -= L[0] * np.round(d[:, 0] / L[0])
-            d[:, 1] -= L[1] * np.round(d[:, 1] / L[1])
-            if z_pbc:
-                d[:, 2] -= L[2] * np.round(d[:, 2] / L[2])
+            for dim, wrap in enumerate(periodic):
+                if wrap:
+                    d[:, dim] -= L[dim] * np.round(d[:, dim] / L[dim])
             r = np.linalg.norm(d, axis=1)
             valid = (r > 0) & (r < r_max)
             bi = (r[valid] / dr).astype(int)
             bi = bi[bi < n_bins]
-            hist_total += weight * np.bincount(bi, minlength=n_bins)
-            n_frames_used += 1
-            continue
-
-        # --- Vectorized brute-force with minimum image convention ---
-        # For each type_a atom, compute distances to ALL type_b atoms
-        # simultaneously using NumPy broadcasting.
-        for p in pos_a:
-            d = pos_b - p  # Displacement vectors (N_b x 3)
-            # Apply periodic boundary conditions in x and y directions
-            # using the minimum image convention: d -= L * round(d/L)
-            d[:, 0] -= L[0] * np.round(d[:, 0] / L[0])
-            d[:, 1] -= L[1] * np.round(d[:, 1] / L[1])
-            # Z-direction: apply PBC by default; set z_pbc=False for slab geometries
-            if z_pbc:
-                d[:, 2] -= L[2] * np.round(d[:, 2] / L[2])
-            r = np.linalg.norm(d, axis=1)  # Scalar distances
-            valid = (r > 0) & (r < r_max)  # Exclude self (r=0) and beyond cutoff
-            bi = (r[valid] / dr).astype(int)  # Map distances to bin indices
-            bi = bi[bi < n_bins]  # Guard against edge case at r_max boundary
-            np.add.at(hist_total, bi, 1)  # Unbuffered increment (handles duplicates)
-
+            hist += weight * np.bincount(bi, minlength=n_bins)
+        else:
+            # Row-wise fallback avoids allocating a full N_a x N_b matrix.
+            for p in pos_a:
+                d = pos_b - p
+                for dim, wrap in enumerate(periodic):
+                    if wrap:
+                        d[:, dim] -= L[dim] * np.round(d[:, dim] / L[dim])
+                r = np.linalg.norm(d, axis=1)
+                valid = (r > 0) & (r < r_max)
+                bi = (r[valid] / dr).astype(int)
+                bi = bi[bi < n_bins]
+                np.add.at(hist, bi, 1)
+        rho_b = len(pos_b) / np.prod(L)
+        g_total += hist / (len(pos_a) * shell_vol * rho_b)
         n_frames_used += 1
 
-    # Return empty RDF if no valid frames were processed
-    if n_frames_used == 0 or n_a_last == 0:
-        r_centers = np.linspace(dr / 2, r_max - dr / 2, n_bins)
-        return {'r': r_centers, 'g': np.zeros(n_bins),
-                'label': f'{label_a}-{label_b}', 'n_frames': 0}
-
-    # --- RDF Normalization ---
-    # g(r) = observed_count / expected_count_for_ideal_gas
-    # expected = N_frames * N_a * shell_volume(r) * number_density_b
-    bins_edge = np.linspace(0, r_max, n_bins + 1)
-    r_centers = (bins_edge[:-1] + bins_edge[1:]) / 2
-    # Volume of each spherical shell: V_shell = 4/3 * pi * (r_outer^3 - r_inner^3)
-    shell_vol = (4 / 3) * np.pi * (bins_edge[1:] ** 3 - bins_edge[:-1] ** 3)
-    rho_b = n_b_last / vol_last  # Average number density of type_b
-    g = hist_total / (n_frames_used * n_a_last * shell_vol * rho_b)
-    # Preserve the historical same-species normalization for both singletons
-    # and equal sets. PHYS-4 changes selection only, not this convention.
-    if same_species:
-        g /= 2
-
+    g = g_total / n_frames_used if n_frames_used else g_total
     return {'r': r_centers, 'g': g, 'label': f'{label_a}-{label_b}',
             'n_frames': n_frames_used}
 
@@ -372,7 +388,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
         col_idx: dict       — Column index mapping
         z_surf:  float      — z-coordinate of the Fe surface (Angstroms)
         dt_fs:   float      — Timestep in femtoseconds
-        o_type:  int        — Atom type number for oxygen
+        o_type:  int or iterable[int] — Oxygen species type(s).
 
     Returns:
         dict with keys:
@@ -384,11 +400,12 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
     ti = col_idx['type']
     zi = col_idx['z']
 
+    o_types = _type_ids(o_type, 'o_type')
     time, oar, n_abs, n_total = [], [], [], []
     for fr in frames:
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
-        o_mask = types == o_type
+        o_mask = np.isin(types, list(o_types))
         o_z = atoms[o_mask, zi]
         n_o = len(o_z)
         n_below = int(np.sum(o_z < z_surf))
@@ -402,7 +419,8 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
             'n_absorbed': np.array(n_abs), 'n_total': np.array(n_total)}
 
 
-def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None):
+def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
+               fe_type=1):
     """
     Compute the Oxidation Rate (OR) over time. ReaxFF-only.
 
@@ -417,6 +435,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None):
         dt_fs:   float      — Timestep in femtoseconds
         q_thr:   float      — Charge threshold for oxidized Fe (default: 0.3 e)
         z_range: tuple or None — Optional (zlo, zhi) to restrict analysis
+        fe_type: int or iterable[int] — Explicit metal species type(s).
 
     Returns:
         dict with keys:
@@ -430,10 +449,11 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None):
     if qi is None:
         return None
 
+    fe_types = _type_ids(fe_type, 'fe_type')
     time, vals = [], []
     for fr in frames:
         atoms = fr['atoms']
-        fe_mask = atoms[:, ti].astype(int) == 1
+        fe_mask = np.isin(atoms[:, ti], list(fe_types))
         if z_range is not None and zi is not None:
             z = atoms[:, zi]
             fe_mask &= (z >= z_range[0]) & (z <= z_range[1])
@@ -461,7 +481,7 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
         col_idx:   dict       — Column index mapping
         surface_z: float      — z-coordinate of the Fe surface (Angstroms)
         dt_fs:     float      — Timestep in femtoseconds
-        o_type:    int        — Atom type number for oxygen
+        o_type:    int or iterable[int] — Oxygen species type(s).
 
     Returns:
         dict with keys:
@@ -477,13 +497,19 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     ti = col_idx['type']
     zi = col_idx['z']
 
+    o_types = _type_ids(o_type, 'o_type')
     time, o_min_z, n_ads, n_near, n_total = [], [], [], [], []
     for fr in frames:
         atoms = fr['atoms']
-        o_mask = atoms[:, ti].astype(int) == o_type
+        o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
 
         if len(o_z) == 0:
+            time.append(fr['timestep'] * dt_fs / 1000)
+            o_min_z.append(np.nan)
+            n_ads.append(0)
+            n_near.append(0)
+            n_total.append(0)
             continue
 
         time.append(fr['timestep'] * dt_fs / 1000)
@@ -521,7 +547,7 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
         col_idx:   dict       — Column index mapping
         surface_z: float      — z-coordinate of the Fe surface (Angstroms)
         dt_fs:     float      — Timestep in femtoseconds
-        o_type:    int        — Atom type number for oxygen
+        o_type:    int or iterable[int] — Oxygen species type(s).
         window:    int or None — Smoothing window size (auto if None)
 
     Returns:
@@ -538,25 +564,31 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
             'surface_z'           : float
             'window'              : int      — Smoothing window used
         Returns None if no O atoms found.
+        Frames without selected atoms retain NaN spatial/ratio measurements.
     """
     ti = col_idx['type']
     zi = col_idx['z']
 
+    o_types = _type_ids(o_type, 'o_type')
     time_arr, ads_ratio, mean_z, std_z, max_depth = [], [], [], [], []
 
     for fr in frames:
         atoms = fr['atoms']
-        o_mask = atoms[:, ti].astype(int) == o_type
+        o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
-        if len(o_z) == 0:
-            continue
         time_arr.append(fr['timestep'] * dt_fs / 1000)
+        if len(o_z) == 0:
+            ads_ratio.append(np.nan)
+            mean_z.append(np.nan)
+            std_z.append(np.nan)
+            max_depth.append(np.nan)
+            continue
         ads_ratio.append(np.mean(o_z < surface_z))
         mean_z.append(np.mean(o_z))
         std_z.append(np.std(o_z))
         max_depth.append(max(0.0, surface_z - np.min(o_z)))
 
-    if not time_arr:
+    if not time_arr or np.all(np.isnan(mean_z)):
         return None
 
     time_arr = np.array(time_arr)
@@ -619,7 +651,7 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
         col_idx:      dict       — Column index mapping
         z_range:      tuple or None — (zlo, zhi) range; auto-detected if None
         n_bins:       int   — Number of z-bins (default: 200)
-        species_type: int or None — Atom type to filter (None = all atoms)
+        species_type: int, iterable[int] or None — Species type(s); None selects all.
         species_name: str   — Label for this species (used in plot legends)
 
     Returns:
@@ -646,10 +678,12 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     density_sum = np.zeros(n_bins)
     n_used = 0
 
+    selected_types = None if species_type is None else _type_ids(species_type, 'species_type')
     for fr in frames:
+        _orthogonal_box(fr, 'Density profile')
         atoms = fr['atoms']
         if species_type is not None:
-            mask = atoms[:, ti].astype(int) == species_type
+            mask = np.isin(atoms[:, ti], list(selected_types))
             z_coords = atoms[mask, zi]
         else:
             z_coords = atoms[:, zi]
@@ -699,8 +733,8 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
         o_type:      int or iterable[int] — Types selected independently per frame.
         pbc:         three bools — Periodic axes; default retains legacy slab PBC.
 
-    Only supplied orthogonal (3, 2) bounds are supported; upstream tilt loss
-    remains a parser limitation. Invalid settings, selected positions or selected
+    Only supplied orthogonal (3, 2) bounds without retained tilt are supported.
+    Invalid settings, selected positions or selected
     IDs fail visibly. Empty selections retain a time point with zero counts.
     IDs, when present, determine tie order; counts do not follow a fixed cohort.
 
@@ -747,15 +781,8 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
 
     for fr in frames:
         atoms = fr['atoms']
-        box = np.asarray(fr['box'], dtype=float)
+        box, L = _orthogonal_box(fr, 'Pair detection')
         step = fr['timestep']
-        if box.shape != (3, 2):
-            raise ValueError(f'Timestep {step}: pair detection requires orthogonal (3, 2) bounds; '
-                             'triclinic geometry is unsupported')
-        L = box[:, 1] - box[:, 0]
-        if (not np.all(np.isfinite(box)) or not np.all(np.isfinite(L))
-                or np.any(L <= 0)):
-            raise ValueError(f'Timestep {step}: box lengths must be finite and positive')
         o_mask = np.isin(atoms[:, ti], selected_types)
         selected = atoms[o_mask]
         o_pos = selected[:, [xi, yi, zi_col]].astype(float, copy=True)
@@ -851,14 +878,17 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
 
     In ACE simulations of magnetic iron oxides (e.g., Fe₃O₄ magnetite),
     Fe atoms are classified by their spin state:
-      - Type 1 = Fe_up   (spin-up, majority spin in magnetite)
-      - Type 2 = Fe_down (spin-down, minority spin / 'Mn' proxy)
+      - Type 1 = Fe_up   (ACE spin-state label, not an assumed majority)
+      - Type 2 = Fe_down (ACE spin-state label via the 'Mn' proxy slot)
       - Type 3 = O       (oxygen, non-magnetic)
 
-    The spin-up fraction (n_up / n_total_Fe) reveals the magnetic ordering:
-      - ~1/3 → Fe₃O₄ inverse spinel (8 tetrahedral Fe↓ : 16 octahedral Fe↑)
-      - ~0.5 → Antiferromagnetic equal distribution
-      - ~1.0 → Ferromagnetic (all spins aligned)
+    The convention is defined in common.mapping (Bienvenu et al., npj Comput.
+    Mater. 11, 81, 2025). In the committed regular_MD fixture there are 64
+    type-1 Fe slots and 128 type-2 Mn proxy slots: Fe_down is the majority and
+    n_up/n_total_Fe = 64/192 = 1/3. This is a measured fixture population, not
+    a general assignment of crystallographic sites to spin labels. An ideal
+    8:16 antiparallel site population gives 1/3 OR 2/3 under reversed spin
+    encoding. Counts alone do not establish magnetic order or an oxide phase.
 
     MC atom/swap moves dynamically adjust spin states during the simulation,
     so this function tracks how the magnetic structure equilibrates.
@@ -988,14 +1018,7 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         return atoms[order], ids
 
     def box_lengths(frame):
-        box = np.asarray(frame['box'], dtype=float)
-        if box.shape != (3, 2):
-            raise ValueError(f"MSD timestep {frame['timestep']}: requires orthogonal (3, 2) box bounds; "
-                             'triclinic geometry is unsupported')
-        lengths = box[:, 1] - box[:, 0]
-        if (not np.all(np.isfinite(box)) or not np.all(np.isfinite(lengths))
-                or np.any(lengths <= 0)):
-            raise ValueError(f"MSD timestep {frame['timestep']}: box lengths must be finite and positive")
+        _box, lengths = _orthogonal_box(frame, 'MSD')
         return lengths
 
     box_lengths(first)
@@ -1109,14 +1132,17 @@ def analyze_structure(atoms_array, z_fixed=None, z_surface=None):
 
 
 def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
-                                 surface_percentile=95):
+                                 surface_percentile=95, fe_type=None):
     """
     Detailed oxygen penetration profiling: tracks per-atom O trajectories,
     z-distribution evolution, and adsorption timeline.
 
-    Collects the z-coordinate of every O atom at every frame, sorted by
-    atom ID for consistent tracking. Also records the Fe surface position
-    (95th percentile of Fe z-coords) per frame.
+    Columns follow the sorted union of selected atom IDs across all frames.
+    Missing atoms (or atoms outside the instantaneous species selection) are
+    NaN; no frames are dropped. The surface is the requested percentile of
+    selected metal z-coordinates, with NaN and a warning if none are present.
+    "Crossing" times are first observed below-surface times, including atoms
+    initially below it; missing samples do not imply an interpolated crossing.
 
     This provides the raw data for four visualization modes:
       1. Individual O atom z-trajectories (spaghetti plot)
@@ -1128,88 +1154,102 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
         frames:              list[dict] — Trajectory frames
         col_idx:             dict       — Column index mapping
         dt_fs:               float      — Timestep in femtoseconds
-        o_type:              int        — Atom type number for oxygen
+        o_type:              int or iterable[int] — Oxygen species type(s).
         surface_percentile:  float      — Percentile of Fe z-coords for surface (default 95)
+        fe_type:             int, iterable[int] or None — Explicit surface species.
+                             None retains legacy selection of all non-oxygen types.
 
     Returns:
         dict with keys:
             'time'       : np.array shape (N,)       — Time in ps
-            'o_z_traj'   : np.array shape (N, N_o)   — z of each O atom per frame
+            'o_z_traj'   : np.array shape (N, N_o)   — ID-aligned z, NaN if absent
             'o_ids'      : np.array shape (N_o,)     — O atom IDs (for tracking)
             'surface_z'  : np.array shape (N,)       — Fe surface z per frame
             'min_o_z'    : np.array shape (N,)       — Deepest O z per frame
-            'n_o'        : int                       — Number of O atoms
+            'n_o'        : int                       — Number of distinct selected IDs (union)
+            'n_initial_o': int                       — Initial selected population
+            'n_present_o': np.array shape (N,)       — Selected population per frame
             'cross_times': np.array                  — Time (ps) each O first crossed surface
+            'initial_cross_times': np.array          — First-below times for initial IDs only
         Returns None if no O atoms found or fewer than 2 frames.
     """
     ti = col_idx['type']
     zi = col_idx['z']
     idi = col_idx.get('id')
+    if idi is None:
+        raise ValueError('Penetration profile requires an explicit atom ID (id) column')
+    o_types = _type_ids(o_type, 'o_type')
+    fe_types = None if fe_type is None else _type_ids(fe_type, 'fe_type')
+    if fe_types is not None and o_types & fe_types:
+        raise ValueError('Penetration profile fe_type and o_type selections must not overlap')
+    try:
+        surface_percentile = float(surface_percentile)
+    except (TypeError, ValueError):
+        raise ValueError('surface_percentile must be finite and between 0 and 100') from None
+    if not np.isfinite(surface_percentile) or not 0 <= surface_percentile <= 100:
+        raise ValueError('surface_percentile must be finite and between 0 and 100')
 
     if len(frames) < 2:
         return None
 
     t0 = frames[0]['timestep']
 
-    # Determine Fe type numbers (everything that is not o_type)
-    first_types = frames[0]['atoms'][:, ti].astype(int)
-    fe_types = sorted(set(first_types) - {o_type})
-
-    # First pass: check O atom count
-    o_mask0 = first_types == o_type
-    n_o = int(np.sum(o_mask0))
-    if n_o == 0:
-        return None
-
-    # Collect trajectories
-    time_arr = []
-    o_z_traj = []
-    surface_arr = []
-    o_ids = None
+    time_arr, samples, surface_arr = [], [], []
+    selected_ids = set()
 
     for fr in frames:
+        _orthogonal_box(fr, 'Penetration profile')
         atoms = fr['atoms']
+        ids = atoms[:, idi]
+        if (not np.all(np.isfinite(ids)) or np.any(ids <= 0)
+                or np.any(ids != np.floor(ids)) or len(np.unique(ids)) != len(ids)):
+            raise ValueError(f"Penetration profile timestep {fr['timestep']}: "
+                             'atom IDs must be unique finite positive integers')
         types = atoms[:, ti].astype(int)
-        o_mask = types == o_type
-        fe_mask = np.isin(types, fe_types)
-
-        o_atoms = atoms[o_mask]
-        if len(o_atoms) != n_o:
-            continue  # Skip frames with different O count
-
-        # Sort by ID for consistent tracking
-        if idi is not None:
-            order = np.argsort(o_atoms[:, idi])
-            o_z = o_atoms[order, zi]
-            if o_ids is None:
-                o_ids = o_atoms[order, idi].astype(int)
-        else:
-            o_z = o_atoms[:, zi]
-
+        o_mask = np.isin(types, list(o_types))
+        fe_mask = ~o_mask if fe_types is None else np.isin(types, list(fe_types))
+        o_ids_frame = ids[o_mask].astype(np.int64)
+        o_z = atoms[o_mask, zi]
         fe_z = atoms[fe_mask, zi]
-        surface = float(np.max(fe_z) - SURFACE_OFFSET_A) if len(fe_z) > 0 else 0.0
-
+        if not np.all(np.isfinite(o_z)) or not np.all(np.isfinite(fe_z)):
+            raise ValueError(f"Penetration profile timestep {fr['timestep']}: "
+                             'selected z coordinates must be finite')
+        if len(fe_z):
+            surface = float(np.percentile(fe_z, surface_percentile))
+        else:
+            warnings.warn(f"Penetration profile timestep {fr['timestep']}: no surface species; "
+                          'surface is NaN', RuntimeWarning, stacklevel=2)
+            surface = np.nan
         time_arr.append((fr['timestep'] - t0) * dt_fs / 1000.0)
-        o_z_traj.append(o_z)
+        samples.append((o_ids_frame, o_z))
+        selected_ids.update(o_ids_frame)
         surface_arr.append(surface)
 
-    if len(time_arr) < 2:
+    if not selected_ids:
         return None
 
+    o_ids = np.asarray(sorted(selected_ids), dtype=np.int64)
+    n_o = len(o_ids)
+    o_z_traj = np.full((len(samples), n_o), np.nan)
+    min_o_z = np.full(len(samples), np.nan)
+    n_present_o = np.asarray([len(ids) for ids, _z in samples], dtype=int)
+    for i, (ids, z) in enumerate(samples):
+        o_z_traj[i, np.searchsorted(o_ids, ids)] = z
+        if len(z):
+            min_o_z[i] = np.min(z)
     time_arr = np.array(time_arr)
-    o_z_traj = np.array(o_z_traj)  # (n_frames, n_o)
     surface_arr = np.array(surface_arr)
-    min_o_z = np.min(o_z_traj, axis=1)
-
-    if o_ids is None:
-        o_ids = np.arange(n_o)
 
     # Compute adsorption timeline: when each O first crosses the surface
-    cross_times = []
+    cross_times, initial_cross_times = [], []
+    initial_ids = set(samples[0][0])
     for j in range(n_o):
         below = o_z_traj[:, j] < surface_arr
         if np.any(below):
-            cross_times.append(time_arr[np.argmax(below)])
+            first_below = time_arr[np.argmax(below)]
+            cross_times.append(first_below)
+            if o_ids[j] in initial_ids:
+                initial_cross_times.append(first_below)
     cross_times = np.sort(cross_times) if cross_times else np.array([])
 
     return {
@@ -1219,7 +1259,8 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
         'surface_z': surface_arr,
         'min_o_z': min_o_z,
         'n_o': n_o,
+        'n_initial_o': int(n_present_o[0]),
+        'n_present_o': n_present_o,
         'cross_times': cross_times,
+        'initial_cross_times': np.sort(initial_cross_times),
     }
-
-
