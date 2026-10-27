@@ -1551,10 +1551,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if not self._require_dump():
             return
         s = self.state
+        s.cache.pop('dissociation', None)
         o_type = s._guess_o_type()
-        progress_msg("Detecting O2 dissociation events...")
+        pbc, pbc_src = self._periodicity()
+        progress_msg(f"Detecting O2 pairs (pbc={pbc} from {pbc_src})...")
         result = detect_o2_dissociation(s.dump_frames, s.dump_col_idx,
-                                        dt_fs=s.dt_fs, o_type=o_type)
+                                        dt_fs=s.dt_fs, o_type=o_type, pbc=pbc)
         s.cache['dissociation'] = result
         if len(result['n_o2']) > 0:
             progress_msg(f"Initial O2: {result['n_o2'][0]}, Final O2: {result['n_o2'][-1]}")

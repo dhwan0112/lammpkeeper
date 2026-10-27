@@ -19,7 +19,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_regression_numeric', 'test_parse_log_merge', 'test_dump_reader',
            'test_engine', 'test_periodicity', 'test_skip_reporting', 'test_history',
            'test_job_script_safety', 'test_msd', 'test_species_selection',
-           'test_species_plot_labels']
+           'test_species_plot_labels', 'test_o2_periodicity', 'test_o2_pairing']
 
 
 def main():

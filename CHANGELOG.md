@@ -27,6 +27,23 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 - Human-readable labels distinguish all-spin from spin-resolved results while
   retaining the existing cache keys and output file names.
 
+### Periodic O₂ detection and consistent pairing (PHYS-3, PHYS-5)
+
+- O₂ candidate search and minimum-image distances honor explicit per-axis PBC.
+  The shell passes dump/input boundary metadata; direct calls keep the legacy
+  slab default `(True, True, False)`. Candidate search reuses the periodic RDF
+  helper; existing RDF callers and numeric goldens retain their behavior.
+- Both accelerated and fallback O₂ paths use global shortest-first greedy
+  pairing, with deterministic ID/coordinate tie-breaking. Adding distant atoms
+  or changing backend no longer changes how a local group is paired. This is
+  a distance-cutoff heuristic, not maximum matching or chemical bond order.
+- The atom-type selector accepts an integer or a set of types. Invalid supplied
+  bounds, PBC, cutoff, selected positions or selected IDs fail visibly; parsed
+  triclinic geometry remains an existing separate limitation (GEN-3).
+- Frames with no selected atoms now retain their time point with zero counts
+  and zero fractions instead of silently disappearing. Output keys and file
+  names are unchanged, and failed recomputation invalidates its target cache.
+
 ### MSD atom identity and bulk regression (PHYS-2, PHYS-1)
 
 - MSD selects an initial cohort by atom type (an integer, a set of type IDs, or
