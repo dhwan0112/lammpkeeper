@@ -550,14 +550,23 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 Every GEN item must be **value-preserving on Fe-O** (same goldens) unless it
 says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 
-### GEN-1 · SpeciesMap: the system owns the type map — `open`
+### GEN-1 · SpeciesMap: the system owns the type map — `in-progress (gen/gen-1-species-map; ADR-0002 accepted)`
 - **Now:** `common/mapping.FORCE_FIELDS` ties FF name → fixed Fe/O types.
 - **Target:** `core.SpeciesMap` with label → set of types, built from explicit
-  sources in priority order: run manifest → data-file `Masses` comments → dump
-  `element` column → input `pair_coeff` element list → user. ACE spin channels become
-  groups (`Fe` = {Fe_up, Fe_down}). `mapping.py` becomes a preset provider.
+  sources in the ADR-0001/0002 order: manifest groups/provenance; type labels from
+  input `pair_coeff` → data-file `Masses` comments → dump `element` → user fallback.
+  Contradictory explicit labels warn and reject metadata application. ACE spin
+  channels remain groups (`Fe` = {Fe_up, Fe_down}); `mapping.py` provides presets
+  and legacy compatibility, not generic selection storage.
 - **Done when:** PHYS-4 tests pass through `SpeciesMap`, and an `A`/`B` system
   resolves without any FF name.
+- **Architecture approval (2026-10-28):** manual `/architect` equivalent and two
+  independent read-only reviews exposed the former backlog/ADR precedence
+  conflict. The maintainer approved the recommended contract in
+  `docs/adr/0002-species-map-contract.md`: additive immutable API, ADR-0001 source
+  order, explicit-conflict rejection, optional manifest groups/provenance and
+  managed session lifetime. The target above now follows that approval; no
+  numerical change, fixture edit or golden rebaseline was approved.
 
 ### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
