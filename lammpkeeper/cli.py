@@ -10,7 +10,9 @@ partially reinterpret flags that belong to a sub-CLI.
 
 `lkpr` with no arguments (in a terminal) or `lkpr shell` opens the unified
 interactive session (lammpkeeper.shell), where prep and post are chosen and
-switched from one prompt.
+switched from one prompt. With no arguments outside a terminal, it prints help
+and returns success. The shell owns its interactive behavior; explicit
+prep/post commands retain the argument forwarding described above.
 
 Backwards-compatible entry points remain fully functional and are untouched:
     python -m lammps_pre ...    /  python lammps-pre.py ...
@@ -27,7 +29,7 @@ def _build_parser():
     """Parser used only for `lkpr -h`, `lkpr --version`, and error messages.
 
     Subcommand arguments are intentionally NOT declared here: they are owned by
-    each subcommand's own parser and forwarded untouched by main(). The two
+    each subcommand's own parser and forwarded untouched by main(). The three
     sub-parsers below exist solely so that `lkpr -h` lists the commands.
     """
     parser = argparse.ArgumentParser(
@@ -51,7 +53,7 @@ def _build_parser():
 
 
 def main(argv=None):
-    """Dispatch to the prep/post sub-CLIs, forwarding remaining args verbatim."""
+    """Route shell/help or forward remaining prep/post arguments verbatim."""
     argv = list(sys.argv[1:]) if argv is None else list(argv)
 
     # No subcommand: interactive session in a terminal, help otherwise (exit 0).

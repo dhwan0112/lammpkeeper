@@ -510,7 +510,7 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   that a population ratio alone establishes magnetic order. Spin numbers and
   mapping conventions are unchanged.
 
-### DOC-2 · P3 · Stale design docs and docstrings — `open`
+### DOC-2 · P3 · Stale design docs and docstrings — `in-progress (fix/doc-2-stale-design-docs)`
 - **Evidence (measured, Cursor P0 audit):**
   - `MIGRATION.md` §"Stage 1 — dispatcher-only (current)": the branch is well past Stage 1.
   - "Planned" still lists the `dump_modify element` reverse-map fix, which is marked FIXED in Step C.

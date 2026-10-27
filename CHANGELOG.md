@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Documentation status cleanup (DOC-2)
+
+- Distinguish current migration status from historical dispatcher, mapping and
+  LAMMPS verification records; remove completed work from pending descriptions.
+- Correct the four-space convention, document remaining warned metadata
+  heuristics and clarify supported geometry/RDF semantics without claiming new
+  physics or HPC validation. Update mapping and top-level CLI docstrings.
+- Executable code, tests, fixtures, numeric goldens and accepted ADRs are unchanged.
+
 ### Serialized synthetic slab reference (TEST-3)
 
 - Add a deterministic stdlib generator for a 16-atom, six-frame `pp pp ff` toy
