@@ -474,7 +474,7 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   values, an independent check, and a behaviour test (static-crystal MSD ≈ vibration
   only). **Human gate.**
 
-### TEST-3 · P2 · No slab (`p p f`) reference case — `done (39f0e95)`
+### TEST-3 · P2 · No slab (`p p f`) reference case — `done (PR #17; source 39f0e95)`
 - **Why:** the committed ACE trajectory is bulk. Existing small unit systems
   cover many slab paths, but there is no reusable, serialized slab reference
   exercised end to end through parsing, shell metadata and multiple analyses.

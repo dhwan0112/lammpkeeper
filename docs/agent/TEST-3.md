@@ -1,6 +1,7 @@
 # TEST-3 — serialized synthetic slab reference
 
 Status: implementation, independent review and full verification complete.
+Published as [PR #17](https://github.com/dhwan0112/lammpkeeper/pull/17).
 Baseline: merged main `4db45c4`. Work branch: `fix/test-3-synthetic-slab`.
 
 ## Purpose and scope
