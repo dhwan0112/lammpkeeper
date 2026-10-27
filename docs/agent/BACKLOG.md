@@ -510,7 +510,7 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   that a population ratio alone establishes magnetic order. Spin numbers and
   mapping conventions are unchanged.
 
-### DOC-2 · P3 · Stale design docs and docstrings — `in-progress (fix/doc-2-stale-design-docs)`
+### DOC-2 · P3 · Stale design docs and docstrings — `done (source 382ceee)`
 - **Evidence (measured, Cursor P0 audit):**
   - `MIGRATION.md` §"Stage 1 — dispatcher-only (current)": the branch is well past Stage 1.
   - "Planned" still lists the `dump_modify element` reverse-map fix, which is marked FIXED in Step C.
@@ -520,6 +520,28 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   - `lammpkeeper/cli.py` module docstring is half-updated (describes Stage 1 only).
 - **Done when:** each stale passage is corrected or marked historical, with no
   behaviour change. Tests unchanged.
+- **Correction scope (2026-10-28):** current status is separated from Stage-1/2
+  and old LAMMPS run records; completed reverse-map/fair-comparison/short-run
+  fixes are no longer pending. Four-space style, remaining warned count/FF
+  inference, supported geometry and RDF/MSD semantics are explicit. CLI docs
+  confirm unified shell/nonterminal routing and all three help subparsers;
+  DOC-ALL had already removed much of the original Stage-1-only wording.
+- **Measured static checks:** all 60 Python modules / 735 definitions retain
+  Python 3.9 grammar and English docstrings; executable ASTs match main
+  `625e070`, and non-docstring executable tokens match in both edited modules.
+  Tests, fixtures, goldens, generated-template sources, build settings and
+  accepted ADRs are unchanged. Independent review checked claims against source;
+  its count-fallback wording finding was corrected without changing the parser.
+- **Full verification on committed source `382ceee` (measured):** rich/native
+  **261 passed, 0 failed, 0 skipped**; forced NumPy **258/0/3** (the three
+  native-only checks); default Python **246/0/15** (four ASE and eleven
+  Matplotlib checks). Rich/native and forced NumPy also pass required CLI
+  analyses/plots, prep artifacts and job-script syntax. Default prep smoke
+  explicitly skips without ASE. MDAnalysis/pytest execution and real
+  LAMMPS/HPC remain unverified. Evidence directories (including named skips):
+  `/tmp/opencode/lk-doc2-rich/20261028T003306-382ceee-full`,
+  `/tmp/opencode/lk-doc2-fallback/20261028T003306-382ceee-full`,
+  `/tmp/opencode/lk-doc2-default/20261028T003306-382ceee-full`.
 
 ---
 
