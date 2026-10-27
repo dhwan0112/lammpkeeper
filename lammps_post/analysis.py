@@ -656,21 +656,23 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
     """
     Track O₂ molecule dissociation over time by detecting O-O bonds.
 
-    An O atom is considered part of an O₂ molecule if its nearest O neighbor
-    is within bond_cutoff (default 1.8 A, compared to O₂ bond length ~1.21 A).
-    Dissociated O atoms are those NOT bonded to any other O atom.
+    This is a distance-cutoff pair heuristic, not chemical bond order or a
+    maximum-cardinality matching. Eligible pairs are assigned globally by
+    shortest distance; each selected atom belongs to at most one pair.
+    Unassigned atoms are reported as "dissociated" for API compatibility.
 
     Algorithm:
     1. Extract all O atom positions for each frame
-    2. Find all O-O pairs within bond_cutoff using either:
-       - scipy.cKDTree (O(N log N)) when available and N > 20
-       - Brute-force pairwise distances (O(N²)) as fallback
-    3. Apply greedy pairing: sort pairs by distance, assign closest first
-       (each O can only belong to one O₂ molecule)
+    2. Find periodic candidate pairs using scipy.cKDTree when available and
+       N > 20, or a row-wise brute-force search as fallback.
+    3. Recompute MIC distances on exactly the periodic axes, apply the strict
+       distance < bond_cutoff criterion, and use one global shortest-first
+       greedy pairing rule. Equal distances are ordered by IDs (or canonical
+       coordinates without IDs), independently of input row order or backend.
     4. Unpaired O atoms are classified as "dissociated"
 
-    This analysis reveals the kinetics of O₂ dissociation on the Fe surface —
-    a critical first step in the oxidation process.
+    These instantaneous counts do not track molecule identities or establish
+    chemical reaction events without independent evidence.
 
     Args:
         frames:      list[dict] — Trajectory frames
@@ -775,48 +777,38 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
                       if n_o > 20 else None)
         if candidates is not None:
             ia, ib, _weight = candidates
-            pairs = np.column_stack((ia, ib))
-            if len(pairs) > 0:
-                dr = o_pos[pairs[:, 1]] - o_pos[pairs[:, 0]]
+        else:
+            # Enumerate all close candidates, not a pairing per starting atom.
+            # Keep only nearby indices, avoiding a full N x N distance matrix.
+            left, right = [], []
+            radius = bond_cutoff * (1 + 1e-6) + 1e-6
+            for i in range(n_o - 1):
+                dr = o_pos[i + 1:] - o_pos[i]
                 for dim in periodic_dims:
                     dr[:, dim] -= L[dim] * np.round(dr[:, dim] / L[dim])
-                dists = np.linalg.norm(dr, axis=1)
-                valid = dists < bond_cutoff
+                near = np.flatnonzero(np.linalg.norm(dr, axis=1) <= radius)
+                if len(near):
+                    left.append(np.full(len(near), i, dtype=np.intp))
+                    right.append(near + i + 1)
+            ia = np.concatenate(left) if left else np.empty(0, dtype=np.intp)
+            ib = np.concatenate(right) if right else np.empty(0, dtype=np.intp)
 
-                # Greedy pairing: assign closest pairs first to avoid
-                # incorrect pairings in dense O regions. Each O atom
-                # can belong to at most one O₂ molecule.
-                valid_pairs = pairs[valid]
-                valid_dists = dists[valid]
-                order = np.argsort(valid_dists)  # Shortest distance first
-                for idx in order:
-                    i, j = valid_pairs[idx]
-                    if not bonded[i] and not bonded[j]:
-                        bonded[i] = True
-                        bonded[j] = True
-                        n_o2 += 1
-        else:
-            # --- Slow path: O(N²) brute-force pairwise distance check ---
-            # Used when scipy is not available or for small O atom counts.
-            for i in range(n_o):
-                if bonded[i]:
-                    continue  # Already paired
-                best_j = -1
-                best_dist = bond_cutoff
-                for j in range(i + 1, n_o):
-                    if bonded[j]:
-                        continue
-                    dr = o_pos[j] - o_pos[i]
-                    for dim in periodic_dims:
-                        dr[dim] -= L[dim] * np.round(dr[dim] / L[dim])
-                    dist = np.linalg.norm(dr)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_j = j
-                if best_j >= 0:
-                    bonded[i] = True
-                    bonded[best_j] = True
-                    n_o2 += 1
+        # Both backends pass through exactly the same MIC, strict cutoff and
+        # global greedy rule. Sorted positions make (ia, ib) a deterministic
+        # tie-break by atom IDs, or by canonical coordinates when IDs are absent.
+        dr = o_pos[ib] - o_pos[ia]
+        for dim in periodic_dims:
+            dr[:, dim] -= L[dim] * np.round(dr[:, dim] / L[dim])
+        dists = np.linalg.norm(dr, axis=1)
+        valid = dists < bond_cutoff
+        ia, ib, dists = ia[valid], ib[valid], dists[valid]
+        order = np.lexsort((ib, ia, dists))
+        for idx in order:
+            i, j = ia[idx], ib[idx]
+            if not bonded[i] and not bonded[j]:
+                bonded[i] = True
+                bonded[j] = True
+                n_o2 += 1
 
         time.append(fr['timestep'] * dt_fs / 1000)
         n_o2_list.append(n_o2)
