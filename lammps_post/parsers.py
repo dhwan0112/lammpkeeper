@@ -796,6 +796,8 @@ def parse_log(filepath):
             'block_kinds' : list[str]         — 'md'/'minimize' for each raw block
             'block_ids'   : np.array          — Source block index for each output row
             'timeline_valid': bool           — False for ambiguous/reset or optimizer-only steps
+            'unit_system': str/None          — Explicit echoed metal/real units, never a dump guess
+            'dt_fs': float/None              — Explicit numeric echoed timestep in femtoseconds
             'elapsed_md_steps': np.array/None — Within-block MD increments only,
                                                excluding optimizer iterations;
                                                not time without a confirmed timestep
@@ -832,6 +834,9 @@ def parse_log(filepath):
     stage_times = {}         # Accumulated wall time per stage (seconds)
     kind = 'md'
     block_kind = 'md'
+    unit_system = None
+    timestep = None
+    unresolved_timestep = False
 
     with open(filepath, 'r') as fh:
         for raw in fh:
@@ -841,6 +846,22 @@ def parse_log(filepath):
                 unit = line.split()[1]
                 if unit not in ('metal', 'real'):
                     raise ValueError(f"{filepath}: unsupported units style {unit!r}; supported: metal, real")
+                if unit_system is not None and unit_system != unit:
+                    raise ValueError(f"{filepath}: mixed units styles require separate thermo histories")
+                unit_system = unit
+            if low.startswith('timestep '):
+                try:
+                    value = float(line.split()[1])
+                except ValueError:
+                    # LAMMPS may echo the substituted numeric command next.
+                    unresolved_timestep = True
+                else:
+                    if not np.isfinite(value) or value <= 0:
+                        raise ValueError(f"{filepath}: timestep must be finite and positive")
+                    if timestep is not None and timestep != value:
+                        raise ValueError(f"{filepath}: changing timestep requires separate thermo timelines")
+                    timestep = value
+                    unresolved_timestep = False
 
             # Warnings may be interleaved with a running thermo table. They are
             # diagnostics, not a table terminator or a simulation-stage marker.
@@ -985,7 +1006,14 @@ def parse_log(filepath):
               'raw_blocks': blocks, 'block_kinds': block_kinds,
               'block_ids': np.array(block_ids, dtype=np.int64),
               'timeline_valid': timeline_valid,
-              'elapsed_md_steps': np.array(elapsed) if md_blocks else None}
+              'elapsed_md_steps': np.array(elapsed) if md_blocks else None,
+              'unit_system': unit_system,
+              'dt_fs': (timestep * (1000.0 if unit_system == 'metal' else 1.0)
+                        if timestep is not None and unit_system is not None
+                        and not unresolved_timestep else None)}
+    if unresolved_timestep:
+        warnings.warn(f"{filepath}: unresolved timestep command in log; supply confirmed input metadata",
+                      RuntimeWarning)
 
     for i, h in enumerate(headers):
         # Normalize: 'PotEng' -> 'pe', 'TotEng' -> 'etotal', etc.

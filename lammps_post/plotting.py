@@ -188,6 +188,35 @@ def _save_fig(fig, outpath, dpi=150, save_format=None):
     plt.close(fig)
 
 
+def _require_matplotlib():
+    if not HAS_MPL:
+        raise RuntimeError('matplotlib is required for requested plotting; install the post extra')
+
+
+def _thermo_time(log_data, dt_fs):
+    """Use parser-reconstructed MD increments, never optimizer/reset counters."""
+    step = np.asarray(log_data['step'], dtype=float)
+    if 'elapsed_md_steps' in log_data and log_data['elapsed_md_steps'] is None:
+        raise ValueError('Optimizer-only thermo has no elapsed MD timeline; plot iterations separately')
+    if 'time_ps' in log_data:
+        time = np.asarray(log_data['time_ps'], dtype=float)
+    else:
+        if log_data.get('timeline_valid') is False and 'elapsed_md_steps' not in log_data:
+            raise ValueError('Ambiguous thermo timeline: elapsed MD steps or explicit time_ps required')
+        increments = np.asarray(log_data.get('elapsed_md_steps', step), dtype=float)
+        if dt_fs is None:
+            warnings.warn('Thermo timestep unknown: assuming 1 fs for the time axis; '
+                          'supply confirmed dt_fs', RuntimeWarning, stacklevel=3)
+            dt_fs = 1.0
+        if not np.isfinite(dt_fs) or dt_fs <= 0:
+            raise ValueError('Thermo dt_fs must be finite and positive')
+        time = increments * dt_fs / 1000.0
+    if (time.shape != step.shape or not np.all(np.isfinite(time))
+            or np.any(np.diff(time) < 0)):
+        raise ValueError('Thermo MD time must be finite, aligned with rows and nondecreasing')
+    return time
+
+
 def _pressure_scale(unit_system, pressure_unit):
     """Scale native LAMMPS pressure (metal: bar; real: atm) for display."""
     native_gpa = {'metal': BAR_TO_GPA, 'real': ATM_TO_GPA}
@@ -259,7 +288,8 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
 
     Output: thermo.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -267,13 +297,8 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
     if len(step) == 0:
         return
 
-    # ── Time axis ──
-    if 'time_ps' in d:
-        t = d['time_ps']
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0  # fs -> ps
-    else:
-        t = step * 0.001  # fallback: 1 fs = 0.001 ps (metal default)
+    # Parser MD increments exclude optimizer iterations and preserve resets.
+    t = _thermo_time(d, dt_fs)
 
     # ── Determine layout based on available data ──
     has_vol = 'vol' in d and len(d['vol']) == len(step)
@@ -417,7 +442,8 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
 
     Output: thermostat_summary.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -425,16 +451,8 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
     if len(step) == 0 or 'temp' not in d:
         return
 
-    # Time axis
-    if 'time_ps' in d:
-        t = d['time_ps']
-        xlabel = 'Time (ps)'
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0
-        xlabel = 'Time (ps)'
-    else:
-        t = step * 0.001
-        xlabel = 'Time (ps)'
+    t = _thermo_time(d, dt_fs)
+    xlabel = 'Time (ps)'
 
     if figsize is None:
         figsize = (10, 5)
@@ -497,7 +515,8 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
 
     Output: pressure_analysis.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -515,12 +534,7 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
         return
 
     # Time axis
-    if 'time_ps' in d:
-        t = d['time_ps']
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0
-    else:
-        t = step * 0.001
+    t = _thermo_time(d, dt_fs)
 
     # Pressure scaling
     pscale, punit = _pressure_scale(unit_system, pressure_unit)
@@ -651,7 +665,8 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
     Right panel: oxidized Fe count or fraction (if normalize=True).
     Output: charge_evolution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (13, 5))
@@ -682,7 +697,8 @@ def plot_charge_z(data, output_dir, dpi=150, normalize=False, z_focus=None, figs
     vs z-coordinate. The z_focus parameter crops the view to the relevant region.
     Output: charge_z_distribution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, a1 = plt.subplots(figsize=figsize or (8, 6))
@@ -733,7 +749,8 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
 
     Output: rdf_<pair>.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     file_label = data['label']
@@ -824,7 +841,8 @@ def plot_oar(data, output_dir, dpi=150, normalize=False, figsize=None):
     Left: OAR percentage. Right: absorbed O count or fraction.
     Output: oar.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (12, 5))
@@ -853,7 +871,8 @@ def plot_or(data, output_dir, dpi=150, figsize=None):
     Shows the fraction of Fe atoms with charge > 0.3 e.
     Output: oxidation_rate.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -872,7 +891,8 @@ def plot_penetration(data, output_dir, dpi=150, normalize=False, figsize=None):
     (c) Penetration fraction (adsorbed / (adsorbed + near-surface)).
     Output: penetration.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, axes = plt.subplots(1, 3, figsize=figsize or (16, 5))
@@ -914,7 +934,8 @@ def plot_density(data_list, output_dir, dpi=150, z_focus=None, figsize=None):
     colored line. z_focus crops the view to the relevant surface region.
     Output: density_profile.png
     """
-    if not HAS_MPL or not data_list:
+    _require_matplotlib()
+    if not data_list:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (10, 6))
@@ -939,7 +960,8 @@ def plot_dissociation(data, output_dir, dpi=150, normalize=False, figsize=None):
     if normalize=True). Reveals the kinetics of O₂ bond breaking.
     Output: o2_dissociation.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -964,11 +986,12 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     """
     Plot magnetic species evolution over time (ACE only).
     Top: Fe_up, Fe_down, O populations (counts or fractions).
-    Bottom: spin-up fraction with reference lines for Fe₃O₄ (1/3)
+    Bottom: spin-up fraction with conditional 1:2 population guides, not phase identification
     and antiferromagnetic (1/2) ideal values.
     Output: spin_evolution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(2, 1, figsize=figsize or (12, 8))
@@ -992,8 +1015,11 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     a1.legend()
 
     a2.plot(t, data['up_fraction'], color=CLR['smooth'], lw=1)
-    a2.axhline(1 / 3, color=CLR['up'], ls='--', alpha=0.5, label='Fe3O4 ideal (1/3)')
-    a2.axhline(0.5, color=CLR['down'], ls='--', alpha=0.5, label='AF equal (1/2)')
+    a2.axhline(1 / 3, color=CLR['up'], ls='--', alpha=0.5,
+               label='1:2 population (1/3; encoding dependent)')
+    a2.axhline(2 / 3, color=CLR['up'], ls=':', alpha=0.5,
+               label='2:1 population (2/3; reversed encoding)')
+    a2.axhline(0.5, color=CLR['down'], ls='--', alpha=0.5, label='Equal populations (1/2; order not established)')
     a2.set(xlabel='Time (ps)', ylabel='Fe_up / (Fe_up + Fe_down)',
            title='(b) Spin Up Fraction', ylim=(0, 1))
     a2.legend()
@@ -1008,7 +1034,8 @@ def plot_msd(data, species_name, output_dir, dpi=150, figsize=None):
     MSD growth rate indicates diffusivity: steeper = more mobile atoms.
     Output: msd_<species>.png (e.g., msd_Fe.png)
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -1026,7 +1053,8 @@ def plot_performance(stage_times, output_dir, dpi=150, figsize=None):
     Useful for identifying computational bottlenecks.
     Output: performance.png
     """
-    if not HAS_MPL or not stage_times:
+    _require_matplotlib()
+    if not stage_times:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (13, 5))
@@ -1065,7 +1093,8 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
     Fe surface position marked.
     Output: structure.png
     """
-    if not HAS_MPL or len(atoms_array) == 0:
+    _require_matplotlib()
+    if len(atoms_array) == 0:
         return
 
     types = atoms_array[:, 1].astype(int)
@@ -1126,7 +1155,8 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     frames across the trajectory. z_focus crops the vertical axis.
     Output: snapshots.png (N panels side by side)
     """
-    if not HAS_MPL or not frames:
+    _require_matplotlib()
+    if not frames:
         return
 
     if indices is None:
@@ -1207,7 +1237,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
         z_focus:     tuple — (z_lo, z_hi) to crop z-range, or None for auto
         n_snapshots: int  — Number of time snapshots for ridge plot
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     time = data['time']
@@ -1451,7 +1482,8 @@ def plot_penetration_trend(data, output_dir, dpi=150, figsize=None):
     Each subplot shows a faint raw trace with a bold smoothed overlay.
     Output: penetration_trend.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     t = data['time']

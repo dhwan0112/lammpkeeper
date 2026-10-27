@@ -27,6 +27,7 @@ import importlib.util
 import readline  # noqa: F401  (line editing for input())
 import threading
 import traceback
+import warnings
 
 import numpy as np
 
@@ -2154,17 +2155,49 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 return key in s.cache or any(k.startswith(f'{key}_') for k in s.cache)
         return False
 
+    def _thermo_plot_metadata(self):
+        """Thermo units belong to the log, not an independently loaded dump."""
+        s = self.state
+        log = s.log_data or {}
+        input_units = (s.input_config or {}).get('units')
+        units = log.get('unit_system')
+        if units and input_units and units != input_units:
+            raise ValueError('Conflicting explicit log/input units; load matching run metadata')
+        if units:
+            if s.dump_frames and units != s.ff_info.get('unit_system'):
+                warnings.warn('Log and trajectory unit metadata differ; using explicit log units '
+                              'for thermo plots', RuntimeWarning, stacklevel=2)
+        elif input_units:
+            units = input_units
+        elif s.dump_frames:
+            units = s.ff_info['unit_system']
+            warnings.warn('Native log units are unconfirmed; using trajectory metadata for thermo plots',
+                          RuntimeWarning, stacklevel=2)
+        else:
+            raise ValueError('Native log units are unknown; load an input script with explicit units')
+        dt_fs = log.get('dt_fs')
+        input_dt = (s.input_config or {}).get('dt_fs')
+        if dt_fs is not None and input_dt is not None and not np.isclose(dt_fs, input_dt):
+            raise ValueError('Conflicting explicit log/input timesteps; load matching run metadata')
+        if dt_fs is None:
+            dt_fs = input_dt if input_dt is not None else s.dt_fs
+            if input_dt is None:
+                warnings.warn('Log timestep is unconfirmed; using session timestep for thermo plots',
+                              RuntimeWarning, stacklevel=2)
+        return units, dt_fs
+
     def _iplot_thermo(self, opts, _batch=False, _edit_mode=False):
         """Interactive thermo plot — passes dt_fs, pressure_unit, total_mass_amu, figsize."""
         s = self.state
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
             return
+        unit_system, dt_fs = self._thermo_plot_metadata()
         plot_thermo(s.log_data, s.output_dir, s.dpi,
-                    dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
+                    dt_fs=dt_fs, pressure_unit=s.pressure_unit,
                     total_mass_amu=s.total_mass_amu,
                     figsize=s.figsize_override,
-                    unit_system=s.ff_info.get('unit_system', 'metal'))
+                    unit_system=unit_system)
         self._save_recipe('thermo', {'pressure_unit': s.pressure_unit})
 
     def _iplot_thermostat(self, opts, _batch=False, _edit_mode=False):
@@ -2173,10 +2206,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
             return
+        unit_system, dt_fs = self._thermo_plot_metadata()
         plot_thermostat_summary(s.log_data, s.output_dir, s.dpi,
-                                dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
+                                dt_fs=dt_fs, pressure_unit=s.pressure_unit,
                                 figsize=s.figsize_override,
-                                unit_system=s.ff_info.get('unit_system', 'metal'))
+                                unit_system=unit_system)
         self._save_recipe('thermostat', {'pressure_unit': s.pressure_unit})
 
     def _iplot_pressure(self, opts, _batch=False, _edit_mode=False):
@@ -2230,10 +2264,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if len(steps) and unique_steps and all(step in heights for step in steps):
                 pressure_data = dict(pressure_data,
                                      lz=np.array([heights[step] for step in steps]))
+        unit_system, dt_fs = self._thermo_plot_metadata()
         plot_pressure(pressure_data, s.output_dir, s.dpi,
-                      dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
+                      dt_fs=dt_fs, pressure_unit=s.pressure_unit,
                       slab_z_range=slab_z, figsize=s.figsize_override,
-                      unit_system=s.ff_info.get('unit_system', 'metal'))
+                      unit_system=unit_system)
         self._save_recipe('pressure', {
             'pressure_unit': s.pressure_unit,
             'slab_z_range': slab_z,
