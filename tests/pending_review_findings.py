@@ -1,43 +1,13 @@
-"""Known-failing repros for open BACKLOG items (review of 2026-10-20).
+"""Staging area for known-failing BACKLOG reproductions (not collected).
 
-NOT collected by pytest or tests/run.py (file name does not start with test_).
-Each test FAILS on the current code and must PASS once its item is fixed.
-When fixing an item: move its test into a collected tests/test_*.py module,
-register that module in tests/run.py MODULES, and delete it from here.
+The original 2026-10-20 repros have been moved into registered test modules:
+- PHYS-2/PHYS-1: tests/test_msd.py (initial IDs and explicit per-axis PBC).
+- PHYS-3: tests/test_o2_periodicity.py (periodic candidate search).
+- PHYS-5: tests/test_o2_pairing.py (backend-independent global pairing).
 
-MSD repros (PHYS-2/PHYS-1) are now collected in tests/test_msd.py.
-
-  test_o2_detected_across_x_boundary_on_tree_path  -> PHYS-3
-  test_o2_count_independent_of_total_o_count       -> PHYS-5
+Run tests/run.py to execute them. An empty staging area is not evidence that
+all physics is correct: remaining limitations are recorded in BACKLOG.md.
+New findings may be staged here, then moved into a collected test_*.py module
+registered in tests/run.py when fixed. Keep fixtures and goldens unchanged
+unless their separate human gates are satisfied.
 """
-import numpy as np
-
-import _util  # noqa: F401  (path bootstrap)
-from lammps_post.analysis import detect_o2_dissociation
-
-COL = {'id': 0, 'type': 1, 'x': 2, 'y': 3, 'z': 4}
-
-
-def _fr(rows, box, ts=0):
-    return {'atoms': np.array(rows, float), 'box': np.array(box, float), 'timestep': ts}
-
-
-def test_o2_detected_across_x_boundary_on_tree_path():
-    # Same O2 straddling x=0 (0.6 A apart). Distant O atoms push n_O > 20.
-    box = [[0, 10], [0, 10], [0, 30]]
-    rows = [[1, 2, 0.3, 5, 5], [2, 2, 9.7, 5, 5]]
-    for k in range(19):
-        rows.append([3 + k, 2, (k % 5) * 2 + 1, (k // 5) * 2 + 1, 15 + (k % 3) * 4])
-    r = detect_o2_dissociation([_fr(rows, box)], COL, bond_cutoff=1.5, o_type=2)
-    assert r['n_o2'][0] == 1, f"boundary O2 missed: {r['n_o2'][0]}"
-
-
-def test_o2_count_independent_of_total_o_count():
-    # 4-O chain (gaps 1.0/0.5/1.0 A). Adding 17 far-away O atoms must not
-    # change how the chain is paired (slow path n<=20 vs tree path n>20).
-    box = [[0, 40], [0, 40], [0, 40]]
-    chain = [[1, 2, 5, 5, 5], [2, 2, 6.0, 5, 5], [3, 2, 6.5, 5, 5], [4, 2, 7.5, 5, 5]]
-    far = [[10 + k, 2, 20 + (k % 4) * 4, 20 + (k // 4) * 4, 30] for k in range(17)]
-    a = detect_o2_dissociation([_fr(chain, box)], COL, bond_cutoff=1.5, o_type=2)['n_o2'][0]
-    b = detect_o2_dissociation([_fr(chain + far, box)], COL, bond_cutoff=1.5, o_type=2)['n_o2'][0]
-    assert a == b, f'pairing depends on code path: {a} (n=4) vs {b} (n=21)'
