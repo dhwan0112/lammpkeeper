@@ -1,5 +1,5 @@
 """
-Shared modules for LammpKeeper (Stage 2 extraction target).
+Shared modules already extracted for LammpKeeper's incremental migration.
 
 Modules here are the single source of truth for logic that was previously
 duplicated between lammps_pre (prep) and lammps_post (post). Extraction is
@@ -11,4 +11,8 @@ Currently extracted:
     mapping  — canonical per-force-field type<->element convention (was
                duplicated across prep FF_PRESETS, post detect_forcefield, and
                post spin analysis)
+    hosted   — child-shell navigation and bounded, opt-out readline history
+
+Keep this initializer free of eager optional imports: importing a lightweight
+mapping must not require ASE, matplotlib or Rich.
 """

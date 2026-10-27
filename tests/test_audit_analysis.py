@@ -14,12 +14,14 @@ COL = dict(id=0, type=1, x=2, y=3, z=4)
 
 
 def _frame(rows, step=0, length=10):
+    """Build a cubic frame with explicit volume for independent normalization math."""
     import numpy as np
     return dict(atoms=np.asarray(rows, float).reshape(-1, 5), timestep=step,
                 box=np.asarray([(0, length)] * 3, float))
 
 
 def _reject(call, needle):
+    """Require an informative failure rather than a silently usable bad result."""
     try:
         call()
     except ValueError as exc:
@@ -29,21 +31,26 @@ def _reject(call, needle):
 
 
 def test_rdf_ordered_same_species_exact():
+    """Two distinct atoms contribute two ordered pairs, normalized by N times rho."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
     fr = _frame([[1, 4, 4, 5, 5], [2, 4, 5, 5, 5]])
     got = compute_rdf([fr], COL, 4, 4, r_max=2, n_bins=2, z_pbc=True)
+    # The occupied bin spans radii 1 to 2: its volume is 4*pi/3*(8-1).
+    # The contract uses rho=N/V, not a finite-population (N-1)/V correction.
     shell = 4 * np.pi / 3 * 7
     np.testing.assert_allclose(got['g'], [0, 2 / (2 * (2 / 1000) * shell)])
 
 
 def test_rdf_variable_volume_arithmetic_ensemble_exact():
+    """Average per-frame density-normalized curves, not pooled pair exposures."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
     rows = [[1, 4, 4, 5, 5], [2, 9, 5, 5, 5]]
     frames = [_frame(rows), _frame(rows, 1, 20)]
+    # Each frame has one A-B pair; inverse density makes its curve scale with V.
     expected = (1000 + 8000) / (2 * (4 * np.pi / 3 * 7))
     for order in (frames, frames[::-1]):
         got = compute_rdf(order, COL, 4, 9, r_max=2, n_bins=2, z_pbc=True)
@@ -52,6 +59,7 @@ def test_rdf_variable_volume_arithmetic_ensemble_exact():
 
 
 def test_rdf_variable_population_arithmetic_ensemble_exact():
+    """Doubling target atoms and bin counts together leaves the normalized RDF fixed."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -64,6 +72,7 @@ def test_rdf_variable_population_arithmetic_ensemble_exact():
 
 
 def test_rdf_seeded_ideal_gas_constant_and_variable_volume():
+    """Uniform random ensembles give an approximately unit, order-invariant plateau."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -78,6 +87,10 @@ def test_rdf_seeded_ideal_gas_constant_and_variable_volume():
                              for fr in frames[3:]]
     for fr in variable[3:]:
         fr['atoms'][:, 2:] *= 2
+    # Shell volume grows as the difference of cubed edges. Volume weighting
+    # aggregates counts fairly; the outer bins avoid sparse near-origin noise.
+    # With N/V same-species normalization, the ideal finite-N level is (N-1)/N,
+    # well inside the statistical band around one used here.
     weights = np.diff(np.linspace(0, 6, 31) ** 3)
     for ensemble in (frames, variable):
         for a, b in ((4, 4), (4, 9)):
@@ -92,6 +105,7 @@ def test_rdf_seeded_ideal_gas_constant_and_variable_volume():
 
 
 def test_rdf_explicit_xy_nonperiodic_and_legacy_fallback():
+    """Explicit nonperiodic flags override the legacy periodic-x/y convention."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis as a
@@ -109,6 +123,7 @@ def test_rdf_explicit_xy_nonperiodic_and_legacy_fallback():
 
 
 def test_rdf_scipy_matches_fallback_all_axis_combinations():
+    """Accelerated and brute-force RDFs agree for mixed axes and type unions."""
     _util.require_numpy()
     import itertools
     import numpy as np
@@ -116,6 +131,7 @@ def test_rdf_scipy_matches_fallback_all_axis_combinations():
     try:
         import scipy.spatial  # noqa: F401
     except ImportError:
+        # A fallback-only environment cannot establish cross-backend equality.
         _util.skip('scipy unavailable: accelerated RDF equality requires scipy')
     rng = np.random.default_rng(777)
     rows = np.column_stack((np.arange(1, 81), np.repeat((4, 9), 40),
@@ -130,6 +146,7 @@ def test_rdf_scipy_matches_fallback_all_axis_combinations():
 
 
 def test_rdf_missing_species_frame_warns_and_reports_used_count():
+    """Excluded empty selections must warn and not inflate the reported ensemble."""
     _util.require_numpy()
     from lammps_post.analysis import compute_rdf
     frames = [_frame([[1, 4, 4, 5, 5], [2, 9, 5, 5, 5]]),
@@ -142,6 +159,7 @@ def test_rdf_missing_species_frame_warns_and_reports_used_count():
 
 
 def test_rdf_rejects_invalid_pbc_geometry_and_positions():
+    """Malformed axes, retained tilt and nonfinite coordinates must fail visibly."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -156,12 +174,14 @@ def test_rdf_rejects_invalid_pbc_geometry_and_positions():
 
 
 def _profile_frames():
+    """Keep one submerged ID while replacing an above-surface atom by a new ID."""
     f0 = _frame([[1, 4, 0, 0, 10], [10, 9, 0, 0, 12], [20, 9, 0, 0, 8]])
     f1 = _frame([[1, 4, 0, 0, 10], [20, 9, 0, 0, 8], [30, 9, 0, 0, 12]], 1)
     return [f0, f1]
 
 
 def test_profile_replacement_tracks_id_union_without_false_crossing():
+    """An ID union with NaN absences prevents row replacement becoming a crossing."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration_profile
@@ -173,6 +193,7 @@ def test_profile_replacement_tracks_id_union_without_false_crossing():
 
 
 def test_profile_population_changes_and_empty_frames_are_retained():
+    """An empty middle sample remains a time-aligned NaN gap, not a skipped frame."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration_profile
@@ -186,6 +207,7 @@ def test_profile_population_changes_and_empty_frames_are_retained():
 
 
 def test_profile_can_start_empty_then_track_new_ids():
+    """Late submerged arrivals have events but never join the initial cohort."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration_profile
@@ -199,6 +221,7 @@ def test_profile_can_start_empty_then_track_new_ids():
 
 
 def test_profile_requires_valid_unique_ids():
+    """Persistent penetration trajectories require explicit, unambiguous identities."""
     _util.require_numpy()
     from lammps_post.analysis import analyze_penetration_profile
     frames = _profile_frames()
@@ -210,6 +233,7 @@ def test_profile_requires_valid_unique_ids():
 
 
 def test_profile_consumes_percentile_and_explicit_surface_species_union():
+    """Surface percentiles use only the configured type union and interpolation."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration_profile
@@ -217,6 +241,8 @@ def test_profile_consumes_percentile_and_explicit_surface_species_union():
             for k, z in enumerate(list(range(10)) + [100])]
     rows += [[100, 9, 0, 0, 60], [101, 12, 0, 0, 60], [102, 99, 0, 0, 1000]]
     frames = [_frame(rows, length=1200), _frame(rows, 1, 1200)]
+    # Eleven surface heights put the 95th percentile halfway between 9 and
+    # 100; the unrelated type at 1000 must not influence that interpolation.
     for pct, expected in ((50, 5), (90, 9), (95, 54.5)):
         got = analyze_penetration_profile(frames, COL, o_type={9, 12},
                                           fe_type={4, 7}, surface_percentile=pct)
@@ -225,6 +251,7 @@ def test_profile_consumes_percentile_and_explicit_surface_species_union():
 
 
 def test_profile_missing_surface_is_nan_and_warns_not_zero():
+    """Absent surface atoms yield a warning and unknown height, never a zero plane."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration_profile
@@ -241,6 +268,7 @@ def test_profile_missing_surface_is_nan_and_warns_not_zero():
 
 
 def test_penetration_summary_and_trend_retain_empty_samples():
+    """Summary and trend preserve zero populations with undefined height metrics."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_penetration, analyze_penetration_trend
@@ -254,6 +282,7 @@ def test_penetration_summary_and_trend_retain_empty_samples():
 
 
 def test_msd_o2_reject_retained_tilt_metadata():
+    """Orthogonal-looking bounds cannot hide separately retained triclinic tilt."""
     _util.require_numpy()
     from lammps_post.analysis import analyze_msd, detect_o2_dissociation
     frames = [dict(fr, tilt=(1, 0, 0)) for fr in _profile_frames()]
@@ -262,6 +291,7 @@ def test_msd_o2_reject_retained_tilt_metadata():
 
 
 def test_domain_type_union_filters_match_flattened_species():
+    """Relabeling unions to scalar species is an independent selection equivalence."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis as a
@@ -272,6 +302,8 @@ def test_domain_type_union_filters_match_flattened_species():
     for fr in flat:
         fr['atoms'][np.isin(fr['atoms'][:, 1], [4, 7]), 1] = 1
         fr['atoms'][np.isin(fr['atoms'][:, 1], [9, 12]), 1] = 2
+    # Preserve coordinates and charges while collapsing labels only, so each
+    # comparison isolates union membership rather than changing the physics.
     for func, kwargs in ((a.compute_oar, dict(z_surf=6)),
                          (a.analyze_penetration, dict(surface_z=6)),
                          (a.analyze_penetration_trend, dict(surface_z=6)),

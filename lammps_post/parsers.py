@@ -32,6 +32,10 @@ import numpy as np
 
 from lammpkeeper.common.mapping import FORCE_FIELDS, type_to_label
 
+# Dump/data geometry here is orthogonal only; arbitrary property columns do not
+# imply support for tilted cells, scaled-coordinate conversion or every atom style.
+# Units and species provenance come from input/log metadata when available;
+# detect_forcefield retains a visibly warned, domain-specific legacy guess.
 # Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
 _native = None
 if not os.environ.get('LKPR_NO_NATIVE'):
@@ -190,7 +194,11 @@ class DumpReader:
     frame changes the column layout.
     """
 
+    # Snapshot source identity and fix the retained column layout for this reader.
+    # Selection follows file order, not the caller's requested order; unknown
+    # requested names are ignored. Only float32/float64 use the native backend.
     def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None):
+        """Bind an unchanged source to fixed columns, dtype and validated limits."""
         stride, max_frames = _validate_frame_limits(stride, max_frames)
         self.filepath = filepath
         self._source_signature = self._signature()
@@ -212,7 +220,10 @@ class DumpReader:
         self._element_col = self._usecols[self._element_pos] if self.has_elements else None
         self._native = _native if self.dtype in (np.float64, np.float32) else None
 
+    # Preflight the first frame without materializing atom rows; empty files have
+    # no layout. Later headers must match this layout and the boundary metadata.
     def _read_layout(self):
+        """Preflight the first header and boundary flags; return [] for an empty file."""
         # The first frame's 'ITEM: BOX BOUNDS' line also gives the boundary
         # flags; LAMMPS does not change them during a run.
         self.boundary = None
@@ -225,17 +236,24 @@ class DumpReader:
                     raise ValueError(f"{self.filepath}: invalid dump header: {line.strip()}")
         return []
 
+    # Stat identity includes replacement, size and nanosecond modification/change
+    # metadata. This is a mutation guard, not a content hash or a file lock.
     def _signature(self):
+        """Return stat-based source identity for detecting stale indexes and caches."""
         st = os.stat(self.filepath)
         return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
+    # Refuse stale offsets/cache entries instead of mixing trajectory revisions.
     def _check_source(self):
+        """Raise if source metadata no longer matches this reader's snapshot."""
         if self._signature() != self._source_signature:
             raise ValueError(f"{self.filepath}: dump source changed; create a new DumpReader/index/cache")
 
     def _read_header(self, stream, first=False):
         """Shared structural/geometry preflight for streaming and indexed paths."""
+        # Adapt both text streams and binary mmap streams to stripped header text.
         def line():
+            """Read one stripped header line from either text or binary streams."""
             value = stream.readline()
             return value.decode().strip() if isinstance(value, bytes) else value.strip()
 
@@ -248,6 +266,8 @@ class DumpReader:
         bounds_header = line()
         if bounds_header.split()[:3] != ['ITEM:', 'BOX', 'BOUNDS']:
             raise ValueError(f"{self.filepath}: invalid box header at step {timestep}")
+        # Reject restricted/general triclinic markers and extra bound values;
+        # dropping tilt would otherwise produce plausible but incorrect geometry.
         tokens = bounds_header.split()[3:]
         if any(t in tokens for t in ('xy', 'xz', 'yz', 'abc', 'origin')):
             raise ValueError(f"{self.filepath}: triclinic dump boxes are not supported (step {timestep})")
@@ -290,6 +310,9 @@ class DumpReader:
         Returns a DumpIndex with per-frame timestep, natoms, box and the byte
         span of the atom block, which read_frame() uses for random access.
         """
+        # Index every source frame; stride/max_frames belong to the later view.
+        # This validates headers, not atom payloads: malformed rows fail on load.
+        # Only offsets/metadata survive the mmap context; no borrowed mmap views do.
         idx = DumpIndex()
         self._check_source()
         if os.path.getsize(self.filepath) == 0:
@@ -318,6 +341,8 @@ class DumpReader:
 
     def read_frame(self, index, k):
         """Parse frame k of `index` (from self.index()) with one seek + read."""
+        # The index must belong to this reader/source. Copy bounds so mutating a
+        # returned frame cannot change the index's geometry for future reads.
         self._check_source()
         start, end = int(index.block_start[k]), int(index.block_end[k])
         natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
@@ -335,10 +360,16 @@ class DumpReader:
 
     def frame_nbytes(self, natoms):
         """Estimated memory of one parsed frame (atoms + 2-letter elements)."""
+        # Excludes dict/box overhead and underestimates longer element strings;
+        # cache insertion below also measures the actual parsed array sizes.
         per_atom = len(self.columns) * self.dtype.itemsize + (8 if self.has_elements else 0)
         return natoms * per_atom
 
+    # Reopen for each pass, apply stride to source-frame positions, and stop after
+    # the requested number of yielded frames. None/0 means unlimited, not empty.
+    # Skipped atom rows are advanced without numeric conversion or payload checks.
     def __iter__(self):
+        """Stream selected frames from the unchanged source, reopening for each pass."""
         self._check_source()
         n_seen = 0
         n_yielded = 0
@@ -375,6 +406,8 @@ class DumpReader:
 
     def _parse_block(self, block, natoms, timestep):
         """Parse the first natoms lines of the atom block `block` (bytes)."""
+        # Validate the complete supplied block before either backend: blank,
+        # missing or surplus rows are errors, not silently skipped observations.
         n_numeric = len(self._numeric_pos)
         lines = block.decode().splitlines()
         if len(lines) != natoms or any(not row.strip() for row in lines):
@@ -404,6 +437,9 @@ class DumpReader:
             empty_elements = np.empty(0, dtype='U1') if self.has_elements else None
             return np.empty((0, n_numeric), dtype=self.dtype), empty_elements
 
+        # Selected identity columns must round-trip exactly through the requested
+        # homogeneous dtype; float32 therefore cannot represent every large ID.
+        # Unselected columns need not be numeric and are not converted.
         if self._native is not None:
             try:
                 values, elements, rows = self._native.parse_block(
@@ -412,6 +448,8 @@ class DumpReader:
             except ValueError:
                 rows = -1
             if rows == natoms:
+                # NumPy retains the returned bytearray as backing storage; it does
+                # not borrow the temporary input block or copy numeric values here.
                 atoms = np.frombuffer(values, dtype=self.dtype).reshape(natoms, n_numeric)
                 if elements is not None:
                     elements = np.array(elements)
@@ -453,13 +491,20 @@ class DumpReader:
 class DumpIndex:
     """Per-frame metadata from DumpReader.index(): arrays of length n_frames."""
 
+    # Accumulate scan results before converting them to compact typed arrays.
     def __init__(self):
+        """Create an unfinished metadata builder with no frame payloads."""
         self._rows = []
 
+    # Append one frame's metadata and half-open atom-payload byte interval.
     def add(self, timestep, natoms, box, block_start, block_end):
+        """Append source metadata and the half-open byte span of one atom block."""
         self._rows.append((timestep, natoms, box, block_start, block_end))
 
+    # Seal the builder once, releasing row tuples; consumers treat the public
+    # arrays as read-only even though NumPy write protection is not enforced.
     def finalize(self):
+        """Convert accumulated rows to typed arrays once and return this index."""
         rows = self._rows
         self.timesteps = np.array([r[0] for r in rows], dtype=np.int64)
         self.natoms = np.array([r[1] for r in rows], dtype=np.int64)
@@ -469,7 +514,9 @@ class DumpIndex:
         del self._rows
         return self
 
+    # Frame count is available after finalization, including for an empty file.
     def __len__(self):
+        """Return the frame count of a finalized index."""
         return len(self.timesteps)
 
 
@@ -489,7 +536,9 @@ class _FrameStore:
     re-parsing only some frames, and analyze-all already shares one pass.
     """
 
+    # Own the reader/index/cache once; slices reuse this same store and transform.
     def __init__(self, reader, index, cache_bytes, transform):
+        """Create the cache, budget and optional load transform shared by all views."""
         self.reader = reader
         self.index = index
         self.cache_bytes = cache_bytes
@@ -499,7 +548,11 @@ class _FrameStore:
         self.cached_bytes = 0
         self._lock = threading.Lock()
 
+    # Check source freshness even on cache hits, then load/transform on misses.
+    # Returned frame dicts/arrays are shared references, not defensive copies.
+    # The lock protects insertion/accounting; concurrent misses may both parse.
     def get(self, k):
+        """Return a source-checked frame, transforming misses and caching if allowed."""
         self.reader._check_source()
         fr = self.cache.get(k)
         if fr is not None:
@@ -514,7 +567,10 @@ class _FrameStore:
                 self.cached_bytes += nbytes
         return fr
 
+    # Invalidate transformed frames across all views; budget/policy are unchanged.
+    # Transform changes and clearing are intended outside an active shared pass.
     def clear(self):
+        """Release cached frames for every view without changing the cache policy."""
         self.cache.clear()
         self.cached_bytes = 0
 
@@ -543,9 +599,12 @@ class LazyFrames(Sequence):
                      inherits reader.max_frames. Explicit None/0 means all.
     """
 
+    # Root views choose source positions and all-or-nothing cache policy. Slices
+    # inherit the store rather than allocating a second budget or reindexing.
     def __init__(self, reader, index=None, cache_bytes=DEFAULT_CACHE_BYTES,
                  stride=_INHERIT_READER_LIMIT, max_frames=_INHERIT_READER_LIMIT,
                  transform=None, _store=None, _positions=None):
+        """Build a limited root view or reuse an existing store for a lazy slice."""
         new_store = _store is None
         if new_store:
             if stride is _INHERIT_READER_LIMIT:
@@ -564,21 +623,31 @@ class LazyFrames(Sequence):
         if new_store:
             _store.keep = self.fits_in_cache
 
+    # Length reflects the selected view, not the complete source index.
     def __len__(self):
+        """Return the number of source positions selected by this view."""
         return len(self._positions)
 
+    # Range indexing supplies negative-index/bounds behavior; slicing stays lazy
+    # and shares cached frame objects with its parent view.
     def __getitem__(self, i):
+        """Load an indexed frame or return a lazy slice sharing the same cache."""
         if isinstance(i, slice):
             return LazyFrames(None, _store=self._store, _positions=self._positions[i])
         return self._store.get(self._positions[i])
 
+    # Only this view's active context redirects iteration to shared delivery;
+    # random access and independently constructed slices continue loading normally.
     def __iter__(self):
+        """Iterate in view order, subscribing to its shared producer when active."""
         shared = self._shared
         if shared is not None:
             return shared.subscribe()
         return self._iter_range(0, len(self._positions))
 
+    # Yield a half-open interval in view coordinates through the shared store.
     def _iter_range(self, begin, end):
+        """Load a half-open interval in view coordinates without shared delivery."""
         get = self._store.get
         for k in self._positions[begin:end]:
             yield get(k)
@@ -595,6 +664,9 @@ class LazyFrames(Sequence):
         order. `depth` frames may queue per iterator, so memory stays bounded.
         Random access and slices are unaffected.
         """
+        # Context exit disables new subscriptions and requests producer shutdown.
+        # Consumers should finish/close their iterators while the context is live;
+        # this context does not turn cancellation into a synthetic successful EOF.
         if depth < 1:
             raise ValueError('shared_pass depth must be >= 1')
         shared = _SharedPass(self, depth)
@@ -607,15 +679,20 @@ class LazyFrames(Sequence):
 
     def set_transform(self, transform):
         """Apply transform(frame) -> frame to every frame on load; clears the cache."""
+        # Transform replacement affects slices too because they share the store.
         self._store.transform = transform
         self._store.clear()
 
     @property
+    # Expose the source reader/layout without triggering atom parsing.
     def reader(self):
+        """Expose the shared source reader without loading atom payloads."""
         return self._store.reader
 
     @property
+    # Return selected source step labels, not elapsed time or inferred MD duration.
     def timesteps(self):
+        """Return selected source step labels, not inferred elapsed MD time."""
         return self._store.index.timesteps[list(self._positions)]
 
     @property
@@ -630,29 +707,46 @@ class LazyFrames(Sequence):
         return int(self._store.reader.frame_nbytes(int(natoms.sum())))
 
     @property
+    # Report the shared store's configured array-memory budget in bytes.
     def cache_bytes(self):
+        """Return the array-memory budget shared by this view and its slices."""
         return self._store.cache_bytes
 
     @property
+    # Estimate whether this view fits; root construction fixes the store policy.
+    # A smaller slice does not retroactively enable its parent's disabled cache.
     def fits_in_cache(self):
+        """Report whether this view's estimated array storage fits the shared budget."""
         return self.estimated_bytes <= self._store.cache_bytes
 
 
 _END = object()
 
 
+# Queue envelope preserves a producer exception for re-raising by each consumer.
 class _Failure:
+    """Carry a producer exception through subscriber queues for re-raising."""
+    # Keep the original exception rather than replacing it with a success marker.
     def __init__(self, exc):
+        """Retain the original exception rather than a successful end marker."""
         self.exc = exc
 
 
+# One bounded delivery queue per active iterator provides producer backpressure.
 class _Subscriber:
+    """Bound one iterator's queued frames and expose cooperative cancellation."""
+    # Closed is a cancellation signal checked during timed producer queue writes.
     def __init__(self, depth):
+        """Create an open subscription with at most depth queued deliveries."""
         self.queue = queue.Queue(maxsize=depth)
         self.closed = False
 
+    # Retry full queues until delivery, explicit iterator closure or global stop.
+    # A still-open slow consumer intentionally throttles the shared producer.
     def put(self, item, stop):
-        # Poll so a subscriber that stopped iterating cannot block the producer.
+        """Deliver with backpressure until accepted, closed or globally cancelled."""
+        # Poll so explicit subscription closure or global shutdown can interrupt
+        # backpressure; a paused but still-open consumer can still throttle us.
         while not self.closed and not stop.is_set():
             try:
                 self.queue.put(item, timeout=0.05)
@@ -660,7 +754,10 @@ class _Subscriber:
             except queue.Full:
                 continue
 
+    # Cancel this subscription and release queued frame references; other
+    # subscribers remain active and their queues are not drained here.
     def close(self):
+        """Cancel this subscription and release its queued frame references."""
         self.closed = True
         try:
             while True:
@@ -672,7 +769,10 @@ class _Subscriber:
 class _SharedPass:
     """Producer/subscriber state behind LazyFrames.shared_pass()."""
 
+    # Own producer progress, subscription membership and a cooperative stop event.
+    # The membership/progress lock is not held while parsing or blocking on queues.
     def __init__(self, view, depth):
+        """Initialize cooperative producer state for one view and bounded consumers."""
         self._view = view
         self._depth = depth
         self._lock = threading.Lock()
@@ -682,12 +782,17 @@ class _SharedPass:
         self._stop = threading.Event()
         self.frames_parsed = 0
 
+    # Defer actual registration until the iterator is advanced, not merely made.
     def subscribe(self):
+        """Yield every frame, deferring subscription registration until first advance."""
         # Register only on first next(). Closing an unstarted generator otherwise
         # never enters _consume's finally and leaves a permanently full queue.
         yield from self._subscribe_started()
 
+    # Atomically join at the next producer position; late arrivals replay earlier
+    # frames independently, or the whole view if production has already finished.
     def _subscribe_started(self):
+        """Register at current producer progress or return an independent replay."""
         n = len(self._view)
         with self._lock:
             start = self._next
@@ -703,7 +808,10 @@ class _SharedPass:
             return self._view._iter_range(0, n)
         return self._consume(sub, start)
 
+    # Replay the missed prefix, consume shared frames in order, and always cancel
+    # on exhaustion/error/explicit generator close. Failure envelopes re-raise.
     def _consume(self, sub, start):
+        """Replay missed frames, consume deliveries and always close the subscription."""
         try:
             # Frames parsed before this iterator joined are read independently.
             yield from self._view._iter_range(0, start)
@@ -717,7 +825,11 @@ class _SharedPass:
         finally:
             sub.close()
 
+    # Parse once per shared position and fan out the same read-only-by-contract
+    # frame object. Completion and failures are distinct queue messages; if all
+    # subscribers close, a future subscriber may restart at the saved position.
     def _produce(self):
+        """Fan out parsed frames, completion or failures to currently open consumers."""
         get = self._view._store.get
         positions = self._view._positions
         n = len(positions)
@@ -749,7 +861,10 @@ class _SharedPass:
             for s in failed:
                 s.put(_Failure(e), self._stop)
 
+    # Request cancellation and wait at most five seconds; this is cooperative,
+    # not forced thread termination, and cannot interrupt an in-progress file read.
     def shutdown(self):
+        """Request cooperative stop and wait up to five seconds for the producer."""
         self._stop.set()
         producer = self._producer
         if producer is not None:
@@ -820,7 +935,10 @@ def parse_log(filepath):
 
     block_kinds = []
 
+    # Freeze a completed table and append its captured MD/minimization identity
+    # in the same order as raw_blocks, independently of printable stage labels.
     def _as_block(headers, rows, stages):
+        """Materialize one table and record its captured MD/minimization identity."""
         # Nested float lists cost ~32 bytes/value; keep finished blocks as ndarrays.
         block_kinds.append(block_kind)
         return (headers, np.array(rows, dtype=np.float64), stages)
@@ -838,6 +956,9 @@ def parse_log(filepath):
     timestep = None
     unresolved_timestep = False
 
+    # Only explicit echoed units/timestep commands establish time provenance.
+    # A later unresolved timestep invalidates dt_fs until a numeric echo resolves
+    # it; mixed units or changing numeric dt cannot share this single timeline.
     with open(filepath, 'r') as fh:
         for raw in fh:
             line = raw.strip()
@@ -950,6 +1071,9 @@ def parse_log(filepath):
 
     # Keep raw blocks exactly as written. Optimizer iterations are not physical
     # MD time even when their thermo_style happens to match the MD layout.
+    # Source block IDs remain stable after filtering; compatible headers are
+    # chosen from the longest MD table (or optimizer tables only if no MD exists).
+    # elapsed_md_steps sums within-MD-block deltas, not unknown inter-block gaps.
     md_blocks = [(i, b) for i, b in enumerate(blocks) if block_kinds[i] == 'md']
     candidates = md_blocks or list(enumerate(blocks))
     headers = max(candidates, key=lambda item: len(item[1][1]))[1][0]
@@ -1050,6 +1174,10 @@ def parse_data_file(filepath):
                 Returns empty array if no box bounds found.
         masses: dict[int, float] — Atom type ID -> mass in atomic mass units.
     """
+    # This is a structural subset reader: topology/velocities are not returned,
+    # charge/molecule/image fields are validated but not used to unwrap positions.
+    # Box bounds carry no PBC flags or unit style; callers must obtain those from
+    # run metadata rather than infer them from lengths or numeric mass values.
     atoms, bounds, masses = [], {}, {}
     section, atom_style, declared_atoms, declared_types = None, None, None, None
     seen_ids = set()
@@ -1198,6 +1326,10 @@ def parse_input(filepath):
             'reaction_type': str          — Inferred reaction description
             'z_variables'  : dict         — {name: float} for z-coordinate variables
     """
+    # Static extraction is deliberately not a LAMMPS interpreter: no loops,
+    # jumps, functions or simulation-dependent equal-variable evaluation run.
+    # Some descriptive fields retain unresolved tokens; values required for
+    # includes, species mapping and timestep use the strict resolvers below.
     config = {
         'units': None, 'atom_style': None, 'boundary': [],
         'pair_style': None, 'pair_coeff': None, 'element_map': {},
@@ -1212,7 +1344,10 @@ def parse_input(filepath):
 
     # Includes are expanded lazily so definitions before an include can resolve
     # its filename. Missing files, include cycles and lexical errors propagate.
+    # Yield tokenized logical commands, preserving quoted comment/continuation
+    # characters; canonical include paths guard cycles with a 64-level ceiling.
     def _read_lines(fpath, parents=()):
+        """Yield lexed commands with relative includes expanded and cycles rejected."""
         fpath = os.path.realpath(fpath)
         if fpath in parents or len(parents) >= 64:
             raise ValueError(f"{fpath}: cyclic or excessive include nesting")
@@ -1265,7 +1400,10 @@ def parse_input(filepath):
     arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
                   ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod}
 
+    # Resolve supported static equal/string/single-value index variables only;
+    # reject unknown names, dependency cycles and excessive recursive references.
     def _variable(name, stack):
+        """Resolve supported static variable styles, rejecting cycles and unknowns."""
         if name in stack or len(stack) > 32 or name not in config['variables']:
             raise ValueError(f"{filepath}: cannot resolve variable {name!r} (unknown/cyclic)")
         style, _, value = config['variables'][name].partition(' ')
@@ -1275,7 +1413,10 @@ def parse_input(filepath):
             return _resolve_string(value, stack + (name,))
         raise ValueError(f"{filepath}: cannot resolve variable {name!r} with style {style}")
 
+    # Substitute ${name}/single-character $X via the callback's current dependency
+    # stack. Leftover dollar syntax (including runtime substitutions) is rejected.
     def _resolve_string(value, stack=()):
+        """Expand named static substitutions and reject remaining dollar syntax."""
         value = reference.sub(lambda m: _variable(m.group(1) or m.group(2), stack), value)
         if '$' in value:
             raise ValueError(f"{filepath}: cannot resolve LAMMPS substitution {value!r}")
@@ -1283,6 +1424,8 @@ def parse_input(filepath):
 
     def _resolve_numeric(value, stack=()):
         """Bounded arithmetic only: no eval, functions, attributes or runtime data."""
+        # Length/node/exponent/result limits bound static arithmetic; these are
+        # supported-expression limits, not an attempt to emulate all LAMMPS math.
         value = _resolve_string(value, stack)
         try:
             if len(value) > 4096:
@@ -1291,7 +1434,10 @@ def parse_input(filepath):
             if len(list(ast.walk(tree))) > 64:
                 raise ValueError('expression too complex')
 
+            # Recursively evaluate only numeric constants, v_name references and
+            # whitelisted operators; every intermediate must stay finite/bounded.
             def calculate(node):
+                """Evaluate a whitelisted AST node with finite intermediate results."""
                 if isinstance(node, ast.Constant) and type(node.value) in (int, float):
                     result = float(node.value)
                 elif isinstance(node, ast.Name) and node.id.startswith('v_'):
@@ -1576,7 +1722,10 @@ def detect_forcefield(columns, col_idx, frames):
                 raise ValueError(f"type {tid} has inconsistent explicit dump element labels")
             explicit_map[tid] = str(label)
 
+    # Finalize each heuristic branch: preserve authoritative explicit labels
+    # unless canonical proxy slots match, and warn about all inferred metadata.
     def _metadata(info):
+        """Preserve explicit species labels where applicable and warn about guesses."""
         # Registry aliases apply only when explicit type -> element assignments
         # agree with their canonical slots. The same element set in another
         # order (or under different type IDs) is authoritative, not a proxy map.
@@ -1680,6 +1829,8 @@ def detect_forcefield(columns, col_idx, frames):
                 # 4+ spin-resolved types: no fixed convention to fall back on, so
                 # keep the original count heuristic.
                 type_counts = {int(t): int(np.sum(types == t)) for t in unique_types}
+                # The key callback ranks populations, not type IDs; ties retain
+                # sorted type order. This remains a guess, not species evidence.
                 sorted_by_count = sorted(type_counts.items(), key=lambda x: x[1])
                 rarest_type, rarest_count = sorted_by_count[0]
                 most_count = sorted_by_count[-1][1]

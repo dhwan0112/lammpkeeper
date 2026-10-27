@@ -17,6 +17,8 @@ SHA="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 EVID="${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/$(date +%Y%m%dT%H%M%S)-$SHA-$MODE"
 mkdir -p "$EVID" || { echo "cannot create evidence dir $EVID" >&2; exit 2; }
 TMPHOME="$(mktemp -d)"; WORK="$(mktemp -d)"
+# Own only these disposable paths. Evidence is outside them and must survive
+# normal completion and failure so a failed verification can be investigated.
 cleanup() { rm -rf "$TMPHOME" "$WORK"; }
 trap cleanup EXIT
 export HOME="$TMPHOME" LKPR_NO_HISTORY=1
@@ -24,6 +26,8 @@ export MPLCONFIGDIR="$TMPHOME/matplotlib"
 : > "$EVID/outputs.txt"
 
 declare -a RESULTS=()
+# Keep machine-detectable PASS/FAIL/SKIP prefixes; only FAIL controls the exit
+# status, while SKIP remains explicit evidence of an unverified optional path.
 record() { RESULTS+=("$1 $2${3:+ — $3}"); }   # STATUS STEP NOTE
 
 # ── Doctor ──────────────────────────────────────────────────────────────
@@ -41,6 +45,8 @@ record() { RESULTS+=("$1 $2${3:+ — $3}"); }   # STATUS STEP NOTE
   [ -f "$FIXTURE" ] && echo "  fixture: present" || echo "  fixture: MISSING"
 } > "$EVID/doctor.txt" 2>&1
 cat "$EVID/doctor.txt"
+# Probe the selected interpreter, not a different environment's installed
+# package list. An import failure disables only the optional drive step.
 have() { "$PY" -c "import $1" 2>/dev/null; }
 
 # ── Tests ───────────────────────────────────────────────────────────────

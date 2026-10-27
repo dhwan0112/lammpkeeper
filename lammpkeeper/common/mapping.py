@@ -14,9 +14,11 @@ Each force field maps an atom TYPE NUMBER to (element_symbol, label):
     spin-down Fe proxy (Bienvenu et al., npj Comput. Mater. 2025, 11:81).
   - label: the human-readable species name used in analysis and plots.
 
-Value-preserving: the derived tables are exactly equal to the literals they
-replaced. This does NOT change post's atom-count heuristic (detect_forcefield
-Rule 3), which is the separate, flagged reverse-map fragility.
+The canonical tables preserve the historical slot convention; analysis aliases
+below are additive views, not new LAMMPS types or a guess from label prefixes.
+Input/dump metadata can override a preset only through explicit matching rules
+in the caller. Legacy force-field/count inference remains separate in the post
+parser and is now visibly warned; these helpers do not certify that inference.
 """
 
 from numbers import Integral
@@ -87,6 +89,8 @@ def species_type_sets(atom_types, ff=None, groups=None):
         resolved.setdefault(label, set()).add(int(type_id))
 
     canonical = FORCE_FIELDS.get(ff, {})
+    # A named alias is valid only for the same encoded member labels. Merely
+    # selecting a force-field name must not relabel an explicitly mapped system.
     for name, members in _SPECIES_GROUPS.get(ff, {}).items():
         if all(t in atom_types and atom_types[t] == canonical[t][1] for t in members):
             # A system may explicitly use the same label for a different type.
@@ -94,6 +98,9 @@ def species_type_sets(atom_types, ff=None, groups=None):
             if name not in resolved:
                 resolved[name] = set(members)
 
+    # Exact labels and established aliases cannot silently acquire different
+    # membership through a later group definition; callers must resolve the
+    # conflict explicitly before any numerical selection is made.
     for name, selection in (groups or {}).items():
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f'Invalid species group name {name!r}')

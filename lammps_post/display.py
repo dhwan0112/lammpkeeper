@@ -8,6 +8,9 @@ backward-compatible re-export so existing imports
 and the `python -m lammps_post` / `lammps-post.py` entry points keep working
 unchanged. The single source of truth now lives in
 lammpkeeper/common/display.py.
+
+These are the original shared objects, not wrappers: optional rich detection,
+color policy and fallback table formatting remain owned by the common module.
 """
 from lammpkeeper.common.display import (  # noqa: F401
     C,
@@ -17,4 +20,5 @@ from lammpkeeper.common.display import (  # noqa: F401
     progress_msg,
 )
 
+# Preserve the legacy wildcard-import surface without duplicating formatting.
 __all__ = ['C', 'HAS_RICH', 'print_table', 'print_kv', 'progress_msg']

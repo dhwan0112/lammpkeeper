@@ -10,4 +10,8 @@ all physics is correct: remaining limitations are recorded in BACKLOG.md.
 New findings may be staged here, then moved into a collected test_*.py module
 registered in tests/run.py when fixed. Keep fixtures and goldens unchanged
 unless their separate human gates are satisfied.
+
+The 2026-10-27 audit regressions are collected in test_audit_*.py, not staged
+here. This file intentionally defines no test_* callables: importing an empty
+staging module must not be counted as a successful correctness check.
 """

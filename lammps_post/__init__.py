@@ -34,12 +34,18 @@ Usage:
     python -m lammps_post --batch commands.txt     # Batch mode
 
 Dependencies:
-    Required : numpy, matplotlib
-    Optional : rich (terminal formatting), pandas (CSV/LaTeX export),
+    Required : numpy
+    Optional : matplotlib (plots), rich (terminal formatting), pandas (CSV/LaTeX export),
                scipy (fast O2 dissociation via cKDTree),
-               MDAnalysis (alternative MSD/RDF computation)
+                MDAnalysis (alternative MSD/RDF computation)
+
+This legacy namespace remains the constants/import surface for post-processing.
+The values below are unit conversions or Fe-O analysis defaults, not metadata
+inferred from a particular run. Callers must still supply that run's native
+units, timestep and species mapping.
 """
 
+# Re-export the canonical version so legacy entry points agree with lkpr.
 from lammpkeeper import VERSION  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════
@@ -55,6 +61,9 @@ BAR_TO_GPA = 1e-4           # bar -> GPa (metal units)
 ATM_TO_GPA = 1.01325e-4     # atm -> GPa (real units)
 
 # ── Analysis thresholds (Fe-O oxidation) ──
+# Suffixes encode dimensions: _E is elementary charge and _A is Angstrom.
+# These empirical domain thresholds must not be treated as universal criteria
+# for other chemistries or as integer oxidation-state assignments.
 # Partial charge above which an Fe atom counts as oxidized: metallic Fe sits
 # near 0 e, Fe2+ at ~0.8-1.2 e and Fe3+ at ~1.2-1.8 e (ReaxFF QEq charges).
 Q_OXIDIZED_E = 0.3

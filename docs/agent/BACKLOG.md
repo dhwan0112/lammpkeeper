@@ -49,6 +49,28 @@ verification passes in the available rich and NumPy environments (explicit skips
 listed). The maintainer explicitly approved feature-branch push and PR creation
 after final verification in this session. Direct main push and merge are excluded.
 
+## DOC-ALL · P3 · English maintenance comments across every source file — `done (PR #16, unmerged)`
+
+Maintainer explicitly requested every code file, then selected **all files,
+functions/classes and major logic** (not every execution line), in **English**.
+The branch is based on verified audit PR #15 (`f62f0a4`), not a merge to main.
+
+- Cover all 63 tracked Python/Rust/Shell/TOML source/build files; maintain an
+  explicit inventory in `docs/agent/COMMENT_COVERAGE.md`. JSON configuration is
+  data (comments are not legal JSON); fixtures, binaries, lockfiles, generated
+  outputs and user-owned untracked files stay untouched.
+- Explain contracts, units, identity/PBC assumptions, failure propagation and
+  non-obvious branching; avoid comments that merely repeat an assignment.
+- Add useful documentation to every function/class, including private/nested
+  helpers and regression tests; lambdas are explained at their call sites.
+- No executable changes, generated template-string changes or numeric rebaseline.
+- **Done when:** inventory is complete, every Python function/class has a
+  docstring, normalized executable Python AST / Rust-Shell noncomment lines /
+  parsed TOML agree with the baseline, and full verification still passes in
+  the rich, forced-NumPy and default environments with explicit skips.
+- Maintainer explicitly approved push and a separate stacked PR based on audit
+  PR #15 after verification. Neither branch is merged by the agent.
+
 ## Suggested order
 
 **Scheduling update (maintainer, 2026-10-26):** defer actual HPC submissions,

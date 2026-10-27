@@ -27,11 +27,18 @@ BANNER = '\n' + banner([
 
 
 class LammpsPreShell(HostedShellMixin, cmd.Cmd):
+    """Command dispatcher shared by standalone, hosted, and batch prep clients.
+
+    A truthy command result means leave the shell; last_command_failed carries
+    validation/I/O failure separately so batch callers can stop with an error
+    while an interactive session remains usable.
+    """
     prompt = f"\x01{C.BLUE}\x02lammps-pre>\x01{C.RESET}\x02 "
     intro = BANNER
     shell_name = 'prep'
 
     def __init__(self):
+        """Start with default state and shared history, without building structures."""
         super().__init__()
         self.state = PreState()
         self.last_command_failed = False
@@ -39,11 +46,17 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         self._setup_history('~/.lammps-pre_history')
 
     def _fail(self, message):
+        """Record a command failure and show its diagnostic without quitting."""
         self.last_command_failed = True
         print(C.err(f'  Error: {message}'))
 
     def onecmd(self, line):
-        """Keep errors interactive, but make them observable by batch callers."""
+        """Keep expected errors interactive, but observable by batch callers.
+
+        Reset the flag for each command and translate common validation/I/O
+        exceptions to diagnostics. Do not turn the command's quit signal into
+        an error or swallow unrelated exception types.
+        """
         self.last_command_failed = False
         try:
             return super().onecmd(line)
@@ -54,6 +67,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ── Helper: interactive prompt ──
 
     def _ask(self, prompt, default=None):
+        """Prompt interactively, using a blank answer's default or None on cancel.
+
+        EOF/interrupt cancels this prompt rather than terminating the dispatcher.
+        Noninteractive command paths must avoid requesting user input.
+        """
         suffix = f" [{default}]" if default else ""
         try:
             ans = input(f"  \x01{C.YELLOW}\x02?\x01{C.RESET}\x02 {prompt}{suffix}: ").strip()
@@ -65,6 +83,12 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ── Path completion helper ──
 
     def _complete_path(self, text):
+        """Suggest literal filesystem prefixes, marking directories with a slash.
+
+        An unreadable directory gives no suggestions, not a failed command.
+        Results are not shell-quoted, so completion is not a replacement for
+        quoting paths with spaces when submitting a command.
+        """
         if not text:
             text = './'
         dirname = os.path.dirname(text) or '.'
@@ -95,6 +119,13 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         Regions:    fixed_layers, nvt_layers, wall
         Output:     thermo, dump, output
         HPC:        job_name, queue, ncpus, walltime, memory
+
+        shlex preserves quoted paths/compound values. Validate recognized numeric
+        ranges before assignment; geometry edits invalidate the current build
+        through PreState. Durations are ps, lengths Angstrom, temperature K, and
+        output intervals steps. dt and wall are informational branches rather
+        than writable parameters. The boundary text is stored as supplied; it
+        does not change the slab builder's lateral-periodic placement algorithm.
         """
         try:
             parts = shlex.split(arg) if arg.strip() else []
@@ -119,6 +150,8 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         s = self.state
 
         try:
+            # Zero thermostat/fixed layers are unsupported by region indexing;
+            # zero gas molecules and zero-duration stages are supported cases.
             positive_ints = {'temperature', 'temp', 'fixed_layers', 'nvt_layers',
                              'thermo', 'dump', 'ncpus', 'walltime', 'memory', 'mem'}
             if key in positive_ints and int(parts[1]) < 1:
@@ -147,6 +180,8 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Temperature: {s.temperature} K")
 
             elif key == 'slab':
+                # nx/ny are in-plane repeats; nz is atomic layers. The builder
+                # subsequently checks orientation-dependent even-ny constraints.
                 if len(parts) == 4:
                     dims = [int(p) for p in parts[1:]]
                 elif len(parts) == 2 and 'x' in parts[1]:
@@ -188,7 +223,8 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Boundary: {s.boundary}")
 
             elif key == 'dt':
-                # Store in ff-native units
+                # Deliberately informational: preset dt stays in native units;
+                # there is no assignment or implicit conversion from this value.
                 progress_msg(f"Note: dt is set per force field preset. "
                              f"Current: {s.dt_display_fs} fs")
 
@@ -269,6 +305,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             self._fail(str(e))
 
     def complete_set(self, text, line, begidx, endidx):
+        """Complete setting names and selected preset/surface/path values.
+
+        This lightweight token split is for suggestions only; do_set owns the
+        quote-aware parsing and actual validation.
+        """
         keys = ['ff', 'temperature', 'slab', 'surface', 'o2', 'vacuum',
                 'lattice', 'boundary', 'dt', 'eq_time', 'ox_time', 'seed',
                 'fixed_layers', 'nvt_layers', 'wall', 'thermo', 'dump',
@@ -296,9 +337,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     def do_load(self, arg):
         """Load an existing LAMMPS data file: load <filepath>
 
-        Reads atom count, box size, atom types, and masses from a
-        LAMMPS data file. Useful for inspecting or regenerating files
-        for an existing structure.
+        Inspect header atom/type counts, box bounds, available masses, and the
+        Atoms style comment. Quoted paths are supported. This is not a structure
+        import: coordinates, selected preset, and build_result are unchanged.
+        Reported style-based force-field detection is informational, not proof
+        that the file contains the Fe/O species or a compatible potential.
         """
         parts = shlex.split(arg) if arg.strip() else []
         if not parts:
@@ -328,7 +371,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             for tid, mass in sorted(info['masses'].items()):
                 progress_msg(f"  Type {tid}: {mass} amu")
 
-        # Auto-detect force field from atom style
+        # Report a workflow-specific hint, not a species mapping or state change.
         if info.get('atom_style') == 'charge':
             progress_msg(f"Detected: atom_style charge (ReaxFF)")
         elif info.get('atom_style') == 'atomic':
@@ -339,7 +382,14 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
 
     @staticmethod
     def _parse_data_file(filepath):
-        """Parse header info from a LAMMPS data file."""
+        """Scan header metadata only, stopping at Atoms rather than reading atoms.
+
+        This lightweight inspector is not a validating data reader: missing or
+        malformed count fields can retain zero defaults, and tilt/PBC is not
+        interpreted. Blank/comment lines end its Masses state, so conventional
+        blank-separated mass sections may not populate the returned dictionary.
+        Never use this result to reconstruct coordinates or prove box support.
+        """
         info = {'n_atoms': 0, 'n_types': 0, 'masses': {},
                 'xlo': 0, 'xhi': 0, 'ylo': 0, 'yhi': 0,
                 'zlo': 0, 'zhi': 0, 'atom_style': None}
@@ -390,6 +440,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         return info
 
     def complete_load(self, text, line, begidx, endidx):
+        """Suggest data-file paths without opening or interpreting the files."""
         return self._complete_path(text)
 
     # ═══════════════════════════════════════════════════════════
@@ -397,7 +448,12 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ═══════════════════════════════════════════════════════════
 
     def do_build(self, arg):
-        """Build structure from current settings: build [slab|o2]"""
+        """Build the complete slab/regions/gas pipeline from current settings.
+
+        ``arg`` is presently ignored; this does not perform partial rebuilds.
+        Invalidate any prior result before checking that a reaction layer and
+        preset exist, then expose builder failure through the command flag.
+        """
         s = self.state
         s.build_result = None
 
@@ -422,11 +478,15 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ═══════════════════════════════════════════════════════════
 
     def do_preview(self, arg):
-        """Show current configuration summary: preview [structure|regions|thermo|dump|files]"""
+        """Alias show without building or writing: preview [ff|regions|hpc|output|files]."""
         self.do_show(arg)
 
     def do_show(self, arg):
-        """Show current settings: show [ff|regions|hpc|output|all]"""
+        """Display a settings category; empty or unrecognized selectors show all.
+
+        Views resolve preset defaults but do not validate a runnable simulation
+        or regenerate coordinates. Built region values are shown when available.
+        """
         sub = arg.strip().lower() if arg else ''
         s = self.state
         ff = s.ff
@@ -445,6 +505,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             self._show_all()
 
     def _show_all(self):
+        """Summarize configured counts and ps/step timing, plus any built regions.
+
+        Pre-build atom totals are estimates from layer repeats, not measurements
+        from a generated data file.
+        """
         s = self.state
         ff = s.ff
         n_fe = s.nx * s.ny * s.nz
@@ -474,6 +539,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             self._show_regions()
 
     def _show_ff(self):
+        """Expose preset provenance, native units, species/spin labels, and outputs."""
         ff = self.state.ff
         pairs = [
             ('Name', ff['label']),
@@ -494,6 +560,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         print_kv(pairs, title=f'Force Field: {ff["label"]}')
 
     def _show_regions(self):
+        """Show planned layer counts or built Angstrom boundaries and atom counts.
+
+        Upper-zone counts refer to gas O atoms, not O2 molecules; displayed walls
+        describe the initial protocol before the lower wall is removed.
+        """
         s = self.state
         b = s.build_result
         if b is None:
@@ -529,6 +600,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         print()
 
     def _show_hpc(self):
+        """Display configured PBS resources without submitting or probing a cluster.
+
+        The scratch row reflects state only; the current run template always
+        stages through scratch regardless of that flag.
+        """
         s = self.state
         pairs = [
             ('Job name', s.get_job_name()),
@@ -543,6 +619,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         print_kv(pairs, title='HPC Settings')
 
     def _show_output(self):
+        """Show effective step cadences and ACE's requested dense-dump ps window.
+
+        The rendered protocol clamps that window to oxidation duration; this
+        configuration view intentionally displays the requested value.
+        """
         ff = self.state.ff
         s = self.state
         pairs = [
@@ -557,6 +638,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         print_kv(pairs, title='Output Settings')
 
     def _show_files(self):
+        """List preset-specific output paths and existence, not content validity."""
         names = get_filenames(self.state)
         d = self.state.output_dir
         print(f"\n  {C.bold('Files to generate:')}")
@@ -569,6 +651,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         print()
 
     def complete_show(self, text, line, begidx, endidx):
+        """Offer view selectors shared by show and its preview completion alias."""
         opts = ['ff', 'regions', 'hpc', 'output', 'files', 'all']
         return [o + ' ' for o in opts if o.startswith(text)]
 
@@ -579,7 +662,14 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ═══════════════════════════════════════════════════════════
 
     def do_write(self, arg):
-        """Write output files: write [all|data|regions|input|runscript] [directory]"""
+        """Write [all|data|regions|input|runscript|xyz] [quoted directory].
+
+        Reject unknown targets before creating directories. Interactive callers
+        may approve a missing build; batch callers fail rather than prompt.
+        Writers validate signed geometry (except standalone XYZ), and existing
+        output files may be overwritten. This command generates but never runs
+        LAMMPS inputs or PBS jobs.
+        """
         s = self.state
         b = s.build_result
 
@@ -626,6 +716,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             print("  Options: all, data, regions, input, runscript, xyz")
 
     def complete_write(self, text, line, begidx, endidx):
+        """Complete output targets first, then literal destination path prefixes."""
         targets = ['all', 'data', 'regions', 'xyz', 'input', 'runscript']
         tokens = line.split()
         if len(tokens) == 2 and text:
@@ -652,6 +743,15 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
           <output>/o2_40/300K/  (data + input + regions + run.sh + xyz)
           <output>/o2_40/500K/
           ...
+
+        Parse quoted key=value tokens, then stop on the first invalid combination
+        or failed build/write instead of claiming a complete matrix. The same
+        structure seed is reused for each build; temperature alone does not
+        change initial coordinates. Changing O2 count moves the start of axis
+        sampling in the random stream, so full molecular coordinates need not
+        form nested gas configurations even when accepted centers share a prefix.
+        State is intentionally left at the last attempted combination; completed
+        directories are not rolled back if later generation fails.
         """
         s = self.state
 
@@ -726,7 +826,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ═══════════════════════════════════════════════════════════
 
     def do_reset(self, arg):
-        """Reset settings to defaults: reset [ff]"""
+        """Reset settings to defaults; reset ff only reselects the current preset.
+
+        Reselecting a preset does not clear separate timing/resource overrides;
+        a full reset does clear overrides and the built structure.
+        """
         sub = arg.strip().lower()
         if sub == 'ff':
             self.state.set_ff(self.state.forcefield)
@@ -740,7 +844,11 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     # ═══════════════════════════════════════════════════════════
 
     def do_quit(self, arg):
-        """Exit lammps-pre."""
+        """Return the cmd stop signal and mark hosted navigation as quit.
+
+        Batch callers honor the same signal, so later commands are not executed.
+        No generation, scheduler submission, or output cleanup happens on exit.
+        """
         print(f"\n  {C.dim('Goodbye!')}\n")
         self._next = 'quit'
         return True
@@ -749,18 +857,24 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     do_q = do_quit
 
     def do_EOF(self, arg):
-        """Handle Ctrl+D."""
+        """Translate Ctrl+D to the same quit signal used by explicit exit aliases."""
         print()
         return self.do_quit(arg)
 
     def emptyline(self):
+        """Ignore blank input rather than cmd.Cmd's default repeat-last behavior."""
         pass
 
     def default(self, line):
+        """Flag unknown commands so batch automation cannot silently continue."""
         self._fail(f"Unknown command: '{line}'. Type 'help' for available commands.")
 
     def do_help(self, arg):
-        """Show help for a command or list all commands."""
+        """Use command docstrings for topics, or show the grouped command overview.
+
+        Append hosted navigation help supplied by the shared mixin; the overview
+        is display text only and never interpreted as shell commands.
+        """
         if arg:
             super().do_help(arg)
             return

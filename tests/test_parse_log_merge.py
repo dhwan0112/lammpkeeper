@@ -16,10 +16,12 @@ LOG = os.path.join(REPO_ROOT, 'tests', 'fixtures', 'ace_examples',
 
 
 def _available():
+    """Gate fixture-backed parsing on both NumPy and the reference log's presence."""
     return have_numpy() and os.path.exists(LOG)
 
 
 def test_parse_log_fixture_keeps_optimizer_iterations_out_of_md_arrays():
+    """The selected MD block, not minimizer rows, defines every merged MD sample."""
     if not _available():
         skip('numpy not installed or log fixture not found')
     import numpy as np
@@ -49,6 +51,7 @@ def test_parse_log_fixture_keeps_optimizer_iterations_out_of_md_arrays():
 
 
 def test_parse_log_merges_compatible_md_blocks_in_source_order():
+    """Adjacent compatible runs deduplicate their common endpoint without reordering."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -62,6 +65,7 @@ def test_parse_log_merges_compatible_md_blocks_in_source_order():
                         'run 10\nStep Temp PotEng\n10 301 -11\n20 302 -12\n'
                         'Loop time of 1 on 1 procs\n')
         log = parse_log(path)
+    # Expected samples are read directly from the tiny source log, not another parser path.
     np.testing.assert_array_equal(log['step'], [0, 10, 20])
     np.testing.assert_array_equal(log['pe'], [-10, -11, -12])
     np.testing.assert_array_equal(log['elapsed_md_steps'], [0, 10, 20])

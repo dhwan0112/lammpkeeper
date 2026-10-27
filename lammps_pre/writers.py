@@ -11,7 +11,12 @@ from lammps_pre.display import progress_msg, C
 
 
 def _validate_build(build, state):
-    """Refuse a retained old build before writing misleading new metadata."""
+    """Refuse a retained old build before writing misleading new metadata.
+
+    Legacy build objects without a signature remain accepted. A signed build
+    must match geometry settings even when a caller retained it after state
+    invalidation; force-field changes alone deliberately remain compatible.
+    """
     signature = getattr(build, 'geometry_signature', None)
     if signature is not None and signature != state.geometry_signature():
         raise ValueError('structure settings changed since build; run build again')
@@ -28,6 +33,14 @@ def write_data_file(build, state, filepath):
     Format depends on force field:
       - ReaxFF: atom_style charge (id type q x y z), q=0.0
       - ACE:    atom_style atomic (id type x y z), spin encoding
+
+    Cartesian coordinates and orthogonal bounds are Angstrom. IDs remain
+    contiguous with Fe first and O second across both formats; serialization
+    changes types/charge columns but never regenerates coordinates. Preset
+    masses are amu: both ACE Fe spin types carry Fe mass despite the Mn slot
+    label in the potential. All initial ACE Fe is type 1; the input protocol
+    assigns fixed/mobile spins later. Charge-style records start neutral and
+    rely on QEq during the run. Existing destination files are overwritten.
     """
     _validate_build(build, state)
     ff = state.ff
@@ -60,7 +73,8 @@ def write_data_file(build, state, filepath):
         f.write(f"{ylo:.10f} {yhi:.10f} ylo yhi\n")
         f.write(f"{zlo:.10f} {zhi:.10f} zlo zhi\n\n")
 
-        # Masses
+        # Mass comments preserve domain labels for readers, including the two
+        # ACE Fe spin states that must not be interpreted as distinct elements.
         f.write("Masses\n\n")
         for tid, mass in sorted(masses.items()):
             label = atom_types.get(tid, '')
@@ -98,7 +112,11 @@ def write_data_file(build, state, filepath):
 # ═══════════════════════════════════════════════════════════════
 
 def write_regions_inc(build, state, filepath):
-    """Write LAMMPS variable include file for region boundaries."""
+    """Write the four built z boundaries in Angstrom for template inclusion.
+
+    Boundaries come from the validated geometry, not current force-field rc;
+    four-decimal output is shared by both oxidation protocols.
+    """
     _validate_build(build, state)
     regions = build.regions
 
@@ -122,7 +140,12 @@ def write_regions_inc(build, state, filepath):
 # ═══════════════════════════════════════════════════════════════
 
 def write_xyz(build, filepath):
-    """Write XYZ file for visualization (e.g., OVITO, VMD)."""
+    """Write chemical Fe/O coordinates for visualization, not a restart format.
+
+    Ordinary XYZ omits box/PBC, charges, spin types, and molecular connectivity.
+    No state is supplied, so this writes the given build without a signature
+    check; callers needing current settings must validate before calling.
+    """
     fe_pos = build.fe_positions
     o2_pos = build.o2_positions
     n_total = len(fe_pos) + len(o2_pos)
@@ -144,7 +167,11 @@ def write_xyz(build, filepath):
 # ═══════════════════════════════════════════════════════════════
 
 def get_filenames(state):
-    """Return dict of output filenames based on force field."""
+    """Return the legacy filenames shared by writers and rendered include paths.
+
+    ACE has distinct data/region/input names; both ReaxFF versions share names
+    and therefore need separate directories to avoid overwriting one another.
+    """
     ff_name = state.forcefield
     if ff_name == 'ace':
         return {
@@ -165,7 +192,11 @@ def get_filenames(state):
 
 
 def write_input_script(build, state, filepath):
-    """Write LAMMPS input script using force-field-specific template."""
+    """Validate geometry and render the selected protocol before opening output.
+
+    Template validation errors propagate to the CLI rather than creating an
+    apparently successful but unsupported simulation input.
+    """
     _validate_build(build, state)
     from lammps_pre.templates import render_input_script
     content = render_input_script(build, state)
@@ -177,7 +208,11 @@ def write_input_script(build, state, filepath):
 
 
 def write_run_script(build, state, filepath):
-    """Write PBS job submission script."""
+    """Write an executable PBS launcher; do not submit or run the generated job.
+
+    Rendering checks relevant CPU/grid constraints before opening the file.
+    The launcher owns runtime scratch/copyback safety, not this Python writer.
+    """
     _validate_build(build, state)
     from lammps_pre.templates import render_run_script
     content = render_run_script(build, state)
@@ -189,7 +224,13 @@ def write_run_script(build, state, filepath):
 
 
 def write_all(build, state, directory=None):
-    """Write all output files to directory."""
+    """Preflight templates, then write the five files using one shared geometry.
+
+    A supplied truthy directory overrides state.output_dir. Validation occurs
+    before directory creation, but writes are not transactional: filesystem
+    failures can leave earlier files present, and existing files are replaced.
+    Potential files are external prerequisites and are not copied here.
+    """
     _validate_build(build, state)
     # Validate templates before leaving a partially generated runnable directory.
     from lammps_pre.templates import render_input_script, render_run_script

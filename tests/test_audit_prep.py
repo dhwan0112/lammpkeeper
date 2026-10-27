@@ -17,6 +17,7 @@ import _util
 
 
 def _state():
+    """Choose a small valid slab with separate fixed, thermostat and gas regions."""
     from lammps_pre.state import PreState
     s = PreState()
     s.nx, s.ny, s.nz = 4, 4, 8
@@ -26,6 +27,7 @@ def _state():
 
 
 def _build(s):
+    """Run the real geometry builder quietly, skipping visibly if NumPy is absent."""
     _util.require_numpy()
     from lammps_pre.builders import build_all
     with contextlib.redirect_stdout(io.StringIO()):
@@ -33,6 +35,7 @@ def _build(s):
 
 
 def _rejects(call):
+    """Require invalid preparation metadata to fail before writing usable artifacts."""
     try:
         call()
     except ValueError:
@@ -41,8 +44,10 @@ def _rejects(call):
 
 
 def test_odd_width_skew_slabs_are_rejected():
+    """Unsupported odd-width tilted slabs must not be silently made orthogonal."""
     _util.require_numpy()
     from lammps_pre import builders
+    # Non-(100) construction needs ASE; absence is a skip, not a geometry pass.
     _util.require(builders.HAS_ASE, 'ase not installed')
     for surface in ('110', '111'):
         s = _state()
@@ -56,10 +61,12 @@ def test_odd_width_skew_slabs_are_rejected():
 
 
 def test_even_width_surfaces_preserve_written_periodic_nearest_distance():
+    """Force fields share coordinates and written BCC neighbors retain sqrt(3)*a/2."""
     _util.require_numpy()
     import numpy as np
     from lammps_pre import builders
     from lammps_pre.writers import write_data_file
+    # This matrix includes non-(100) surfaces, so it requires the ASE builder.
     _util.require(builders.HAS_ASE, 'ase not installed')
     for surface in ('100', '110', '111'):
         s = _state()
@@ -91,6 +98,7 @@ def test_even_width_surfaces_preserve_written_periodic_nearest_distance():
 
 
 def test_geometry_mutation_invalidates_build_but_simulation_edits_do_not():
+    """Geometry fingerprints must discard stale structures but preserve format-only edits."""
     for key, value in (('nx', 5), ('ny', 6), ('nz', 9), ('surface', '110'),
                        ('a_fe', 2.9), ('n_o2', 5), ('vacuum', 40.0),
                        ('seed', 7), ('o2_bond', 1.3), ('o2_separation', 3.5),
@@ -106,6 +114,7 @@ def test_geometry_mutation_invalidates_build_but_simulation_edits_do_not():
 
 
 def test_old_build_cannot_be_written_under_changed_metadata():
+    """A retained old build object cannot bypass writer-side provenance checks."""
     from lammps_pre.writers import write_data_file
     s = _state()
     b = _build(s)
@@ -117,6 +126,7 @@ def test_old_build_cannot_be_written_under_changed_metadata():
 
 
 def test_failed_rebuild_clears_previous_result():
+    """A failed geometry attempt must not leave the preceding structure writable."""
     s = _state()
     assert _build(s) is not None
     s.vacuum = 3.0
@@ -125,6 +135,7 @@ def test_failed_rebuild_clears_previous_result():
 
 
 def test_o2_incomplete_placement_is_failure_not_partial_success():
+    """Impossible gas spacing must reject the build rather than return too few molecules."""
     s = _state()
     s.n_o2, s.o2_separation = 2, 1e6
     assert _build(s) is None
@@ -132,6 +143,7 @@ def test_o2_incomplete_placement_is_failure_not_partial_success():
 
 
 def test_nonpositive_layers_are_rejected_before_geometry_generation():
+    """Fixed and thermostatted regions require positive supported layer counts."""
     for fixed, nvt in ((0, 2), (1, 0), (1, -1), (-1, 2), (0, 0)):
         s = _state()
         s.n_fixed_layers, s.n_thermostat_layers = fixed, nvt
@@ -140,6 +152,7 @@ def test_nonpositive_layers_are_rejected_before_geometry_generation():
 
 
 def test_seeded_gas_axes_are_isotropic_and_repeatable():
+    """Gas orientations obey isotropic moments while fixed-seed builds reproduce bonds."""
     _util.require_numpy()
     import numpy as np
     from lammps_pre import builders
@@ -149,11 +162,15 @@ def test_seeded_gas_axes_are_isotropic_and_repeatable():
     regions = {'z_wall_lower': 10.0}
     rng = np.random.default_rng(42)
     axes = []
+    # Advance one shared generator for the distribution check; resetting the
+    # normal fixed-seed generator on each call would repeat a single direction.
     with patch.object(builders.np.random, 'default_rng', return_value=rng):
         for _ in range(6000):
             p = builders.place_o2(slab, regions, s)
             axes.append((p[0] - p[1]) / s.o2_bond)
     axes = np.asarray(axes)
+    # Uniform unit vectors have E[u_i]=0 and E[u_i**2]=1/3 on each axis.
+    # The finite-sample bands test isotropy, not an exact random realization.
     assert np.all(np.abs(np.mean(axes ** 2, axis=0) - 1 / 3) < .025)
     assert np.all(np.abs(np.mean(axes, axis=0)) < .03)
     first = builders.place_o2(slab, regions, s)
@@ -162,6 +179,7 @@ def test_seeded_gas_axes_are_isotropic_and_repeatable():
 
 
 def test_ace_cpu_overrides_use_compatible_or_automatic_grid():
+    """Processor-grid overrides must match CPU allocation or delegate both axes."""
     from lammps_pre.templates import render_input_script, render_run_script
     s = _state()
     s.set_ff('ace')
@@ -182,6 +200,7 @@ def test_ace_cpu_overrides_use_compatible_or_automatic_grid():
 
 
 def test_ace_dense_stage_is_configured_clamped_and_exact_in_steps():
+    """Dense and remaining runs stay nonnegative and sum to rounded oxidation steps."""
     from lammps_pre.templates import render_input_script
     s = _state()
     s.set_ff('ace')
@@ -214,7 +233,12 @@ def test_ace_dense_stage_is_configured_clamped_and_exact_in_steps():
 
 @contextlib.contextmanager
 def _edge_job(status=37, archive_kind='directory', work_mode=0o700):
-    """Guard every cleanup command and substitute *all* cluster defaults."""
+    """Run rendered shell control flow with guarded local substitutes for cluster tools.
+
+    The launcher writes tiny synthetic outputs and returns a chosen status;
+    the LAMMPS stub must never execute. Scratch, home, work and archive targets
+    stay inside the temporary root, and the removal stub checks its target.
+    """
     from lammps_pre.templates import render_run_script
     from lammps_pre.writers import get_filenames
     with tempfile.TemporaryDirectory(prefix='lkpr_audit_prep_') as tmp:
@@ -241,6 +265,8 @@ def _edge_job(status=37, archive_kind='directory', work_mode=0o700):
         for filename in (names['input'], names['data'], names['regions'],
                          s.ff['potential_file']):
             (work / filename).write_text('synthetic input\n')
+        # Preserve these script bodies as fault fixtures: they test shell
+        # quoting, copyback and cleanup without invoking a scheduler or solver.
         scripts = {
             'module': 'exit 0\n',
             'lmp': 'echo "REAL EXECUTABLE MUST NOT RUN" >&2; exit 99\n',
@@ -253,6 +279,8 @@ def _edge_job(status=37, archive_kind='directory', work_mode=0o700):
             path = bins / name
             path.write_text('#!/bin/bash\n' + body)
             path.chmod(0o755)
+        # Eliminate site setup and the default cluster scratch path before any
+        # execution; environment overrides alone are not the safety boundary.
         rendered = render_run_script(None, s).replace(
             'source /etc/profile.d/modules.sh 2>/dev/null || true', ': # no site setup')
         rendered = rendered.replace('/hpctmp/$USER/$JOBID', str(root / 'unused-scratch'))
@@ -273,6 +301,7 @@ def _edge_job(status=37, archive_kind='directory', work_mode=0o700):
 
 
 def test_failure_archives_never_reuse_directories_or_follow_symlinks():
+    """Archive collisions preserve scratch, old artifacts and unrelated symlink targets."""
     for kind in ('directory', 'symlink', 'dangling'):
         with _edge_job(archive_kind=kind) as (run, work, scratch, archive, target):
             assert run.returncode == 37, run.stdout + run.stderr
@@ -286,6 +315,7 @@ def test_failure_archives_never_reuse_directories_or_follow_symlinks():
 
 
 def test_copyback_preserves_destination_directory_mode():
+    """Successful copyback includes hidden files without replacing work permissions."""
     for mode in (0o700, 0o750, 0o2770):
         with _edge_job(status=0, archive_kind=None, work_mode=mode) as job:
             run, work, scratch, _, _ = job
@@ -297,6 +327,7 @@ def test_copyback_preserves_destination_directory_mode():
 
 
 def _cli(*args):
+    """Run preparation with closed stdin, isolated history/home and a bounded timeout."""
     env = dict(os.environ, LKPR_NO_HISTORY='1', PYTHONDONTWRITEBYTECODE='1')
     with tempfile.TemporaryDirectory(prefix='lkpr_prep_home_') as home:
         env['HOME'] = home
@@ -306,6 +337,7 @@ def _cli(*args):
 
 
 def test_prep_cli_errors_are_nonzero_and_do_not_write_files():
+    """Malformed commands and failed builds stop batches before later writes."""
     _util.require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -327,6 +359,7 @@ def test_prep_cli_errors_are_nonzero_and_do_not_write_files():
 
 
 def test_prep_cli_batch_quit_stops_execution_and_space_paths_work():
+    """Quit ends the batch; quoted output paths and seed zero survive CLI parsing."""
     _util.require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -344,6 +377,7 @@ def test_prep_cli_batch_quit_stops_execution_and_space_paths_work():
 
 
 def test_prep_cli_stale_build_refuses_batch_write_without_prompting():
+    """A stale batch build fails without blocking for a rebuild prompt or writing files."""
     _util.require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -358,6 +392,7 @@ def test_prep_cli_stale_build_refuses_batch_write_without_prompting():
 
 
 def test_prep_cli_matrix_paths_and_build_errors_propagate():
+    """Matrix builds honor spaced paths and propagate geometry or destination failures."""
     _util.require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

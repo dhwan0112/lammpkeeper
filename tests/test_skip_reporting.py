@@ -18,7 +18,9 @@ def _not_under_pytest():
 
 
 def test_skip_raises_skip_outside_pytest():
+    """The custom runner must receive a reason-bearing skip exception, not a return."""
     with _not_under_pytest():
+        # The exception type is the runner contract; merely printing a reason is insufficient.
         try:
             skip('example reason')
         except Skip as e:
@@ -28,6 +30,7 @@ def test_skip_raises_skip_outside_pytest():
 
 
 def test_require_skips_only_when_condition_fails():
+    """Satisfied prerequisites proceed; missing prerequisites raise an explicit skip."""
     with _not_under_pytest():
         require(True, 'must not raise')
         try:

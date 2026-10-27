@@ -23,7 +23,13 @@ from lammps_pre.display import progress_msg, C
 
 @dataclass
 class BuildResult:
-    """Container for a completed structure build."""
+    """Retain one Fe/O geometry independently of its force-field serialization.
+
+    Position arrays hold Cartesian Angstrom coordinates; ``o2_positions`` has
+    two rows per molecule, not molecular centers. The slab cell records the
+    crystalline repeat, whereas ``box`` includes the gas space. Writers compare
+    ``geometry_signature`` with current settings to reject stale metadata.
+    """
     fe_positions: np.ndarray       # (N_Fe, 3)
     o2_positions: np.ndarray       # (N_O, 3)
     cell: np.ndarray               # (3, 3)
@@ -42,6 +48,13 @@ def build_fe_slab(state):
     """
     Build a BCC Fe slab using ASE (or manual fallback for 100).
 
+    ``nz`` counts atomic layers, not full conventional BCC unit cells. Lengths
+    are Angstrom and the bottom layer is translated to z=0. Only the supported
+    Miller surfaces are accepted; (110)/(111) need even ``ny`` because downstream
+    writers preserve diagonal box lengths, not triclinic tilt. Without ASE only
+    the alternating half-lattice (100) stacking is available.
+
+    Invalid dimensions or unsupported geometry print an error and return None.
     Returns dict with 'positions', 'cell', 'n_atoms', 'unique_z'.
     """
     miller = state.surface
@@ -104,7 +117,11 @@ def build_fe_slab(state):
 
 
 def _detect_layers(z_coords, tol=0.3):
-    """Detect unique z-layers with tolerance."""
+    """Group sorted heights within ``tol`` Angstrom of each layer's first atom.
+
+    Representatives are observed heights rather than averaged plane positions;
+    this is intended for the nearly planar layers produced by the slab builder.
+    """
     unique_z = []
     for z in np.sort(z_coords):
         if not unique_z or abs(z - unique_z[-1]) > tol:
@@ -127,6 +144,12 @@ def compute_regions(slab_data, state):
         Upper NVT: z > z_wall_lower         (O2 gas thermostat)
 
     Returns dict with boundary z-coordinates and atom counts per zone.
+
+    Both fixed and lower-thermostat counts must be positive integers and leave
+    at least one reaction layer. Midpoints avoid initial atoms lying on shared
+    LAMMPS region faces; counts use half-open intervals so Fe is counted once.
+    The upper gas zone is separated by a shared interaction cutoff plus margins,
+    not by a force-field-specific slab construction. All boundaries are Angstrom.
     """
     fe_positions = slab_data['positions']
     unique_z = slab_data['unique_z']
@@ -188,6 +211,14 @@ def place_o2(slab_data, regions, state):
 
     O2 molecules are placed between z_wall_lower+1.0 and
     z_wall_lower+vacuum-2.0, with PBC-aware minimum separation.
+
+    Those bounds and separation apply to molecular centers, not every O atom.
+    The seeded generator samples centers first, using x/y minimum images in an
+    orthogonal cell and no z wrapping; it then samples isotropic bond axes.
+    Placement is thus reproducible across presets with identical geometry.
+    A zero count returns shape (0, 3); invalid inputs or failure to place all
+    centers within the aggregate cap of 1000*n_mol trials raise ValueError rather
+    than silently reducing the requested gas population. Lengths are Angstrom.
     """
     n_mol = state.n_o2
     if not isinstance(n_mol, (int, np.integer)) or isinstance(n_mol, bool) or n_mol < 0:
@@ -254,6 +285,13 @@ def place_o2(slab_data, regions, state):
 def build_all(state):
     """
     Full build pipeline: slab -> regions -> O2 -> BuildResult.
+
+    Clear the previous result before any validation, and publish a new result
+    only after every stage succeeds. Expected geometry/placement failures return
+    None with visible diagnostics. The output box is orthogonal with x/y slab
+    repeats and z headroom above the highest O atom (or the empty gas band).
+    Store the settings signature for write-time stale-build checks; no
+    force-field-specific atom types are assigned at this stage.
     """
     # Never leave a previously successful build usable after a failed rebuild.
     state.build_result = None

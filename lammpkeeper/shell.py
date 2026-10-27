@@ -36,6 +36,11 @@ _MENU = f"""
 
 
 class LkprShell(cmd.Cmd):
+    """Own persistent prep/post instances and the outer navigation loop.
+
+    Child cmdloops communicate their next destination through ``_next``;
+    changing modes is not a reset of loaded trajectories or build settings.
+    """
     prompt = f"\x01{C.MAGENTA}\x02lkpr>\x01{C.RESET}\x02 "
     intro = '\n' + banner([
         f"{C.BOLD}LammpKeeper (lkpr){C.RESET}  v{VERSION}",
@@ -43,6 +48,7 @@ class LkprShell(cmd.Cmd):
     ]) + '\n' + _MENU
 
     def __init__(self):
+        """Start with lazy child shells and restore only the menu's own history."""
         super().__init__()
         self._shells = {}
         self._entered = set()
@@ -51,6 +57,12 @@ class LkprShell(cmd.Cmd):
     # ── readline history, one file per shell ──
 
     def _load_history(self, path):
+        """Replace the global readline buffer when focus changes to another shell.
+
+        Clear before reading to avoid repeated loads multiplying history. Missing
+        history files are normal on first use; the environment opt-out prevents
+        both reads and writes during automation and isolated tests.
+        """
         if readline is None or not history_enabled():
             return
         readline.clear_history()
@@ -61,6 +73,11 @@ class LkprShell(cmd.Cmd):
             pass
 
     def _save_history(self, path):
+        """Write a bounded history snapshot without making persistence mandatory.
+
+        An unwritable HOME must not prevent analysis or shell navigation; this
+        optional convenience intentionally tolerates filesystem errors.
+        """
         if readline is None or not history_enabled():
             return
         try:
@@ -72,6 +89,11 @@ class LkprShell(cmd.Cmd):
     # ── shells ──
 
     def _shell(self, name):
+        """Create each mode once, deferring heavy imports until that mode is used.
+
+        Reusing the instance is what preserves settings and source/cache state
+        across switches; assigning the host enables child navigation commands.
+        """
         sh = self._shells.get(name)
         if sh is None:
             if name == 'prep':
@@ -109,9 +131,16 @@ class LkprShell(cmd.Cmd):
                 name = sh._next
             return name == 'quit'
         finally:
+            # Restore menu history even if a child raises, so its buffer cannot
+            # later be saved under the outer session's history filename.
             self._load_history(_HISTFILE)
 
     def _enter(self, name, arg):
+        """Distinguish a one-command dispatch from entering a persistent cmdloop.
+
+        A child quit request ends the outer session only through _run's explicit
+        navigation protocol, not a stray truthy return from an inline command.
+        """
         if arg.strip():
             sh = self._shell(name)
             sh.onecmd(arg)
@@ -143,20 +172,25 @@ class LkprShell(cmd.Cmd):
     do_exit = do_q = do_quit
 
     def do_EOF(self, arg):
+        """Treat end-of-input like quit instead of repeatedly reopening the prompt."""
         print()
         return self.do_quit(arg)
 
     def emptyline(self):
+        """Ignore blank input; cmd.Cmd's default would repeat the previous command."""
         pass
 
     def default(self, line):
+        """Keep the outer menu recoverable after an unrecognized navigation word."""
         print(f"  Unknown command: '{line}'. Choose 'prep' or 'post' (or 'quit').")
 
     def postloop(self):
+        """Save the currently restored menu buffer after normal cmdloop shutdown."""
         self._save_history(_HISTFILE)
 
 
 def main():
+    """Launch the unified menu; child shells retain ownership of their workflows."""
     shell = LkprShell()
     try:
         shell.cmdloop()

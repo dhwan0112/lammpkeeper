@@ -22,8 +22,13 @@ from lammps_post import Q_OXIDIZED_E, SURFACE_OFFSET_A
 
 class SessionState:
     """
-    Central session state container for all loaded data, settings,
-    and cached analysis results.
+    Own raw inputs, mutable metadata, display settings and derived results.
+
+    The shell owns load/unload transitions and metadata precedence: dump
+    detection seeds ``ff_info``, explicit input metadata overlays it, and
+    ``set`` commands may override individual values. These fields do not carry
+    a separate provenance ledger, so log-specific units are resolved by the
+    shell rather than assumed to match the trajectory.
 
     Design philosophy:
     - All loaded data is stored here (not in the shell class)
@@ -33,10 +38,11 @@ class SessionState:
     """
 
     def __init__(self):
+        """Start an unloaded session with legacy Fe-O and plotting defaults."""
         # ── Loaded raw data ──
         # These are populated by do_load() and cleared by do_unload().
         self.dump_path = None       # Path to the loaded dump/lammpstrj file
-        self.dump_frames = None     # list[dict]: parsed trajectory frames
+        self.dump_frames = None     # LazyFrames sequence of parsed frame dictionaries
         self.dump_columns = None    # list[str]: numeric column names
         self.dump_col_idx = None    # dict[str, int]: column name -> array index
 
@@ -52,7 +58,8 @@ class SessionState:
         self.input_config = None    # dict from parse_input(): units, boundary, type_map, etc.
 
         # ── Auto-detected force field properties ──
-        # Populated by detect_forcefield() when a dump file is loaded.
+        # Detection supplies initial values, not authoritative run metadata;
+        # loading input or setting values may replace them afterwards.
         self.ff_info = {
             'forcefield': 'unknown',    # 'reaxff', 'ace', or 'hdnnp'
             'unit_system': 'metal',     # 'real' (ReaxFF) or 'metal' (ACE/HDNNP)
@@ -66,6 +73,8 @@ class SessionState:
         # ── User-settable analysis parameters ──
         self.surface_z = None       # Fe surface z-coordinate (A), auto-detected or manual
         self.surface_z_manual = False
+        # Metadata changes may recompute an automatic plane but preserve a
+        # manual one; unloading the dump deliberately resets both fields.
         self.q_threshold = Q_OXIDIZED_E  # Charge threshold for "oxidized" Fe (e)
         self.normalize = False      # If True, plots show ratios/fractions instead of raw counts
         self.z_focus = None         # (zlo, zhi) tuple or None for full z-range in plots
@@ -73,11 +82,13 @@ class SessionState:
         # ── Cached analysis results ──
         # Keys are analysis names (e.g., 'charge', 'rdf_Fe-O', 'density_Fe').
         # Values are the dicts returned by analysis functions.
-        # Cache is cleared when input data changes (load/unload dump).
+        # Keys retain requested species labels, which may denote type unions.
+        # The shell clears results on load/unload and analysis-relevant edits;
+        # presentation-only settings do not invalidate numerical results.
         self.cache = {}
 
         # ── Derived quantities ──
-        self.total_mass_amu = None  # Total system mass in amu (computed from data file masses + dump atom counts)
+        self.total_mass_amu = None  # amu; data-file atom counts/masses or a manual override
         self.pressure_unit = 'bar'  # Pressure display unit: 'bar' or 'gpa'
 
         # ── Output and plot settings ──
@@ -92,28 +103,30 @@ class SessionState:
         self.fig_height = 6         # Default figure height in inches
         self.figsize_override = None  # (w, h) tuple or None; overrides per-function defaults
         self.theme = 'default'      # Plot theme: 'default', 'publication', 'presentation'
-        self.save_format = 'png'    # Output format: 'png', 'pdf', 'svg', 'both' (png+pdf)
+        self.save_format = 'png'    # Output format: 'png', 'pdf', 'svg', 'both' (PNG/PDF/SVG)
 
         # ── Plot recipes: saved settings per plot type for redo/edit ──
         # Keys are plot type names (e.g., 'rdf', 'density').
         # Values are dicts of the parameters used to generate the plot.
+        # Recipes are session-local preferences, not cached scientific data or
+        # durable run records; clear_cache() intentionally leaves them intact.
         self.plot_recipes = {}
 
     # ── Convenience properties for frequently accessed ff_info fields ──
 
     @property
     def ff(self):
-        """Short name of the detected force field (e.g., 'reaxff', 'ace')."""
+        """Return the current force-field label, including explicit overrides."""
         return self.ff_info['forcefield']
 
     @property
     def dt_fs(self):
-        """Timestep in femtoseconds (0.25 for ReaxFF, 1.0 for ACE/HDNNP)."""
+        """Return the session timestep in fs, not the raw native LAMMPS time unit."""
         return self.ff_info['dt_fs']
 
     @property
     def atom_types(self):
-        """Atom type mapping dict (e.g., {1: 'Fe', 2: 'O'})."""
+        """Expose type-ID labels; repeated labels and spin channels form groups."""
         return self.ff_info['atom_types']
 
     @property
@@ -122,13 +135,17 @@ class SessionState:
         return self.ff_info['has_charge']
 
     def clear_cache(self):
-        """Clear all cached analysis results. Called when input data changes."""
+        """Drop numerical results and structure arrays, retaining plot recipes."""
         self.cache.clear()
         self._structure_atoms = None
 
     @property
     def pbc(self):
-        """Authoritative per-axis flags, preferring trajectory metadata."""
+        """Resolve x/y/z PBC from dump, input, then the legacy surface heuristic.
+
+        The final fallback assumes periodic x/y and nonperiodic z only when
+        a surface is known; callers needing provenance use shell._periodicity.
+        """
         from lammps_post.parsers import pbc_from_boundary
         reader = getattr(self.dump_frames, 'reader', None)
         flags = pbc_from_boundary(getattr(reader, 'boundary', None))
@@ -179,7 +196,11 @@ class SessionState:
         Previous: 95th percentile — too conservative, misses O atoms
         interstitially absorbed between the top 2-3 Fe layers.
 
-        Handles dumps with or without the 'type' column.
+        Handles dumps with or without the 'type' column, using the first frame.
+        Explicit non-Fe type metadata stops detection rather than reinterpreting
+        unrelated species. Element-only legacy dumps may use Fe/Mn slots, then
+        the maximum of all atoms as a last fallback. This method does not check
+        the manual flag: its caller must decide whether recomputation is allowed.
         """
         if not self.dump_frames or not self.dump_col_idx:
             return
@@ -219,7 +240,11 @@ class SessionState:
         self.surface_z = float(np.max(atoms[:, zi])) - SURFACE_OFFSET_A
 
     def _guess_fe_types(self):
-        """All explicitly labeled surface species channels, including spins."""
+        """Return all integer type IDs whose labels contain Fe, including spins.
+
+        This is a legacy domain selector, not a generic element resolver. Missing
+        surface labels raise so an unrelated system cannot acquire an Fe plane.
+        """
         fe_type_nums = frozenset(t for t, n in self.atom_types.items()
                                 if isinstance(t, int) and 'Fe' in str(n))
         if not fe_type_nums:
@@ -254,10 +279,12 @@ class SessionState:
         Determines the relevant z-range by finding:
         - The deepest O atom penetration (minimum O z-coordinate)
         - The highest O atom position (maximum O z-coordinate)
-        - The Fe surface position (95th percentile of Fe z-coords)
+        - The current surface plane, or the 95th percentile of Fe z-coordinates
 
         Adds a margin (default 10 A) on both sides for context.
-        Clamps the result to the simulation box boundaries.
+        Uses the last frame and clamps to its simulation box boundaries. An
+        explicit z_focus is returned unchanged; this method otherwise computes
+        a suggestion without storing it or altering the surface plane.
 
         This is used by the 'set z_focus auto' command and by plotting
         functions to automatically crop plots to the interesting region,

@@ -15,12 +15,14 @@ BOX = ((0, 10), (0, 10), (0, 30))
 
 
 def _frame(rows, box=BOX, step=0):
+    """Construct explicit bounds and numeric rows without involving dump parsing."""
     import numpy as np
     return {'atoms': np.asarray(rows, float).reshape((-1, 5)),
             'box': np.asarray(box, float), 'timestep': step}
 
 
 def _value_error(call):
+    """Reject invalid inputs visibly rather than accepting a plausible pair count."""
     try:
         call()
     except ValueError as exc:
@@ -30,6 +32,7 @@ def _value_error(call):
 
 
 def _require_scipy():
+    """Skip real-tree assertions when the optional accelerator is unavailable."""
     try:
         import scipy.spatial  # noqa: F401
     except ImportError:
@@ -37,6 +40,7 @@ def _require_scipy():
 
 
 def _crossing(axis, large=False):
+    """Place one 0.6-distance image pair, optionally with tree-triggering spectators."""
     pos = [5., 5., 5.]
     other = pos.copy()
     pos[axis], other[axis] = 0.3, 59.7
@@ -48,6 +52,7 @@ def _crossing(axis, large=False):
 
 
 def test_o2_detected_across_x_boundary_on_tree_path():
+    """The large-population regression must retain the pair straddling x bounds."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     # Original pending repro: 19 isolated atoms select the old n > 20 path.
@@ -61,6 +66,7 @@ def test_o2_detected_across_x_boundary_on_tree_path():
 
 
 def test_o2_each_axis_obeys_all_eight_pbc_combinations():
+    """A boundary pair exists exactly when its own axis is periodic."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for pbc in itertools.product((False, True), repeat=3):
@@ -71,6 +77,7 @@ def test_o2_each_axis_obeys_all_eight_pbc_combinations():
 
 
 def test_o2_large_boundary_pairs_really_use_periodic_tree():
+    """Check both the periodic tree configuration and its one-pair result."""
     _util.require_numpy()
     _require_scipy()
     from scipy.spatial import cKDTree
@@ -87,6 +94,7 @@ def test_o2_large_boundary_pairs_really_use_periodic_tree():
 
 
 def test_o2_legacy_default_is_xy_periodic_z_nonperiodic():
+    """Preserve historical slab defaults when no explicit PBC tuple is supplied."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for axis in range(3):
@@ -98,6 +106,7 @@ def test_o2_legacy_default_is_xy_periodic_z_nonperiodic():
 
 
 def test_o2_periodic_out_of_box_positions_and_nonzero_origins():
+    """Origin shifts and multiple image translations must leave MIC pairs intact."""
     _util.require_numpy()
     import numpy as np
     from lammps_post import analysis
@@ -117,6 +126,7 @@ def test_o2_periodic_out_of_box_positions_and_nonzero_origins():
 
 
 def test_o2_candidate_helper_supports_every_periodic_axis():
+    """Candidate generation, not only final distance filtering, must honor PBC."""
     _util.require_numpy()
     _require_scipy()
     from lammps_post.analysis import _rdf_candidate_pairs
@@ -129,12 +139,14 @@ def test_o2_candidate_helper_supports_every_periodic_axis():
             assert candidates is not None
             ia, ib, weight = candidates
             assert len(ia) == len(ib) == int(pbc[axis]), (pbc, axis)
+            # One unordered same-species edge represents two ordered RDF pairs.
             assert weight == 2
             if pbc[axis]:
                 assert {int(ia[0]), int(ib[0])} == {0, 1}
 
 
 def test_o2_candidate_helper_keeps_legacy_rdf_z_pbc_semantics():
+    """The older z-only switch still implies periodic x and y candidates."""
     _util.require_numpy()
     _require_scipy()
     from lammps_post.analysis import _rdf_candidate_pairs
@@ -149,6 +161,7 @@ def test_o2_candidate_helper_keeps_legacy_rdf_z_pbc_semantics():
 
 
 def test_o2_rejects_malformed_pbc():
+    """Pairing requires three explicit booleans, not coerced strings or integers."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for pbc in (None, True, (), (True, True), (True,) * 4,
@@ -158,6 +171,7 @@ def test_o2_rejects_malformed_pbc():
 
 
 def test_o2_rejects_invalid_cutoff():
+    """A nonfinite, nonnumeric or nonpositive radius cannot define a valid pair."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for cutoff in (0, -1, float('nan'), float('inf'), 'bad', None):
@@ -166,6 +180,7 @@ def test_o2_rejects_invalid_cutoff():
 
 
 def test_o2_rejects_invalid_or_triclinic_boxes_even_without_pairs():
+    """Unsupported geometry must fail even when no candidate pair would be built."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     boxes = (((0, 0), (0, 10), (0, 10)),
@@ -182,6 +197,7 @@ def test_o2_rejects_invalid_or_triclinic_boxes_even_without_pairs():
 
 
 def test_o2_rejects_nonfinite_selected_coordinates_only():
+    """Validate selected coordinates without letting unrelated types poison counts."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for bad in (float('nan'), float('inf'), -float('inf')):
@@ -198,6 +214,7 @@ def test_o2_rejects_nonfinite_selected_coordinates_only():
 
 
 def test_o2_rejects_invalid_type_selectors():
+    """Selectors must name a nonempty set of positive integral numeric types."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for selector in (None, True, 0, -1, 4.5, '4', (), [], {4, 7.5},
@@ -207,6 +224,7 @@ def test_o2_rejects_invalid_type_selectors():
 
 
 def test_o2_rejects_invalid_selected_ids_but_ignores_unselected_ids():
+    """Deterministic ties need valid selected IDs, not valid unrelated identities."""
     _util.require_numpy()
     from lammps_post.analysis import detect_o2_dissociation
     for bad_id in (0, -1, 1.5, float('nan'), float('inf'), 2):
@@ -218,9 +236,11 @@ def test_o2_rejects_invalid_selected_ids_but_ignores_unselected_ids():
 
 
 def _shell(boundary, input_boundary, surface_z):
+    """Isolate shell PBC precedence using reader, input and surface metadata."""
     from lammps_post.shell import LammpsPostShell
 
     class Frames(list):
+        """Carry reader boundary metadata while retaining ordinary frame iteration."""
         pass
 
     frames = Frames([_crossing(2)])
@@ -234,6 +254,7 @@ def _shell(boundary, input_boundary, surface_z):
 
 
 def test_o2_shell_routes_dump_input_and_surface_periodicity():
+    """Reader flags outrank input flags; surface inference is only the fallback."""
     _util.require_numpy()
     from lammps_post import shell as module
     cases = ((('ff', 'pp', 'pp'), ['p', 'f', 'f'], 5, (False, True, True)),
@@ -245,6 +266,7 @@ def test_o2_shell_routes_dump_input_and_surface_periodicity():
         shell.state.cache = {'dissociation': 'old', 'rdf': 'keep'}
 
         def detect(frames, columns, **kwargs):
+            """Inspect dispatch metadata after stale dissociation cache removal."""
             assert kwargs['pbc'] == expected
             assert kwargs['o_type'] == {4, 7}
             assert kwargs['dt_fs'] == 2
@@ -261,6 +283,7 @@ def test_o2_shell_routes_dump_input_and_surface_periodicity():
 
 
 def test_o2_shell_failed_computation_invalidates_only_dissociation_cache():
+    """A failed analysis cannot expose stale pairs or erase unrelated MSD data."""
     _util.require_numpy()
     from lammps_post import shell as module
     shell = _shell(('pp', 'pp', 'pp'), None, None)

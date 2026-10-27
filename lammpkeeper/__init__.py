@@ -2,12 +2,14 @@
 LammpKeeper (lkpr) — unified entry point for the LAMMPS pre/post-processing
 CLIs used in the iron-redox MLFF study.
 
-Stage 1 (dispatcher-only integration): `lkpr` routes to the existing
-`lammps_pre` (prep) and `lammps_post` (post) packages *unchanged*. Their
-numeric behavior and physics are preserved exactly; only a top-level
-subcommand router is added. Physical reorganization into prep/, post/,
-common/ and any shared-module extraction are deferred to Stage 2, together
-with regression baselines.
+The router delegates to the legacy-named `lammps_pre` and `lammps_post`
+packages so installed commands, module entrypoints and old wrapper scripts
+reach the same implementation. Shared display, mapping and hosted-shell
+utilities now live in `lammpkeeper.common`; correctness changes are recorded
+in CHANGELOG.md rather than being hidden behind a package reorganization.
+The larger layered migration remains incremental (ADR-0001). This module
+must stay dependency-light because packaging reads VERSION without needing
+the optional prep/plotting stack.
 
 Subcommands:
     lkpr prep ...   -> lammps_pre.cli.main    (structure & LAMMPS input generation)

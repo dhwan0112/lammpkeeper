@@ -4,7 +4,8 @@ Reference Crystal Structures for RDF Comparison
 ═══════════════════════════════════════════════════════════════
 Computes ideal g(r) from known crystal structures of iron and
 iron oxide phases. Used for overlaying reference RDFs on top of
-MD-computed g(r) to identify the oxide phase.
+MD-computed g(r) to compare candidate local environments. Similar peak
+positions alone do not establish an oxide phase, magnetic order or purity.
 
 Two sources of crystal data:
   A. Built-in database — hardcoded from experimental refinements
@@ -23,6 +24,10 @@ CIF import supports:
 
 No external dependencies beyond numpy — CIF parsing and symmetry
 expansion are implemented from scratch.
+This is a lightweight CIF reader, not a complete crystallographic parser:
+occupancies/disorder, arbitrary CIF syntax and general symmetry algebra are
+not modeled. Built-in cells describe ideal periodic positions without thermal
+motion, defects, spin assignments or force-field-dependent relaxation.
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -36,12 +41,16 @@ import numpy as np
 # ═══════════════════════════════════════════════════════════════
 
 def _cubic_cell(a):
-    """Cubic cell matrix from lattice parameter a."""
+    """Return row lattice vectors for a cubic cell with side length a in Å."""
     return np.diag([a, a, a])
 
 
 def _hexagonal_cell(a, c):
-    """Hexagonal cell matrix (a, a, c, 90, 90, 120)."""
+    """Return row vectors for a hexagonal cell, with lengths a/c in Å.
+
+    The second in-plane vector makes 120 degrees with the first; the c vector
+    is perpendicular to that plane, matching the hematite hexagonal setting.
+    """
     return np.array([
         [a, 0, 0],
         [-a / 2, a * np.sqrt(3) / 2, 0],
@@ -50,7 +59,13 @@ def _hexagonal_cell(a, c):
 
 
 def _cell_from_params(a, b, c, alpha, beta, gamma):
-    """Build 3x3 cell matrix from lattice parameters (a,b,c in Å, angles in degrees)."""
+    """Build row lattice vectors from lengths in Å and angles in degrees.
+
+    Place a along x and b in the xy plane, choosing nonnegative c_z. alpha,
+    beta and gamma are respectively the b-c, a-c and a-b angles. The square
+    root clips a negative residual to zero; this is not a general validation
+    of physically valid cell parameters, and degenerate cells remain unusable.
+    """
     alpha_r = np.radians(alpha)
     beta_r = np.radians(beta)
     gamma_r = np.radians(gamma)
@@ -72,7 +87,11 @@ def _cell_from_params(a, b, c, alpha, beta, gamma):
 
 
 def _frac_to_cart(frac_coords, cell):
-    """Convert fractional coordinates to Cartesian using cell matrix."""
+    """Convert fractional row coordinates via lattice vectors stored as rows.
+
+    Both a single length-three position and an (N, 3) array use ``frac @ cell``;
+    the returned length unit is the unit of the supplied cell (normally Å).
+    """
     return frac_coords @ cell
 
 
@@ -80,6 +99,12 @@ def _apply_symop(symop_str, frac):
     """
     Apply a symmetry operation string (e.g., '-x, y+1/2, -z+1/2') to
     fractional coordinates. Returns new fractional position.
+
+    Recognize signed coordinate terms and numeric/fractional translations
+    through tokenization, not eval. This handles the conventional simple xyz
+    expressions used by the built-ins, but is not an arbitrary expression
+    parser or syntax validator. Wrapping and duplicate handling belong to
+    _expand_symmetry, so the result here may lie outside the unit cell.
     """
     result = np.zeros(3)
     parts = [s.strip() for s in symop_str.split(',')]
@@ -136,8 +161,14 @@ def _apply_symop(symop_str, frac):
 def _expand_symmetry(asym_atoms, symops):
     """
     Expand asymmetric unit atoms using symmetry operations.
-    Removes duplicates (positions closer than 0.01 in fractional coords).
+    Remove duplicate element/position keys after rounding each wrapped
+    fractional component to three decimal places. This is quantized equality,
+    not a Cartesian-distance tolerance or a nearest-image neighbor test.
     Returns list of (element, [fx, fy, fz]) with coordinates wrapped to [0, 1).
+
+    Keep elements in the key so coincident sites of different species are not
+    merged. Preserve the first generated representative in traversal order;
+    site occupancies and disorder alternatives are not resolved here.
     """
     all_atoms = []
     seen = set()
@@ -173,6 +204,8 @@ CRYSTAL_DB['alpha-Fe'] = {
 }
 
 # ── FeO wustite (rocksalt, Fm-3m) ──
+# Translate both basis sites through the same face-centering vectors to build
+# the conventional cell, rather than confusing its motif with a primitive cell.
 _fcc_trans = [[0, 0, 0], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]]
 _feo_atoms = []
 for t in _fcc_trans:
@@ -186,6 +219,8 @@ CRYSTAL_DB['FeO'] = {
 
 # ── Fe2O3 hematite (R-3c, hexagonal setting) ──
 # Asymmetric unit: Fe at (0, 0, 0.3553), O at (0.3059, 0, 0.25)
+# Include centering translations in the operation list: point rotations alone
+# would leave an incomplete conventional hexagonal reference cell.
 _hematite_symops = [
     'x, y, z', '-y, x-y, z', '-x+y, -x, z',
     'x-y, -y, -z+1/2', '-x, -x+y, -z+1/2', 'y, x, -z+1/2',
@@ -256,8 +291,18 @@ def parse_cif(source):
 
     Returns a crystal dict compatible with CRYSTAL_DB format:
         {'name': str, 'cell': 3x3 array, 'atoms': [(elem, [fx,fy,fz]), ...]}
-    Returns None for missing/unreadable input. Raises ValueError when symmetry
-    cannot be established: supply explicit symmetry operations, or declare P1.
+    Returns None for a missing source, failed COD fetch, missing cell lengths
+    or absent usable atom rows; local file read errors may propagate. Raises
+    ValueError when symmetry cannot be established: supply explicit symmetry
+    operations, or declare P1. A named non-P1 group alone is not expanded from
+    a space-group database.
+
+    Uses the first atom-site loop with fractional coordinates, strips numeric
+    parenthetical uncertainties and defaults absent/unusable angles to 90
+    degrees. Atom rows are whitespace-split; occupancies, anisotropic motion,
+    multiple data blocks and sophisticated multiline/quoted CIF constructs
+    are not interpreted. The caller must judge the suitability of such input
+    as a fully occupied ideal reference before drawing structural conclusions.
     """
     # ── Fetch CIF content ──
     if source.lower().startswith('cod:'):
@@ -279,13 +324,21 @@ def parse_cif(source):
 
     # ── Parse CIF fields ──
     def _get_value(tag):
-        """Extract a single value for a CIF tag."""
+        """Read the first scalar tag value, accepting simple quoted tokens.
+
+        Matching is case-insensitive and line-based; a missing tag yields None.
+        This helper does not decode CIF semicolon-delimited multiline fields.
+        """
         pattern = rf'''^\s*{re.escape(tag)}\s+('([^']*)'|"([^"]*)"|([^\s#]+))'''
         m = re.search(pattern, cif_text, re.MULTILINE | re.IGNORECASE)
         return next((v for v in m.groups()[1:] if v is not None), None) if m else None
 
     def _strip_uncertainty(val_str):
-        """Remove parenthetical uncertainty: '2.8665(3)' -> 2.8665"""
+        """Convert a CIF number without its parenthetical uncertainty suffix.
+
+        Missing/unparseable values (including CIF '.' and '?') return None,
+        leaving callers to distinguish required fields from optional defaults.
+        """
         if val_str is None:
             return None
         val_str = re.sub(r'\([^)]*\)', '', val_str)
@@ -312,6 +365,8 @@ def parse_cif(source):
     name = _get_value('_chemical_name_mineral') or _get_value('_chemical_formula_sum') or source
 
     # ── Parse atom_site loop ──
+    # Header-driven indices allow column reordering. This lightweight reader
+    # skips incomplete/unusable rows rather than validating the entire CIF.
     # Find the loop_ block containing _atom_site_fract_x
     atom_labels = []
     atom_types = []
@@ -426,7 +481,8 @@ def parse_cif(source):
     asym_atoms = [(elem, [fx, fy, fz])
                   for elem, fx, fy, fz in zip(atom_labels, frac_x, frac_y, frac_z)]
 
-    # Expand with symmetry
+    # Only explicit operations (or the P1 identity established above) define
+    # full-cell positions; an asymmetric unit must not masquerade as a full cell.
     expanded = _expand_symmetry(asym_atoms, symops)
 
     return {
@@ -444,6 +500,20 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
                           n_bins=200, supercell=(4, 4, 4)):
     """
     Compute the ideal g(r) from a crystal structure.
+
+    Replicate row-vector unit cells, histogram directed element-A to element-B
+    distances and normalize by N_A times spherical-shell volume times N_B/V.
+    Thus identical-element pairs retain both directions; separations <= 0.01 Å
+    (including self pairs) and >= r_max are excluded. The ideal static lattice
+    has sharp bin-dependent peaks, not a thermally broadened experimental RDF.
+
+    Periodicity is applied in all three dimensions by rounding fractional
+    displacements in the supercell basis. This is componentwise fractional
+    wrapping, not a general closest-lattice-vector search for arbitrarily skew
+    cells. Supply a suitable cell/supercell and cutoff so intended neighbor
+    shells are represented without missing repeated images. No finite-boundary
+    shell correction, automatic replication-size choice or input validation
+    of these geometric assumptions is performed.
 
     Args:
         phase_or_crystal: str (key in CRYSTAL_DB) or dict (from parse_cif)
@@ -472,6 +542,8 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
     nx, ny, nz = supercell
     supercell_matrix = cell * np.array([[nx], [ny], [nz]])
 
+    # Scale each lattice-vector row independently. Dividing translated unit-cell
+    # fractions by replication counts expresses positions in that larger basis.
     # Build supercell positions
     all_positions = []
     all_elements = []
@@ -505,7 +577,9 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
         return None
 
     # Compute pairwise distances with minimum image convention
-    # For non-orthorhombic cells, convert to fractional coords, wrap, convert back
+    # Work in the lattice basis so the reference does not discard hexagonal or
+    # other oblique cell angles. Componentwise wrapping has the skew-cell
+    # limitation documented above; it is not a universal triclinic MIC solver.
     dr = r_max / n_bins
     hist = np.zeros(n_bins)
 
@@ -536,12 +610,20 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
 
 
 def get_available_phases():
-    """Return list of (key, name) for all built-in reference phases."""
+    """Return built-in (lookup key, display name) pairs in database order.
+
+    CIF structures are caller-owned dictionaries and do not enter this registry.
+    """
     return [(k, v['name']) for k, v in CRYSTAL_DB.items()]
 
 
 def get_phases_for_pair(pair=('Fe', 'O')):
-    """Return list of phase keys that contain both elements in the pair."""
+    """List built-in keys containing both exact element labels in pair.
+
+    This filters compositional eligibility only; it does not score an RDF match
+    or establish a phase assignment. Identical-element pairs need that one
+    element present, and no matching entries yields an empty list.
+    """
     result = []
     elem_a, elem_b = pair
     for key, crystal in CRYSTAL_DB.items():

@@ -12,6 +12,18 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Complete English source annotations (DOC-ALL)
+
+- Add or clarify maintenance documentation in every tracked Python, Rust, Shell
+  and TOML source/build file: 63 files, including tests and compatibility shims.
+- Document all 58 Python modules and all 713 function/class definitions, including
+  private/nested helpers; explain major logic, units, assumptions and failure paths.
+- Preserve executable Python AST, Rust/Shell noncomment code and parsed TOML
+  values. Generated templates, fixture snippets, mappings and goldens are unchanged.
+- `docs/agent/COMMENT_COVERAGE.md` lists every file, coverage counts, scope and
+  verification limits. Help/introspection docstrings intentionally become clearer;
+  scientific algorithms, command semantics and output data do not change.
+
 ### Whole-code audit corrections (AUDIT-20261027)
 
 - Input loading preserves canonical ACE analysis identities and invalidates

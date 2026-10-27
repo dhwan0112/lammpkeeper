@@ -2,6 +2,10 @@
 LAMMPS-PRE: Pre-Processing Interactive CLI
 Unified simulation setup for ReaxFF / ACE iron oxidation systems.
 
+These constants are Fe/O domain defaults, not a general species registry.
+Geometry uses Angstrom throughout; preset-specific time units are handled in
+``state.py`` rather than by rescaling these lengths or masses.
+
 Package structure:
     lammps_pre/
     ├── __init__.py       — Version, physical constants

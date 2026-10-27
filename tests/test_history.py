@@ -21,17 +21,20 @@ N = 5000
 
 
 def _require_readline():
+    """Report unavailable history support as a skip, never as a passing no-op."""
     if readline is None:
         skip('readline not available')
 
 
 def _fill(path, n=N):
+    """Write ordered commands so truncation can be checked against the newest one."""
     with open(path, 'w') as f:
         for i in range(n):
             f.write(f'cmd {i}\n')
 
 
 def _lines(path):
+    """Read persisted commands without newline differences obscuring duplication."""
     with open(path) as f:
         return f.read().splitlines()
 
@@ -40,10 +43,12 @@ class _patched_home:
     """Point HOME (and optionally LKPR_NO_HISTORY) at a temp dir."""
 
     def __init__(self, no_history=False):
+        """Allocate an isolated home and remember the requested history policy."""
         self.tmp = tempfile.mkdtemp(prefix='lkpr_hist_')
         self.no_history = no_history
 
     def __enter__(self):
+        """Save environment values before redirecting all home-based history writes."""
         self._saved = {k: os.environ.get(k) for k in ('HOME', 'LKPR_NO_HISTORY')}
         os.environ['HOME'] = self.tmp
         if self.no_history:
@@ -53,6 +58,7 @@ class _patched_home:
         return self.tmp
 
     def __exit__(self, *exc):
+        """Restore both absent and set environment values even after assertion failure."""
         for k, v in self._saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -61,16 +67,19 @@ class _patched_home:
 
 
 def test_standalone_shell_history_does_not_accumulate_on_reload():
+    """Repeated initialization must not append duplicate in-memory history entries."""
     _require_readline()
     from lammpkeeper.common.hosted import HostedShellMixin
 
     class Shell(HostedShellMixin):
+        """Expose the history mixin without unrelated interactive shell behavior."""
         pass
 
     with _patched_home() as home:
         path = os.path.join(home, '.test_history')
         _fill(path, n=3)
         saved = [readline.get_history_item(i + 1)
+                 # Readline is process-global; restore prior entries after the test.
                  for i in range(readline.get_current_history_length())]
         try:
             for _ in range(3):
@@ -86,6 +95,7 @@ def test_standalone_shell_history_does_not_accumulate_on_reload():
 
 
 def test_pre_shell_history_is_trimmed_to_limit():
+    """Preprocessing history stays bounded while retaining the newest command."""
     _require_readline()
     with _patched_home() as home:
         path = os.path.join(home, '.lammps-pre_history')
@@ -99,6 +109,7 @@ def test_pre_shell_history_is_trimmed_to_limit():
 
 
 def test_lkpr_shell_history_is_trimmed_to_limit():
+    """Unified-shell persistence applies the same bound and newest-command policy."""
     _require_readline()
     with _patched_home() as home:
         path = os.path.join(home, '.lkpr_history')
@@ -117,6 +128,7 @@ def test_lkpr_shell_history_is_trimmed_to_limit():
 
 
 def test_no_history_env_leaves_home_untouched():
+    """The opt-out must prevent both shell families from creating history files."""
     _require_readline()
     with _patched_home(no_history=True) as home:
         from lammps_pre.shell import LammpsPreShell

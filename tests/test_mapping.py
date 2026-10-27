@@ -13,6 +13,7 @@ from lammpkeeper.common.mapping import (
 
 
 def test_canonical_tables():
+    """Legacy numeric, label and element views retain the ACE spin-proxy ordering."""
     assert type_to_label('ace') == {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}
     assert type_to_label('reaxff') == {1: 'Fe', 2: 'O'}
     assert type_to_label('hdnnp') == {1: 'Fe', 2: 'O'}
@@ -27,6 +28,7 @@ def test_canonical_tables():
 
 
 def test_prep_presets_preserved():
+    """Builder presets must keep the published type-to-species conventions."""
     from lammps_pre.state import FF_PRESETS
     assert FF_PRESETS['ace']['atom_types'] == {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}
     assert FF_PRESETS['reaxff2010']['atom_types'] == {1: 'Fe', 2: 'O'}
@@ -75,6 +77,7 @@ def test_post_detect_ace_labelless_uses_the_convention_not_atom_counts():
     from lammps_post.parsers import detect_forcefield
 
     def detect(n_up, n_down, n_o):
+        """Vary only populations to expose accidental abundance-based relabeling."""
         types = np.array([1] * n_up + [2] * n_down + [3] * n_o, dtype=float)
         atoms = np.zeros((len(types), 2), dtype=float)
         atoms[:, 1] = types
@@ -82,6 +85,7 @@ def test_post_detect_ace_labelless_uses_the_convention_not_atom_counts():
         return detect_forcefield(['id', 'type'], {'id': 0, 'type': 1}, frames)['atom_types']
 
     for n_up, n_down, n_o in [
+          # These populations are adversarial inputs, not a species-identification oracle.
           (41, 87, 8),        # slab + O2 gas (O is rarest)
           (64, 128, 256),     # bulk Fe3O4    (O is the MAJORITY)
           (400, 3600, 400),   # 10% spin-up   (used to yield {2:Fe_up, 3:Fe_down, 1:O})
@@ -121,6 +125,7 @@ def test_type_synthesis_from_elements_is_canonical_not_alphabetical():
     from lammps_post.shell import LammpsPostShell
 
     def synthesized_types(counts):
+        """Load element-only input and count the shell's synthesized canonical IDs."""
         d = tempfile.mkdtemp()
         p = os.path.join(d, 'traj.dump')
         _write_element_dump(p, counts)

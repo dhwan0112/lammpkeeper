@@ -17,12 +17,18 @@ from lammps_pre.writers import get_filenames
 
 
 def _executable(path, text):
+    """Install a local Bash stub, never a real scheduler or simulation executable."""
     path.write_text('#!/bin/bash\n' + text)
     path.chmod(0o755)
 
 
 @contextlib.contextmanager
 def _run_job(failure='', lammps_status=0):
+    """Execute rendered Bash in an isolated tree with controlled command failures.
+
+    Local PATH stubs exercise real shell branching without an HPC allocation;
+    payload files and event logs independently reveal copy and cleanup order.
+    """
     with tempfile.TemporaryDirectory(prefix='lkpr_hpc1_') as tmp:
         root = Path(tmp)
         # Spaces exercise quoting of scratch and copyback destinations.
@@ -55,6 +61,7 @@ def _run_job(failure='', lammps_status=0):
             (work / name).write_text('staged input: ' + name + '\n')
 
         _executable(bin_dir / 'lmp', 'exit 0\n')
+        # MPI is a payload-producing stub; no scheduler, real MPI or LAMMPS is invoked.
         _executable(bin_dir / 'module', 'exit 0\n')
         _executable(bin_dir / 'mpirun', '''
 printf 'mpirun\\n' >> "$TEST_EVENTS"
@@ -142,6 +149,7 @@ cd() {
         assert syntax.returncode == 0, syntax.stderr
         assert '/hpctmp/' in rendered, 'update test isolation for new scratch root'
         rendered = rendered.replace('/hpctmp/', str(scratch_root) + '/')
+        # Only the test copy is redirected; production rendering and templates stay intact.
         rendered = rendered.replace(
             'source /etc/profile.d/modules.sh 2>/dev/null || true',
             ': # test-only: do not initialize site environment')
@@ -157,6 +165,7 @@ cd() {
 
 
 def _assert_outputs(destination):
+    """Verify exact payloads including dotfiles and nested hidden directories."""
     for name, payload in (
         ('trajectory.out', 'trajectory payload\n'),
         ('.restart.hidden', 'hidden restart payload\n'),
@@ -169,6 +178,7 @@ def _assert_outputs(destination):
 
 
 def _assert_preserved(job):
+    """Failed recovery must retain complete scratch and report a recoverable error."""
     assert job.scratch.is_dir(), f'scratch deleted after failed copy: {job.log}'
     _assert_outputs(job.scratch)
     assert job.result.returncode != 0, f'failure reported as exit 0: {job.log}'
@@ -179,6 +189,7 @@ def _assert_preserved(job):
 
 
 def test_success_copies_hidden_outputs_before_cleanup():
+    """Only a complete successful copy permits deleting the simulation scratch."""
     with _run_job() as job:
         assert job.result.returncode == 0, job.log
         assert job.marker.read_text().strip() == str(job.scratch)
@@ -188,6 +199,7 @@ def test_success_copies_hidden_outputs_before_cleanup():
 
 
 def test_successful_lammps_failed_copyback_preserves_scratch():
+    """Simulation success cannot mask a failed result transfer or erase scratch."""
     with _run_job('copyback_cp') as job:
         assert job.marker.exists(), 'LAMMPS stub was not called'
         assert 'injected result copy failure' in job.log, job.log
@@ -196,6 +208,7 @@ def test_successful_lammps_failed_copyback_preserves_scratch():
 
 
 def test_failed_lammps_archives_hidden_outputs_and_keeps_exit_status():
+    """Successful failure-archiving retains all output and the simulator's status 37."""
     with _run_job(lammps_status=37) as job:
         assert job.result.returncode == 37, job.log
         _assert_outputs(job.archive)
@@ -206,6 +219,7 @@ def test_failed_lammps_archives_hidden_outputs_and_keeps_exit_status():
 
 
 def test_partial_copyback_preserves_complete_scratch():
+    """One transferred file is not proof that the remaining scratch is disposable."""
     with _run_job('partial_copyback') as job:
         assert 'injected partial result copy failure' in job.log, job.log
         _assert_preserved(job)
@@ -214,6 +228,7 @@ def test_partial_copyback_preserves_complete_scratch():
 
 
 def test_relative_scratch_is_rejected_before_staging():
+    """Relative scratch paths must fail before any staging or simulation launch."""
     with _run_job('relative_scratch') as job:
         assert job.result.returncode != 0, job.log
         assert 'scratch path must be absolute' in job.log, job.log
@@ -223,6 +238,7 @@ def test_relative_scratch_is_rejected_before_staging():
 
 
 def test_failed_lammps_failed_archive_copy_preserves_scratch():
+    """An archive copy error must preserve the only complete failed-run output."""
     with _run_job('archive_cp', lammps_status=37) as job:
         assert 'injected result copy failure' in job.log, job.log
         _assert_preserved(job)
@@ -230,6 +246,7 @@ def test_failed_lammps_failed_archive_copy_preserves_scratch():
 
 
 def test_failed_lammps_failed_archive_mkdir_preserves_scratch():
+    """A missing archive destination prevents copy attempts and retains scratch."""
     with _run_job('archive_mkdir', lammps_status=37) as job:
         assert 'injected mkdir failure' in job.log, job.log
         _assert_preserved(job)
@@ -238,6 +255,7 @@ def test_failed_lammps_failed_archive_mkdir_preserves_scratch():
 
 
 def _assert_staging_failure(failure, message):
+    """Require injected preparation errors to stop launch and leave a useful log."""
     with _run_job(failure) as job:
         assert message in job.log, job.log
         assert not job.marker.exists(), f'LAMMPS ran after {failure}: {job.log}'
@@ -247,26 +265,32 @@ def _assert_staging_failure(failure, message):
 
 
 def test_stage_mkdir_failure_prevents_lammps():
+    """Failure to create the job scratch directory must stop simulation launch."""
     _assert_staging_failure('stage_mkdir', 'injected mkdir failure')
 
 
 def test_stage_parent_mkdir_failure_prevents_lammps():
+    """Failure to create the scratch parent is fatal before staging proceeds."""
     _assert_staging_failure('stage_parent_mkdir', 'injected mkdir failure')
 
 
 def test_stage_input_copy_failure_prevents_lammps():
+    """A missing staged input script must never be followed by an MPI launch."""
     _assert_staging_failure('stage_input_cp', 'injected staging copy failure')
 
 
 def test_stage_required_copy_failure_prevents_lammps():
+    """Failure copying required region data must stop the otherwise runnable job."""
     _assert_staging_failure('stage_required_cp', 'injected staging copy failure')
 
 
 def test_stage_cd_failure_prevents_lammps():
+    """A failed directory change must not run LAMMPS in the submission directory."""
     _assert_staging_failure('stage_cd', 'injected cd failure')
 
 
 def _assert_existing_scratch_rejected(failure):
+    """Reject occupied scratch while preserving prior bytes and symlink identity."""
     with _run_job(failure) as job:
         assert not job.marker.exists(), f'LAMMPS reused existing scratch: {job.log}'
         assert job.result.returncode != 0, job.log
@@ -281,14 +305,17 @@ def _assert_existing_scratch_rejected(failure):
 
 
 def test_existing_scratch_is_not_reused_or_deleted():
+    """An existing directory belongs to prior work and must remain untouched."""
     _assert_existing_scratch_rejected('existing_scratch')
 
 
 def test_symlink_scratch_is_not_followed_or_deleted():
+    """A pre-existing symlink must neither redirect staging nor be removed."""
     _assert_existing_scratch_rejected('symlink_scratch')
 
 
 def test_cleanup_rm_failure_returns_nonzero_and_keeps_copied_results():
+    """Deletion failure remains visible even after results were safely copied."""
     with _run_job('cleanup_rm') as job:
         assert 'injected cleanup rm failure' in job.log, job.log
         assert job.result.returncode != 0, f'cleanup failure returned 0: {job.log}'
@@ -298,6 +325,7 @@ def test_cleanup_rm_failure_returns_nonzero_and_keeps_copied_results():
 
 
 def test_cleanup_cd_failure_keeps_scratch_without_attempting_rm():
+    """Cleanup must not attempt deletion after failing to leave scratch."""
     with _run_job('cleanup_cd') as job:
         assert 'injected cleanup cd failure' in job.log, job.log
         assert job.result.returncode != 0, job.log

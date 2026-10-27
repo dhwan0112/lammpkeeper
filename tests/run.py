@@ -1,8 +1,10 @@
 """Dependency-free test runner: `python tests/run.py`.
 
-Discovers and runs every `test_*` function in the tests/ modules without
-requiring pytest. `pytest tests/` also works when pytest is installed.
-Set LKPR_SLOW=1 to include the slower RDF/MSD regression checks.
+Runs every callable `test_*` name in the explicitly registered modules below,
+without requiring pytest. New modules must be added to MODULES; this runner
+intentionally does not claim automatic filesystem discovery. Pytest can discover
+the same files independently when installed. Set LKPR_SLOW=1 to include slower
+RDF/MSD regressions and the independent fixture RDF oracle.
 """
 import os
 import sys
@@ -26,6 +28,12 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
 
 
 def main():
+    """Run registered checks deterministically and return nonzero on any failure.
+
+    Skip is a distinct outcome, never a pass. Import failures remain visible
+    outside the per-test catch so an unavailable or broken test module cannot
+    silently disappear from the suite's reported coverage.
+    """
     passed = failed = skipped = 0
     for modname in MODULES:
         mod = importlib.import_module(modname)
@@ -35,6 +43,8 @@ def main():
             fn = getattr(mod, name)
             if not callable(fn):
                 continue
+            # Tests use ordinary zero-argument callables so pytest is optional;
+            # traceback evidence is retained rather than aborting after one bug.
             try:
                 fn()
                 print(f'PASS {modname}.{name}')

@@ -20,6 +20,7 @@ from _util import have_numpy, noninteractive, skip
 
 def _frame(step, rows, bounds='pp pp ff', box=((0, 10), (0, 10), (0, 20)),
            cols='id type x y z'):
+    """Encode explicit box flags independently of the production dump parser."""
     head = [
         'ITEM: TIMESTEP', str(step),
         'ITEM: NUMBER OF ATOMS', str(len(rows)),
@@ -29,6 +30,7 @@ def _frame(step, rows, bounds='pp pp ff', box=((0, 10), (0, 10), (0, 20)),
 
 
 def _write(text):
+    """Create a synthetic on-disk dump whose cleanup belongs to the caller."""
     fd, path = tempfile.mkstemp(suffix='.dump')
     with os.fdopen(fd, 'w') as f:
         f.write(text)
@@ -36,6 +38,7 @@ def _write(text):
 
 
 def test_boundary_flags_from_header():
+    """Only paired periodic faces imply PBC; absent flags remain unknown."""
     from lammps_post.parsers import parse_boundary_flags, pbc_from_boundary
     assert parse_boundary_flags('ITEM: BOX BOUNDS pp pp ff\n') == ('pp', 'pp', 'ff')
     assert parse_boundary_flags('ITEM: BOX BOUNDS xy xz yz pp pp pp') == ('pp', 'pp', 'pp')
@@ -126,6 +129,7 @@ def test_native_boundary_metadata_matches_numpy_without_fallback():
     successful_calls = []
 
     def parse_block(*args):
+        """Record genuinely parsed native rows so silent NumPy fallback cannot pass."""
         result = native.parse_block(*args)
         assert result[2] == args[1], 'native parser deferred to NumPy'
         successful_calls.append(result[2])
@@ -176,6 +180,7 @@ def test_native_boundary_metadata_matches_numpy_without_fallback():
 
 
 def test_bulk_fixture_boundary_metadata():
+    """Every access path must retain the reference dump's fully periodic box."""
     if not have_numpy():
         skip('numpy not installed')
     from _util import FIXTURE
@@ -210,6 +215,7 @@ def _z_crossing_frames():
 
 
 def test_msd_unwraps_z_only_when_periodic():
+    """Unit z steps square to 0, 1, 4, 9 only when z crossings are unwrapped."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -223,6 +229,7 @@ def test_msd_unwraps_z_only_when_periodic():
 
 
 def test_msd_rejects_duplicate_ids_instead_of_skipping_frames():
+    """Duplicate IDs invalidate tracking rather than shortening the sampled trajectory."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -243,6 +250,7 @@ def test_msd_rejects_duplicate_ids_instead_of_skipping_frames():
 
 
 def test_shell_periodicity_prefers_dump_flags():
+    """Explicit dump metadata outranks input settings and surface-based heuristics."""
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.shell import LammpsPostShell
@@ -280,6 +288,7 @@ def _crossing_dump(bounds):
 
 
 def test_shell_msd_and_rdf_follow_dump_flags():
+    """Shell analyses must forward the dump's z periodicity to the numeric APIs."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -303,9 +312,11 @@ def test_shell_msd_and_rdf_follow_dump_flags():
             from lammps_post.analysis import compute_rdf
 
             def ref(flag):
+                """Compare shell routing to a direct API call with explicit z PBC."""
                 return compute_rdf(s.dump_frames, s.dump_col_idx, 1, 2, max_frames=4,
                                    label_a='Fe', label_b='O', z_pbc=flag)['g']
             got = s.cache['rdf_Fe-O']['g']
+            # This is a routing check; direct API agreement alone does not validate g(r).
             assert np.array_equal(got, ref(z_pbc)), bounds
             assert not np.array_equal(got, ref(not z_pbc)), bounds
         finally:
