@@ -44,7 +44,7 @@ elif args[:3] == ['-m', 'lammpkeeper', 'post']:
             (out / name).write_bytes(b'fake image fixture')
     if '--batch' in args and case != 'empty_quick':
         sections = ['density_all', 'msd_Fe', 'rdf_Fe-O', 'spin', 'dissociation',
-                    'penetration', 'penetration_trend', 'oar', 'structure']
+                    'penetration', 'penetration_trend', 'oar']
         (out / 'summary.txt').write_text('\\n'.join('--- ' + key + ' ---' for key in sections))
 elif args[:3] == ['-m', 'lammpkeeper', 'prep']:
     out = Path(args[args.index('--write') + 1])

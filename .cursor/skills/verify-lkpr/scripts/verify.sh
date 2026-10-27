@@ -73,7 +73,8 @@ if [ -f "$FIXTURE" ]; then
         --batch "$WORK/post.commands" --output "$WORK/post_out" < /dev/null) > "$EVID/post-batch.log" 2>&1; then
     post_bad=1
   fi
-  for required in density_all spin dissociation penetration penetration_trend oar structure; do
+  # Structure is generated on-demand by plot all, not by dump-only analyze all.
+  for required in density_all spin dissociation penetration penetration_trend oar; do
     grep -qFx -- "--- $required ---" "$WORK/post_out/summary.txt" 2>/dev/null || post_bad=1
   done
   for required in msd rdf; do
