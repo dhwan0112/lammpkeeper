@@ -1,7 +1,9 @@
 # Every-source maintenance annotation — DOC-ALL
 
 Status: annotation, semantic/coverage checks, selective independent review and
-full runtime verification complete; separate PR publication pending.
+full runtime verification complete. Published as
+[PR #16](https://github.com/dhwan0112/lammpkeeper/pull/16), unmerged and stacked
+on [audit PR #15](https://github.com/dhwan0112/lammpkeeper/pull/15).
 Baseline: `f62f0a4a5d57ade623144470e369bd238d57e435` (verified audit PR #15).
 Branch: `docs/all-source-comments`, stacked on that audit branch, not merged main.
 

@@ -49,7 +49,7 @@ verification passes in the available rich and NumPy environments (explicit skips
 listed). The maintainer explicitly approved feature-branch push and PR creation
 after final verification in this session. Direct main push and merge are excluded.
 
-## DOC-ALL · P3 · English maintenance comments across every source file — `in-progress (docs/all-source-comments)`
+## DOC-ALL · P3 · English maintenance comments across every source file — `done (PR #16, unmerged)`
 
 Maintainer explicitly requested every code file, then selected **all files,
 functions/classes and major logic** (not every execution line), in **English**.
