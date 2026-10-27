@@ -1,9 +1,9 @@
 """
-Canonical per-force-field atom TYPE <-> ELEMENT <-> LABEL convention.
+Preset/compatibility adapter for atom TYPE <-> ELEMENT <-> LABEL conventions.
 
-Single source of truth shared by the prep (structure generation) and post
-(analysis) sides. Extracted in Stage 2 to remove three independent copies of
-the ACE "type 1 = Fe_up, type 2 = Fe_down, type 3 = O" convention that
+SpeciesMap owns generic selection storage/resolution; this module remains the
+single source of preset conventions shared by prep and post. Stage 2 extracted
+the ACE "type 1 = Fe_up, type 2 = Fe_down, type 3 = O" convention from three copies that
 previously lived in:
   - lammps_pre.state.FF_PRESETS            (forward: type -> label)
   - lammps_post.parsers.detect_forcefield  (reverse: element/type -> label)
@@ -24,7 +24,7 @@ parser, visibly warned and still subject to GEN-2; these helpers do not certify
 those guesses.
 """
 
-from numbers import Integral
+from lammpkeeper.core import SpeciesMap
 
 
 # type_number -> (element_symbol, label)
@@ -73,64 +73,34 @@ _SPECIES_DISPLAY = {'ace': {'Fe': 'Fe (all spins)',
                             'Fe_up': 'Fe↑', 'Fe_down': 'Fe↓'}}
 
 
-def species_type_sets(atom_types, ff=None, groups=None):
-    """Resolve explicit type labels and optional groups to immutable type sets.
+def make_species_map(atom_types, ff=None, groups=None):
+    """Adapt explicit labels/groups and compatible preset aliases to a system map.
 
-    Repeated labels are an explicit union, not a last-type-wins inverse map.
-    Arbitrary underscore prefixes are never guessed. ``groups`` may add named
-    unions of existing type IDs but cannot silently redefine an exact label or
-    an applicable preset alias: conflicting definitions raise explicitly.
-    Canonical FF tables and legacy conversion helpers remain unchanged.
+    Generic validation, immutable storage and name resolution belong to
+    ``SpeciesMap``. This adapter alone knows domain aliases: choosing a force
+    field never overwrites user-supplied labels or injects prefix-based guesses.
+    Existing scalar tables/conversion helpers remain unchanged.
     """
-    resolved = {}
-    for type_id, label in atom_types.items():
-        if (isinstance(type_id, bool) or not isinstance(type_id, Integral)
-                or type_id <= 0):
-            raise ValueError(f'Invalid atom type ID {type_id!r}; expected a positive integer')
-        if not isinstance(label, str) or not label.strip():
-            raise ValueError(f'Invalid label for atom type {type_id}: {label!r}')
-        resolved.setdefault(label, set()).add(int(type_id))
-
+    exact = SpeciesMap.from_atom_types(atom_types).type_sets()
+    resolved = SpeciesMap.from_atom_types(atom_types, groups=groups).type_sets()
     canonical = FORCE_FIELDS.get(ff, {})
-    # A named alias is valid only for the same encoded member labels. Merely
-    # selecting a force-field name must not relabel an explicitly mapped system.
     for name, members in _SPECIES_GROUPS.get(ff, {}).items():
-        if all(t in atom_types and atom_types[t] == canonical[t][1] for t in members):
-            # A system may explicitly use the same label for a different type.
-            # Do not replace it with a preset alias merely because ff matches.
-            if name not in resolved:
-                resolved[name] = set(members)
+        if (name not in exact
+                and all(t in atom_types and atom_types[t] == canonical[t][1] for t in members)):
+            if name in resolved and resolved[name] != members:
+                raise ValueError(f'Conflicting definition for species {name!r}')
+            resolved[name] = members
+    return SpeciesMap(resolved)
 
-    # Exact labels and established aliases cannot silently acquire different
-    # membership through a later group definition; callers must resolve the
-    # conflict explicitly before any numerical selection is made.
-    for name, selection in (groups or {}).items():
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError(f'Invalid species group name {name!r}')
-        try:
-            members = list(selection)
-        except TypeError:
-            raise ValueError(f'Group {name!r} must contain atom type IDs') from None
-        if not members or any(isinstance(t, bool) or not isinstance(t, Integral)
-                              or t <= 0 for t in members):
-            raise ValueError(f'Group {name!r} must contain positive integer atom type IDs')
-        members = set(map(int, members))
-        missing = members - atom_types.keys()
-        if missing:
-            raise ValueError(f'Group {name!r} refers to unknown atom type IDs {sorted(missing)}')
-        if name in resolved and resolved[name] != members:
-            raise ValueError(f'Conflicting definition for species {name!r}')
-        resolved[name] = members
-    return {name: frozenset(members) for name, members in resolved.items()}
+
+def species_type_sets(atom_types, ff=None, groups=None):
+    """Legacy dictionary view of the generic map, including applicable presets."""
+    return make_species_map(atom_types, ff=ff, groups=groups).type_sets()
 
 
 def resolve_species(name, atom_types, ff=None, groups=None):
-    """Return the explicit type set for a label; unknown names never mean all."""
-    available = species_type_sets(atom_types, ff=ff, groups=groups)
-    if name not in available:
-        choices = ', '.join(sorted(available)) or '(none; supply explicit type labels)'
-        raise ValueError(f'Unknown species {name!r}. Valid species: {choices}')
-    return available[name]
+    """Legacy resolver routed through SpeciesMap; unknown names never mean all."""
+    return make_species_map(atom_types, ff=ff, groups=groups).resolve(name)
 
 
 def species_display_name(name, atom_types, ff=None, groups=None):
