@@ -251,22 +251,83 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 - **Done when:** tests cover `Fe`, `Fe_up`, `Fe_down`, `O`, and an unknown name, for
   both MSD and RDF. Labels say "Fe (all spins)" vs "Fe↑".
 
-### PHYS-3 · P1 · O₂ detection misses pairs across periodic boundaries — `open`
+### PHYS-3 · P1 · O₂ detection misses pairs across periodic boundaries — `done (46ccd56)`
+- **Completion:** periodic candidate/PBC fix in `46ccd56`, coupled global
+  pairing fix in `d402599`. Verified feature branch:
+  `fix/phys-3-5-o2-pairing`; user authorized push, not merge.
+- **Scope (2026-10-27):** coupled PHYS-3/PHYS-5 fix on a separate branch from
+  `main` after MSD PR #12. PHYS-4 remains on its separate local branch and is
+  not included. User approved local verification followed by push, not merge.
+  Use explicit per-axis PBC for periodic candidate search and MIC, preserve
+  legacy slab defaults and output keys, support explicit type sets, and use
+  deterministic global shortest-first pairing. No fixtures/goldens, module
+  layout, LAMMPS inputs, job scripts or HPC sites are changed.
+- **Reproduction (measured):** the 27 collected O2 regression tests initially
+  reported 4 passed, 23 failed. The original boundary-straddling pair counted
+  1 molecule at n=2 but 0 at n=21. The original four-atom chain counted 2 alone
+  but 1 after adding 17 isolated atoms.
+- **Implementation:** PHYS-3 commit `46ccd56` extends `_rdf_candidate_pairs`
+  with optional explicit PBC; old RDF callers retain x/y plus optional-z
+  semantics. The shell passes `_periodicity()` metadata and clears only the
+  target dissociation cache before computation. Selected types may be an integer
+  or type set; invalid settings/bounds/selected coordinates or IDs fail visibly.
+  Empty selected frames are retained with zero counts/fractions, not dropped.
+  PHYS-5 supplies one global shortest-first assignment after shared MIC and
+  strict cutoff filtering for both backends. IDs or canonical coordinates
+  provide deterministic tie order; instantaneous counts allow population/type
+  changes and do not claim to track the same molecules through time.
+- **Physical justification:** the chain's central 0.5 Å separation is shorter
+  than its outer 1.0 Å separations. The documented shortest-first greedy rule
+  therefore assigns the center pair and leaves two unpaired ends: 1 pair in
+  both populations. This is a geometric consistency test, not a claim that the
+  synthetic chain is chemically realistic or that greedy assignment maximizes
+  molecule count. No golden values were replaced to make the tests pass.
+- **Verification (measured, 2026-10-27):** 28 focused tests pass with no skips,
+  including all 8 PBC combinations, actual periodic SciPy calls, forced brute
+  force, strict cutoff/ties, row permutations, zero/singleton populations,
+  read-only input arrays, mixed type groups and independent image enumeration
+  plus greedy assignment on random systems of 7/33 atoms. Full verify-lkpr:
+  127 passed, 0 failed, 2 ASE skips; post `analyze all` passes, prep skipped.
+  Forced NumPy parser mode: 125 passed, 0 failed, 4 skips (ASE plus 2 native
+  tests). SciPy candidate and forced-candidate-fallback outputs match; native
+  and NumPy fixture measurement JSONs also match exactly.
+- **Preservation (measured):** all existing RDF/MSD/metadata/spin goldens pass
+  unchanged. The regular fixture still gives zero geometric O2 pairs in all
+  350 frames with fingerprint `48f3a1644e01dcc9`, for both the legacy slab
+  default and explicit full PBC. Fixtures, thesis tag, inputs and job scripts
+  remain untouched; the lower test total than PHYS-4 is because that separate
+  unmerged branch is deliberately excluded, not because tests were removed.
+- **Evidence (local):** `/tmp/opencode/o2-before.json`, `o2-after.json`,
+  `o2-after-fallback.json`, `o2-target-after.log`, `o2-fallback-tests.log` and
+  `/tmp/opencode/o2-verification/20261027T152104-46ccd56-full`.
+- **Review:** independent read-only physics/callsite review found no blocker;
+  runtime verification above was run independently by the orchestrator. A
+  nonblocking reference-oracle limitation for no-ID coordinate tie keys was
+  corrected, and an extra test now covers shifted periodic images and row
+  permutations without IDs, against canonical-coordinate image enumeration.
+- **Limits:** ASE, matplotlib, pandas, MDAnalysis and pytest unavailable; no
+  real plot rendering, real LAMMPS execution or HPC submission verified. Shape
+  validation rejects retained triclinic bounds, but cannot recover tilt already
+  discarded upstream (GEN-3). Time-unit inference and MD/minimization stage
+  interpretation remain separate issues; unpaired atoms are not certified
+  chemically dissociated species.
 - **Where:** `analysis.py::detect_o2_dissociation` (cKDTree without `boxsize`).
-- **Evidence (measured):** the same boundary-straddling O₂ gives 1 molecule at
-  n_O = 2 and 0 molecules at n_O = 21.
+- **Evidence (measured):** before the fix the same boundary-straddling O₂ gave
+  1 molecule at n_O = 2 and 0 at n_O = 21; after the fix both give 1.
 - **Fix direction:** reuse `_rdf_candidate_pairs` (periodic tree, z handled per PBC).
   Apply MIC in z too when z is periodic.
-- **Repro:** `pending_review_findings.py::test_o2_detected_across_x_boundary_on_tree_path`.
+- **Repro:** collected in
+  `tests/test_o2_periodicity.py::test_o2_detected_across_x_boundary_on_tree_path`.
 
-### PHYS-5 · P2 · O₂ pairing algorithm differs between n ≤ 20 and n > 20 — `open`
-- **Where:** same function. The slow path does per-atom nearest-first; the tree path
-  does global shortest-first.
-- **Evidence (measured):** a 4-O chain gives 2 molecules alone and 1 molecule with 17
-  distant O atoms added.
-- **Fix direction:** one algorithm (global shortest-first) for both paths, plus an
-  equality test.
-- **Repro:** `pending_review_findings.py::test_o2_count_independent_of_total_o_count`.
+### PHYS-5 · P2 · O₂ pairing algorithm differs between n ≤ 20 and n > 20 — `done (d402599)`
+- **Where:** same function. The old slow path did per-atom nearest-first while
+  the tree path did global shortest-first; both now use the global rule.
+- **Evidence (measured):** a 4-O chain previously gave 2 molecules alone and 1
+  with 17 distant atoms added. Both now give 1, including forced fallback.
+- **Implementation:** one deterministic global shortest-first assignment, backed
+  by equality, independent image-reference, cutoff, tie and conservation tests.
+- **Repro:** collected in
+  `tests/test_o2_pairing.py::test_o2_count_independent_of_total_o_count`.
 - **Coupling with PHYS-3:** keep PHYS-3's periodic candidate stage, and PHYS-3's repro
   must still pass. Shipping PHYS-3 and PHYS-5 as one PR (two commits) is acceptable.
 
