@@ -28,6 +28,9 @@ Say so in the report.
 ## Drive
 
 1. `python tests/run.py` (with `LKPR_SLOW=1` in full mode), using a throwaway HOME.
+   The collected suite includes the TEST-3 runtime-generated `pp pp ff` slab
+   reference: serialized readers, metadata/shared jobs, independent analytic
+   RDF/MSD/O2/penetration expectations and optional real rendering.
 2. `python -m lammpkeeper post --dump <fixture> --analyze all --output <tmp>`.
    In full mode, `--plot all` as well. A second batch invocation persists a
    summary; every mode checks the expected fixture analyses, and full mode
@@ -55,5 +58,6 @@ It exits nonzero if any step FAILs. A SKIP is not a pass. Report SKIPs explicitl
 ## Not covered (say so when relevant)
 
 - Real LAMMPS runs and HPC submission.
-- Slab `p p f` analysis paths (the fixture is bulk `p p p`; BACKLOG TEST-3).
+- Real material slab trajectories/dynamics: TEST-3 covers only an analytic toy
+  `p p f` reference; the committed ACE trajectory used by the CLI drive is bulk.
 - Visual correctness of figures (only that they are produced).
