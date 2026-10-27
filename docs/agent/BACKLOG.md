@@ -20,6 +20,12 @@ execution remains unverified. In the meantime prioritize local analysis,
 synthetic regressions and replay of committed trajectories. No new HPC jobs or
 site changes are part of this work.
 
+**Shipping preference (maintainer, 2026-10-27):** routine verified feature work
+should be completed through push, PR creation and merge, not left at a local
+branch. Keep separate logical changes in separate PRs. Physics golden changes,
+ADR decisions and other human gates still require their specific approvals;
+failed verification or non-mechanical conflicts must be resolved before shipping.
+
 **Phase 0, reproducibility:** REL-0
 **Phase 1, trustworthy tests and correct physics:** TEST-1 → OPS-1 → HPC-1 → PARSE-1 → **MSD (PHYS-2 + PHYS-1, one PR)** → PHYS-4 → PHYS-3 → PHYS-5 → TEST-3 → DOC-1 → DOC-2
 
@@ -141,11 +147,11 @@ use the general form now: species *sets* and a `pbc` tuple. Avoid Fe-specific pa
   are still required before that physics-changing work.
 
 ### MSD = PHYS-2 + PHYS-1 · one PR, two commits (PHYS-2 first), golden rebaseline inside
-- **Status:** done locally (`fix/msd-id-tracking`, 2026-10-27): PHYS-2 in
+- **Status:** done (PR #12, merged 2026-10-27 as `7839385`): PHYS-2 in
   `64a6084`; approved PHYS-1 golden rebaseline in dedicated commit `c9eeb37`.
-  REL-0 is complete. No fixtures were modified and no push/PR/merge has been
-  performed for this work. The maintainer approved the numerical correction
-  after reviewing its physical interpretation and limitations.
+  REL-0 is complete; no fixtures were modified. The maintainer approved both
+  the numerical correction (after physical-context review) and subsequent
+  push/merge. Final pre-ship verification again passed 99 tests with 2 ASE skips.
 - **Reproduction (measured):** the collected synthetic suite had 15 failures and
   10 passes before the fix, then 25 passes. Four follow-up cases bring the
   collected MSD module to 29 passes (37 with periodicity tests). The static type-swap case changes
@@ -211,7 +217,7 @@ shell routing subsequently landed in PR #8. This branch completes ID tracking
 first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 (`c9eeb37`), without duplicating the already merged unwrap implementation.
 
-### PHYS-1 · P1 · Bulk MSD must unwrap all periodic axes — `done (c9eeb37; local)`
+### PHYS-1 · P1 · Bulk MSD must unwrap all periodic axes — `done (PR #12; c9eeb37)`
 - **Where:** `lammps_post/analysis.py::analyze_msd` and the caller in
   `shell.py::_analyze_msd`.
 - **Current state:** PR #8 introduced per-axis `pbc` and shell routing; collected
@@ -229,7 +235,7 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   shows that z is *not* unwrapped when z is non-periodic (no dependency on TEST-3).
   The MSD goldens are re-baselined in the PR's dedicated commit (TEST-2 rules).
 
-### PHYS-2 · P1 · MSD reselects atoms by type each frame (ACE spin swaps) — `done (64a6084; local)`
+### PHYS-2 · P1 · MSD reselects atoms by type each frame (ACE spin swaps) — `done (PR #12; 64a6084)`
 - **Where:** `analysis.py::analyze_msd`.
 - **Evidence (measured):** two static atoms with swapped types gave MSD 16.0 Å²
   before the fix and give zero afterwards. The spin fixture now uses all 337
@@ -238,26 +244,90 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   IDs raise with timestep/ID details rather than hiding an unwrapping gap.
 - **Repro:** collected in `tests/test_msd.py::test_msd_tracks_ids_through_type_swap`.
 
-### PHYS-4 · P1 · ACE "Fe" resolves to Fe_down only; unknown species are silent — `open`
+### PHYS-4 · P1 · ACE "Fe" resolves to Fe_down only; unknown species are silent — `done (0777de3)`
+- **Status:** implemented in `0777de3` on `fix/phys-4-species-groups`.
+  The maintainer requested PR/merge completion on 2026-10-27. O2 PR #13 is
+  integrated before shipping, retaining both changelog sections and both
+  registered test-module lists; source files merged automatically without
+  numerical edits.
+- **Combined verification (measured, 2026-10-27):** PHYS-4 plus merged O2 fixes:
+  167 passed, 0 failed, 2 ASE skips; post `analyze all` passes, prep skipped.
+  Forced NumPy mode: 165 passed, 0 failed, 4 skips (ASE plus native tests).
+  All four new test modules are collected and all existing golden values and
+  fixtures remain unchanged. Evidence:
+  `/tmp/opencode/phys4-o2-integration/20261027T154831-1889ba9-full` and
+  `/tmp/opencode/phys4-o2-fallback-tests.log`.
+- **Scope (2026-10-27):** bug fix begun locally after MSD PR #12 merged. Add
+  set-valued name resolution in `common/mapping.py`, retain canonical type/FF
+  tables and all legacy mapping functions, route MSD/RDF shell selection through
+  it, and add type-set RDF support without changing singleton numeric goldens.
+  No module moves, new SpeciesMap architecture, fixture changes or HPC work.
+  New group/display metadata must not rename public output files.
+- **Reproduction (measured):** 32 new selection tests initially had 4 passes
+  and 28 failures; 3 plot-plumbing tests had 1 pass and 2 failures. A synthetic
+  `Fe` MSD returned 9 Å² (only the second channel) instead of the union's
+  5 Å². An unknown species silently returned the all-atom 10/3 Å².
+- **Implementation:** additive set-valued helpers in `common/mapping.py` merge
+  explicitly repeated labels and declared groups, without guessing underscore
+  prefixes. The canonical ACE preset adds the Fe union only while its member
+  labels match the supplied system map. Custom labels take precedence; the
+  original element slots, tables and conversion APIs are unchanged.
+  MSD and RDF use these sets, reject unknown names/malformed arguments, and
+  invalidate only the attempted target cache. RDF singleton selections preserve
+  existing arithmetic and result keys. Display names and raw cache/file names
+  remain separate; plot title/path tests use a fake backend, not real rendering.
+- **Verification (measured, 2026-10-27):** targeted selection, plot-plumbing and
+  legacy mapping suites: 46 passed. Full verify-lkpr: 139 passed, 0 failed,
+  2 ASE skips; post `analyze all` passed, prep skipped (ASE absent). Forced
+  NumPy mode: 137 passed, 0 failed, 4 skips (ASE plus native-only tests).
+  Existing numeric goldens and all fixtures are unchanged. SciPy tree/fallback
+  RDF equality covers disjoint, equal and partially overlapping type sets;
+  a tiny disjoint-group system also checks analytic counts/normalization.
+- **Fixture cross-check (measured):** `Fe` MSD changes from the erroneous
+  Fe_down-only 0.04994240109073442 to the combined-cohort
+  0.058169598336485516 Å², exactly matching direct selection `{1, 2}`.
+  Individual Fe_up, Fe_down and O results are unchanged. Group Fe–O RDF matches
+  independently flattened type labels with max error zero. Unknown `Fx` and
+  malformed `Fe-O-bad` now raise instead of silently returning data.
+- **Evidence (local):** `/tmp/opencode/phys4-before.json`, `phys4-after.json`,
+  `phys4-target-after.log`, `phys4-label-before.log`, `phys4-fallback-tests.log`
+  and `/tmp/opencode/phys4-verification/20261027T142711-7839385-full`.
+- **Review follow-up (measured/static, separately labeled):** independent static
+  review found malformed-option ordering could invalidate a default cache
+  rather than the explicitly requested target, and custom groups could borrow
+  an unrelated preset display name. Four added regressions failed before the
+  fixes and pass after them; one additional precedence regression also passes.
+  Option scanning now identifies an unambiguous requested target before error
+  handling; distinct conflicting targets raise without erasing either cache.
+  Preset display names require exact canonical type-set equality. Follow-up
+  static review found no remaining blocker; executable full-suite results are
+  the measured verification above. Native/NumPy fixture measurements also
+  match exactly (`/tmp/opencode/phys4-after-fallback.json`).
+- **Limits:** ASE, matplotlib, pandas, MDAnalysis and pytest are unavailable;
+  no real plotting, real LAMMPS execution or HPC submission was verified. This
+  selection fix does not change legacy RDF same-species normalization,
+  last-frame population/volume normalization, x/y PBC assumptions, timestep
+  inference or triclinic handling. Those must not be inferred validated from
+  the selection regression results.
 - **Where:** `shell.py::_analyze_msd` (`inv[v.split('_')[0]] = k`) and the RDF pair
   map (`for short in [n.split('_')[0], n]`).
-- **Evidence (inferred from code, consistent with output):** in ACE, `Fe` → type 2.
-  Batch MSD writes `msd_Fe.png` for Fe_down only. The default RDF `Fe-O` is
-  Fe_down–O. `--species Fx` gives an all-atom MSD labelled "Fx". An unknown RDF pair
-  silently becomes types 1/2.
-- **Fix direction:** resolve names through `common/mapping.py` to *sets* of types
-  (`Fe` → {1, 2} for ACE). Analysis functions accept type sets. Unknown name → error
-  listing the valid names.
+- **Original evidence (inferred in review, reproduced above):** ACE `Fe` selected
+  only type 2. `msd_Fe.png` and default `Fe-O` RDF were Fe_down-only; unknown MSD
+  names became all atoms, and unknown RDF names silently became default types.
+- **Resolution:** names now resolve through `common/mapping.py` to *sets* of
+  types (`Fe` → {1, 2} for canonical ACE). Analysis functions accept type sets;
+  unknown names raise errors listing valid names.
 - **Done when:** tests cover `Fe`, `Fe_up`, `Fe_down`, `O`, and an unknown name, for
   both MSD and RDF. Labels say "Fe (all spins)" vs "Fe↑".
 
 ### PHYS-3 · P1 · O₂ detection misses pairs across periodic boundaries — `done (46ccd56)`
 - **Completion:** periodic candidate/PBC fix in `46ccd56`, coupled global
-  pairing fix in `d402599`. Verified feature branch:
-  `fix/phys-3-5-o2-pairing`; user authorized push, not merge.
+  pairing fix in `d402599`. Shipped through PR #13 and merged on 2026-10-27
+  as `4c2bd24`, following the maintainer's subsequent merge approval.
 - **Scope (2026-10-27):** coupled PHYS-3/PHYS-5 fix on a separate branch from
-  `main` after MSD PR #12. PHYS-4 remains on its separate local branch and is
-  not included. User approved local verification followed by push, not merge.
+  `main` after MSD PR #12. The original O2 branch excluded the separate PHYS-4
+  changes; the following test counts describe that isolated verification.
+  Initial approval covered verification/push; later approval completed PR #13.
   Use explicit per-axis PBC for periodic candidate search and MIC, preserve
   legacy slab defaults and output keys, support explicit type sets, and use
   deterministic global shortest-first pairing. No fixtures/goldens, module
@@ -295,8 +365,8 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   unchanged. The regular fixture still gives zero geometric O2 pairs in all
   350 frames with fingerprint `48f3a1644e01dcc9`, for both the legacy slab
   default and explicit full PBC. Fixtures, thesis tag, inputs and job scripts
-  remain untouched; the lower test total than PHYS-4 is because that separate
-  unmerged branch is deliberately excluded, not because tests were removed.
+  remain untouched; the lower isolated test total than PHYS-4 is because that
+  separate branch was deliberately excluded, not because tests were removed.
 - **Evidence (local):** `/tmp/opencode/o2-before.json`, `o2-after.json`,
   `o2-after-fallback.json`, `o2-target-after.log`, `o2-fallback-tests.log` and
   `/tmp/opencode/o2-verification/20261027T152104-46ccd56-full`.
@@ -333,9 +403,9 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 
 ### TEST-2 · Golden re-baseline rules (not a separate session)
 - Applied inside the PR that changes the value (MSD PR; PHYS-3/5 if `o2` goldens
-  are ever added). PHYS-4 changes name resolution in `shell.py` only; the goldens call
-  `compute_rdf`/`analyze_msd` with type ints, so they should not move. If they
-  do, stop and investigate.
+  are ever added). PHYS-4 extends shared name resolution and numeric type-set
+  selection; existing goldens call `compute_rdf`/`analyze_msd` with type ints,
+  so they must not move. If they do, stop and investigate.
 - Each changed key: a dedicated `test(golden)` commit with reason, old/new summary
   values, an independent check, and a behaviour test (static-crystal MSD ≈ vibration
   only). **Human gate.**

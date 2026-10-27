@@ -41,7 +41,10 @@ from lammps_post.parsers import (
     pbc_from_boundary,
 )
 
-from lammpkeeper.common.mapping import element_to_type as ff_element_to_type
+from lammpkeeper.common.mapping import (
+    element_to_type as ff_element_to_type,
+    species_type_sets, resolve_species, species_display_name,
+)
 
 from lammps_post.analysis import (
     analyze_charge_evolution, analyze_charge_z, compute_rdf, compute_oar,
@@ -1308,29 +1311,47 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
 
-        # Build species name -> type ID mapping
         at = s.atom_types
-        inv_map = {}
-        species_names = []
-        for t, n in at.items():
-            if isinstance(t, int):
-                inv_map[str(n)] = t
-                species_names.append(str(n))
-                for short in [n.split('_')[0], n]:
-                    inv_map[short] = t
+        species_names = sorted(species_type_sets(at, ff=s.ff))
+        choices = ', '.join(species_names)
 
-        # Parse pair from opts, or ask interactively
-        pair_str = None
+        # Parse before computing; malformed flags must not become pair names or
+        # silently select default types. Defer count validation until the target
+        # cache key is known, so an invalid attempt cannot leave a stale curve.
+        pair_candidates = []
+        frame_value = None
+        option_error = None
         max_frames = 20
-        for i, o in enumerate(opts):
-            if o == '--frames' and i + 1 < len(opts):
-                max_frames = int(opts[i + 1])
-            elif pair_str is None and '-' in o:
-                pair_str = o
-            elif pair_str is None and not o.startswith('-'):
-                pair_str = o
+        i = 0
+        while i < len(opts):
+            o = opts[i]
+            if o == '--frames':
+                if frame_value is not None or i + 1 >= len(opts):
+                    option_error = option_error or '--frames requires one positive integer value'
+                if i + 1 >= len(opts):
+                    i += 1
+                else:
+                    frame_value = opts[i + 1]
+                    i += 2
+            elif o.startswith('--'):
+                option_error = option_error or f'Unknown RDF option {o!r}'
+                i += 1
+            else:
+                pair_candidates.append(o)
+                i += 1
 
-        if pair_str is None and not _batch:
+        # Continue scanning after bad options: a later explicit pair still
+        # identifies which old curve must be invalidated. Never erase an
+        # unrelated default curve, or guess between distinct requested pairs.
+        unique_pairs = list(dict.fromkeys(pair_candidates))
+        if len(unique_pairs) > 1:
+            raise ValueError(f'Ambiguous RDF pairs {unique_pairs!r}; specify one pair. '
+                             f'Valid species: {choices}')
+        pair_str = unique_pairs[0] if unique_pairs else None
+        if len(pair_candidates) > 1:
+            option_error = option_error or 'Specify the RDF pair only once'
+
+        if pair_str is None and not _batch and option_error is None:
             # Interactive: show available species and common pairs
             print(f"  Available species: {', '.join(species_names)}")
             common_pairs = []
@@ -1346,13 +1367,26 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         elif pair_str is None:
             pair_str = 'Fe-O'  # Default for batch mode
 
-        # Resolve pair to type numbers
-        pair_parts = pair_str.split('-')
-        if len(pair_parts) != 2:
-            pair_parts = ['Fe', 'O']
+        cache_key = f'rdf_{pair_str}'
+        s.cache.pop(cache_key, None)
+        if option_error:
+            raise ValueError(f'{option_error}. Valid species: {choices}')
+        if frame_value is not None:
+            try:
+                max_frames = int(frame_value)
+            except (TypeError, ValueError):
+                raise ValueError('--frames requires a positive integer') from None
+            if max_frames <= 0:
+                raise ValueError('--frames requires a positive integer')
 
-        type_a = inv_map.get(pair_parts[0], 1)
-        type_b = inv_map.get(pair_parts[1], 2)
+        pair_parts = pair_str.split('-')
+        if len(pair_parts) != 2 or not all(pair_parts):
+            raise ValueError(f'Invalid RDF pair {pair_str!r}; use species-species. '
+                             f'Valid species: {choices}')
+        type_a = resolve_species(pair_parts[0], at, ff=s.ff)
+        type_b = resolve_species(pair_parts[1], at, ff=s.ff)
+        display_a = species_display_name(pair_parts[0], at, ff=s.ff)
+        display_b = species_display_name(pair_parts[1], at, ff=s.ff)
 
         # Optionally ask for number of frames if not specified (skip in batch mode)
         if not _batch and '--frames' not in ' '.join(opts) and not opts:
@@ -1364,7 +1398,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 try:
                     max_frames = int(frames_ans)
                 except ValueError:
-                    pass
+                    raise ValueError('RDF frame count must be a positive integer') from None
+                if max_frames <= 0:
+                    raise ValueError('RDF frame count must be a positive integer')
 
         # z periodicity from the dump's boundary flags, else the input file,
         # else surface_z (see _periodicity). compute_rdf always wraps x and y,
@@ -1372,14 +1408,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         pbc, pbc_src = self._periodicity()
         z_pbc = pbc[2]
 
-        progress_msg(f"Computing RDF {pair_str} (last {max_frames} frames, "
+        progress_msg(f"Computing RDF {display_a}-{display_b} (last {max_frames} frames, "
                      f"z_pbc={z_pbc} from {pbc_src})...")
         result = compute_rdf(s.dump_frames, s.dump_col_idx,
                              type_a=type_a, type_b=type_b,
                              max_frames=max_frames,
                              label_a=pair_parts[0], label_b=pair_parts[1],
                              z_pbc=z_pbc)
-        cache_key = f'rdf_{pair_str}'
+        result['label'] = pair_str
+        result['display_label'] = f'{display_a}-{display_b}'
         s.cache[cache_key] = result
 
         # Report peak position
@@ -1550,20 +1587,21 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
 
-        # Parse --species from opts
-        species_name = None
-        for i, o in enumerate(opts):
-            if o == '--species' and i + 1 < len(opts):
-                species_name = opts[i + 1]
+        requested = [opts[i + 1] for i, o in enumerate(opts)
+                     if o == '--species' and i + 1 < len(opts)
+                     and not opts[i + 1].startswith('--')]
+        unique_species = list(dict.fromkeys(requested))
+        species_name = unique_species[0] if len(unique_species) == 1 else None
+        option_error = None
+        if opts and (len(opts) != 2 or opts[0] != '--species'
+                     or opts[1].startswith('--')):
+            option_error = 'MSD selection requires --species NAME'
 
         at = s.atom_types
-        inv = {}
-        species_list = []
-        for k, v in at.items():
-            if isinstance(k, int):
-                inv[str(v)] = k
-                inv[v.split('_')[0]] = k
-                species_list.append(str(v))
+        species_list = sorted(species_type_sets(at, ff=s.ff))
+        if len(unique_species) > 1:
+            raise ValueError(f'Ambiguous MSD species {unique_species!r}; specify one species. '
+                             f'Valid species: {", ".join(species_list)}')
 
         # Interactive: ask for species (skip in batch mode)
         if species_name is None and not opts and not _batch:
@@ -1576,19 +1614,25 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if species_name is None:
             species_name = 'Fe'
 
-        species_type = inv.get(species_name)
+        cache_key = f'msd_{species_name}'
+        # Validate after invalidation, so neither an unknown label nor a failed
+        # computation leaves an older curve available under the requested name.
+        s.cache.pop(cache_key, None)
+        if option_error:
+            raise ValueError(f'{option_error}. Valid species: {", ".join(species_list)}')
+        species_type = resolve_species(species_name, at, ff=s.ff)
+        display_name = species_display_name(species_name, at, ff=s.ff)
 
         # Unwrap only the periodic axes: x, y for a p p f slab, all three for
         # a p p p cell, where a z boundary crossing would otherwise add ~Lz.
         pbc, pbc_src = self._periodicity()
         axes = ''.join(a for a, p in zip('xyz', pbc) if p) or 'none'
-        progress_msg(f"Computing MSD for {species_name} (unwrap {axes} from {pbc_src})...")
-        cache_key = f'msd_{species_name}'
-        # A validation failure must not leave an older curve available to plot
-        # under the name of this failed computation.
-        s.cache.pop(cache_key, None)
+        progress_msg(f"Computing MSD for {display_name} (unwrap {axes} from {pbc_src})...")
         result = analyze_msd(s.dump_frames, s.dump_col_idx,
                              species_type=species_type, dt_fs=s.dt_fs, pbc=pbc)
+        if result is not None:
+            result['label'] = species_name
+            result['display_label'] = display_name
         s.cache[cache_key] = result
         if result and len(result['msd']) > 0:
             progress_msg(f"Final MSD: {result['msd'][-1]:.2f} A^2")
