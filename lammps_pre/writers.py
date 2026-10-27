@@ -10,6 +10,13 @@ from lammps_pre import VERSION
 from lammps_pre.display import progress_msg, C
 
 
+def _validate_build(build, state):
+    """Refuse a retained old build before writing misleading new metadata."""
+    signature = getattr(build, 'geometry_signature', None)
+    if signature is not None and signature != state.geometry_signature():
+        raise ValueError('structure settings changed since build; run build again')
+
+
 # ═══════════════════════════════════════════════════════════════
 # LAMMPS Data File
 # ═══════════════════════════════════════════════════════════════
@@ -22,6 +29,7 @@ def write_data_file(build, state, filepath):
       - ReaxFF: atom_style charge (id type q x y z), q=0.0
       - ACE:    atom_style atomic (id type x y z), spin encoding
     """
+    _validate_build(build, state)
     ff = state.ff
     fe_pos = build.fe_positions
     o2_pos = build.o2_positions
@@ -91,6 +99,7 @@ def write_data_file(build, state, filepath):
 
 def write_regions_inc(build, state, filepath):
     """Write LAMMPS variable include file for region boundaries."""
+    _validate_build(build, state)
     regions = build.regions
 
     with open(filepath, 'w') as f:
@@ -157,6 +166,7 @@ def get_filenames(state):
 
 def write_input_script(build, state, filepath):
     """Write LAMMPS input script using force-field-specific template."""
+    _validate_build(build, state)
     from lammps_pre.templates import render_input_script
     content = render_input_script(build, state)
     with open(filepath, 'w') as f:
@@ -168,6 +178,7 @@ def write_input_script(build, state, filepath):
 
 def write_run_script(build, state, filepath):
     """Write PBS job submission script."""
+    _validate_build(build, state)
     from lammps_pre.templates import render_run_script
     content = render_run_script(build, state)
     with open(filepath, 'w') as f:
@@ -179,6 +190,11 @@ def write_run_script(build, state, filepath):
 
 def write_all(build, state, directory=None):
     """Write all output files to directory."""
+    _validate_build(build, state)
+    # Validate templates before leaving a partially generated runnable directory.
+    from lammps_pre.templates import render_input_script, render_run_script
+    render_input_script(build, state)
+    render_run_script(build, state)
     d = directory or state.output_dir
     os.makedirs(d, exist_ok=True)
 

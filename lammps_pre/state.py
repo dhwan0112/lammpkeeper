@@ -6,6 +6,8 @@ are stored here. Force-field presets auto-populate unit system, atom style,
 timestep, and output fields when the user selects a force field.
 """
 
+from numbers import Integral
+
 from lammps_pre import A_FE_BCC, O2_BOND_LENGTH
 from lammpkeeper.common.mapping import type_to_label, element_order
 
@@ -160,6 +162,24 @@ WALL_CUTOFF = max(p['rc'] for p in FF_PRESETS.values())     # 7.0 A (ACE)
 class PreState:
     """Container for all simulation setup parameters."""
 
+    _GEOMETRY_FIELDS = (
+        'surface', 'nx', 'ny', 'nz', 'a_fe', 'n_o2', 'o2_bond',
+        'o2_separation', 'vacuum', 'seed', 'n_fixed_layers',
+        'n_thermostat_layers',
+    )
+
+    def __setattr__(self, name, value):
+        # Cover both interactive setters and direct Python API edits. Force-field
+        # selection is deliberately excluded: every preset shares the geometry.
+        if name in self._GEOMETRY_FIELDS and name in self.__dict__:
+            if self.__dict__[name] != value:
+                object.__setattr__(self, 'build_result', None)
+        object.__setattr__(self, name, value)
+
+    def geometry_signature(self):
+        """Configuration attached to a build, also checked by the writers."""
+        return tuple(getattr(self, name) for name in self._GEOMETRY_FIELDS)
+
     def __init__(self):
         self.reset()
 
@@ -288,7 +308,26 @@ class PreState:
         return self.dump_interval if self.dump_interval is not None else self._ff_preset.get('dump_interval', 1000)
 
     def get_ncpus(self):
-        return self.ncpus if self.ncpus is not None else self._ff_preset.get('ncpus', 24)
+        value = self.ncpus if self.ncpus is not None else self._ff_preset.get('ncpus', 24)
+        if not isinstance(value, Integral) or isinstance(value, bool) or value < 1:
+            raise ValueError('ncpus must be a positive integer')
+        return value
+
+    def get_processor_grid(self):
+        """Use an explicit compatible grid, or let LAMMPS partition the plane."""
+        ncpus = self.get_ncpus()
+        if self.nproc_x is not None or self.nproc_y is not None:
+            grid = (self.nproc_x, self.nproc_y)
+            if any(not isinstance(n, Integral) or isinstance(n, bool) or n < 1
+                   for n in grid):
+                raise ValueError('nproc_x and nproc_y must both be positive integers')
+            if grid[0] * grid[1] != ncpus:
+                raise ValueError('nproc_x * nproc_y must equal ncpus')
+            return grid
+        grid = (self.ff.get('nproc_x'), self.ff.get('nproc_y'))
+        if all(grid) and grid[0] * grid[1] == ncpus:
+            return grid
+        return ('*', '*')
 
     def get_memory_gb(self):
         return self.memory_gb if self.memory_gb is not None else self._ff_preset.get('memory_gb', 48)

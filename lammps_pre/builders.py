@@ -31,6 +31,7 @@ class BuildResult:
     box: tuple                     # (xlo, xhi, ylo, yhi, zlo, zhi)
     n_atoms: int                   # total atom count
     unique_z: list = field(default_factory=list)  # slab layer z-coords
+    geometry_signature: tuple = None  # settings used for this build
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -46,6 +47,20 @@ def build_fe_slab(state):
     miller = state.surface
     nx, ny, nz = state.nx, state.ny, state.nz
     a_fe = state.a_fe
+
+    if any(not isinstance(n, (int, np.integer)) or isinstance(n, bool) or n < 1
+           for n in (nx, ny, nz)):
+        print(C.err('  Error: slab dimensions must be positive integers'))
+        return None
+    if not np.isfinite(a_fe) or a_fe <= 0:
+        print(C.err('  Error: lattice constant must be finite and positive'))
+        return None
+    # The legacy writer emits a rectangular box. Even-width perfect surface
+    # repeats are compatible with it; odd widths retain a real lateral tilt.
+    if miller in ('110', '111') and ny % 2:
+        print(C.err(f'  Error: Fe({miller}) requires even ny for the supported '
+                    'orthogonal output; odd ny would lose cell tilt'))
+        return None
 
     if HAS_ASE:
         builders = {'100': bcc100, '110': bcc110, '111': bcc111}
@@ -125,6 +140,11 @@ def compute_regions(slab_data, state):
     # comparison assumes identical coordinates. See state.WALL_CUTOFF.
     rc = state.wall_cutoff
 
+    if any(not isinstance(n, (int, np.integer)) or isinstance(n, bool) or n < 1
+           for n in (n_fix, n_nvt)):
+        print(C.err('  Error: fixed and NVT layer counts must be positive integers '
+                    '(zero layers are not supported)'))
+        return None
     if n_fix + n_nvt >= n_layers:
         print(C.err(f"  Error: fixed({n_fix}) + NVT({n_nvt}) >= total layers({n_layers})"))
         return None
@@ -170,6 +190,10 @@ def place_o2(slab_data, regions, state):
     z_wall_lower+vacuum-2.0, with PBC-aware minimum separation.
     """
     n_mol = state.n_o2
+    if not isinstance(n_mol, (int, np.integer)) or isinstance(n_mol, bool) or n_mol < 0:
+        raise ValueError('O2 count must be a nonnegative integer')
+    if not np.isfinite(state.vacuum) or state.vacuum <= 0:
+        raise ValueError('vacuum must be finite and positive')
     if n_mol == 0:
         return np.zeros((0, 3))
 
@@ -179,12 +203,13 @@ def place_o2(slab_data, regions, state):
     z_hi = regions['z_wall_lower'] + state.vacuum - 2.0
 
     if z_hi <= z_lo:
-        print(C.err(f"  Error: vacuum too small for O2 placement"))
-        return np.zeros((0, 3))
+        raise ValueError('vacuum too small for O2 placement')
 
     rng = np.random.default_rng(state.seed)
     bond = state.o2_bond
     min_sep = state.o2_separation
+    if not np.isfinite(bond) or bond <= 0 or not np.isfinite(min_sep) or min_sep <= 0:
+        raise ValueError('O2 bond length and separation must be finite and positive')
 
     centers = []
     max_trials = n_mol * 1000
@@ -205,15 +230,17 @@ def place_o2(slab_data, regions, state):
             centers.append(c)
 
     if len(centers) < n_mol:
-        print(C.warn(f"  Warning: placed {len(centers)}/{n_mol} O2 molecules"))
+        raise ValueError(f'could only place {len(centers)}/{n_mol} O2 molecules; '
+                         'increase vacuum or reduce count/separation')
 
     o_positions = []
     for c in centers:
-        theta = rng.uniform(0, np.pi)
+        # Uniform solid angle: cos(theta), not theta, must be uniform.
+        cos_theta = rng.uniform(-1.0, 1.0)
         phi = rng.uniform(0, 2 * np.pi)
-        d = np.array([np.sin(theta) * np.cos(phi),
-                       np.sin(theta) * np.sin(phi),
-                       np.cos(theta)])
+        sin_theta = np.sqrt(max(0.0, 1.0 - cos_theta * cos_theta))
+        d = np.array([sin_theta * np.cos(phi),
+                       sin_theta * np.sin(phi), cos_theta])
         half = d * bond / 2
         o_positions.extend([c + half, c - half])
 
@@ -228,6 +255,8 @@ def build_all(state):
     """
     Full build pipeline: slab -> regions -> O2 -> BuildResult.
     """
+    # Never leave a previously successful build usable after a failed rebuild.
+    state.build_result = None
     # 1. Fe slab
     progress_msg(f"Building Fe({state.surface}) slab: "
                  f"{state.nx}x{state.ny}x{state.nz} (a={state.a_fe} A)...")
@@ -249,12 +278,13 @@ def build_all(state):
         return None
 
     # 3. O2
-    if state.n_o2 > 0:
-        progress_msg(f"Placing {state.n_o2} O2 molecules "
-                     f"({state.n_o2 * 2} O atoms)...")
+    progress_msg(f"Placing {state.n_o2} O2 molecules "
+                 f"({state.n_o2 * 2} O atoms)...")
+    try:
         o2_pos = place_o2(slab, regions, state)
-    else:
-        o2_pos = np.zeros((0, 3))
+    except ValueError as exc:
+        print(C.err(f'  Error: {exc}'))
+        return None
 
     # 4. Box dimensions
     xhi, yhi = cell[0][0], cell[1][1]
@@ -276,6 +306,7 @@ def build_all(state):
         box=(0.0, xhi, 0.0, yhi, 0.0, zhi),
         n_atoms=n_total,
         unique_z=slab['unique_z'],
+        geometry_signature=state.geometry_signature(),
     )
 
     state.build_result = result

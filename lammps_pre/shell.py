@@ -6,6 +6,7 @@ persistent command history, and colored terminal output.
 """
 
 import cmd
+import math
 import os
 import shlex
 
@@ -33,7 +34,22 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     def __init__(self):
         super().__init__()
         self.state = PreState()
+        self.last_command_failed = False
+        self.noninteractive = False
         self._setup_history('~/.lammps-pre_history')
+
+    def _fail(self, message):
+        self.last_command_failed = True
+        print(C.err(f'  Error: {message}'))
+
+    def onecmd(self, line):
+        """Keep errors interactive, but make them observable by batch callers."""
+        self.last_command_failed = False
+        try:
+            return super().onecmd(line)
+        except (ValueError, IndexError, OSError, RuntimeError) as exc:
+            self._fail(str(exc))
+            return False
 
     # ── Helper: interactive prompt ──
 
@@ -80,13 +96,18 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         Output:     thermo, dump, output
         HPC:        job_name, queue, ncpus, walltime, memory
         """
-        parts = shlex.split(arg) if arg.strip() else []
+        try:
+            parts = shlex.split(arg) if arg.strip() else []
+        except ValueError as exc:
+            self._fail(str(exc))
+            return
         if len(parts) < 2 and parts:
             # special case: 'set ff' with no value
             if parts[0] == 'ff':
                 print(f"  Available: {', '.join(FF_PRESETS.keys())}")
                 return
         if len(parts) < 2:
+            self.last_command_failed = True
             print("  Usage: set <key> <value>")
             print("  Keys: ff, temperature, slab, surface, o2, vacuum, lattice,")
             print("        boundary, dt, eq_time, ox_time, seed, fixed_layers,")
@@ -98,6 +119,18 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         s = self.state
 
         try:
+            positive_ints = {'temperature', 'temp', 'fixed_layers', 'nvt_layers',
+                             'thermo', 'dump', 'ncpus', 'walltime', 'memory', 'mem'}
+            if key in positive_ints and int(parts[1]) < 1:
+                raise ValueError(f'{key} must be a positive integer')
+            if key == 'o2' and int(parts[1]) < 0:
+                raise ValueError('o2 must be a nonnegative integer')
+            if key in ('vacuum', 'lattice', 'a_fe', 'eq_time', 'ox_time', 'spin_time'):
+                value = float(parts[1])
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError(f'{key} must be finite and nonnegative')
+                if key in ('vacuum', 'lattice', 'a_fe') and value == 0:
+                    raise ValueError(f'{key} must be positive')
             if key == 'ff' or key == 'forcefield':
                 val = parts[1].lower()
                 if s.set_ff(val):
@@ -107,7 +140,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                                  f"dt={ff['dt_display_fs']} fs, "
                                  f"atom_style={ff['atom_style']})")
                 else:
-                    print(f"  Unknown FF. Available: {', '.join(FF_PRESETS.keys())}")
+                    raise ValueError(f"Unknown FF. Available: {', '.join(FF_PRESETS.keys())}")
 
             elif key == 'temperature' or key == 'temp':
                 s.temperature = int(parts[1])
@@ -115,13 +148,14 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
 
             elif key == 'slab':
                 if len(parts) == 4:
-                    s.nx, s.ny, s.nz = int(parts[1]), int(parts[2]), int(parts[3])
+                    dims = [int(p) for p in parts[1:]]
                 elif len(parts) == 2 and 'x' in parts[1]:
-                    dims = parts[1].split('x')
-                    s.nx, s.ny, s.nz = int(dims[0]), int(dims[1]), int(dims[2])
+                    dims = [int(p) for p in parts[1].split('x')]
                 else:
-                    print("  Usage: set slab <nx> <ny> <nz>  or  set slab NxNxN")
-                    return
+                    raise ValueError('Usage: set slab <nx> <ny> <nz> or set slab NxNxN')
+                if len(dims) != 3 or any(n < 1 for n in dims):
+                    raise ValueError('slab requires three positive integer dimensions')
+                s.nx, s.ny, s.nz = dims
                 n_fe = s.nx * s.ny * s.nz
                 progress_msg(f"Supercell: {s.nx} x {s.ny} x {s.nz} layers "
                              f"({n_fe} Fe atoms)")
@@ -132,7 +166,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                     s.surface = val
                     progress_msg(f"Surface: Fe({s.surface})")
                 else:
-                    print("  Valid: 100, 110, 111")
+                    raise ValueError('Valid surfaces: 100, 110, 111')
 
             elif key == 'o2':
                 s.n_o2 = int(parts[1])
@@ -229,10 +263,10 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Memory: {s.memory_gb} GB")
 
             else:
-                print(f"  Unknown setting: {key}")
+                raise ValueError(f'Unknown setting: {key}')
 
         except (ValueError, IndexError) as e:
-            print(f"  {C.err('Error:')} {e}")
+            self._fail(str(e))
 
     def complete_set(self, text, line, begidx, endidx):
         keys = ['ff', 'temperature', 'slab', 'surface', 'o2', 'vacuum',
@@ -275,7 +309,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
             fpath = parts[0]
 
         if not os.path.exists(fpath):
-            print(C.err(f"  File not found: {fpath}"))
+            self._fail(f'File not found: {fpath}')
             return
 
         progress_msg(f"Loading: {fpath} ...")
@@ -283,7 +317,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         try:
             info = self._parse_data_file(fpath)
         except Exception as e:
-            print(C.err(f"  Parse error: {e}"))
+            self._fail(f'Parse error: {e}')
             return
 
         progress_msg(f"Atoms: {info['n_atoms']}, Types: {info['n_types']}")
@@ -365,22 +399,23 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
     def do_build(self, arg):
         """Build structure from current settings: build [slab|o2]"""
         s = self.state
+        s.build_result = None
 
         # Validate before building
         n_nve = s.nz - s.n_fixed_layers - s.n_thermostat_layers
         if n_nve < 1:
-            print(C.err(f"  Error: fixed({s.n_fixed_layers}) + NVT({s.n_thermostat_layers}) "
-                        f">= slab layers({s.nz}). Increase nz or reduce layer counts."))
+            self._fail(f'fixed({s.n_fixed_layers}) + NVT({s.n_thermostat_layers}) '
+                       f'>= slab layers({s.nz}). Increase nz or reduce layer counts.')
             return
         if s.forcefield is None:
-            print(C.err("  Error: no force field set. Use 'set ff <name>' first."))
+            self._fail("no force field set. Use 'set ff <name>' first.")
             return
 
         result = build_all(s)
         if result:
             print(f"  {C.ok('Build complete.')}")
         else:
-            print(f"  {C.err('Build failed.')}")
+            self._fail('Build failed.')
 
     # ═══════════════════════════════════════════════════════════
     # preview / show
@@ -548,20 +583,28 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         s = self.state
         b = s.build_result
 
+        parts = shlex.split(arg) if arg.strip() else []
+        what = parts[0].lower() if parts else 'all'
+        directory = parts[1] if len(parts) > 1 else s.output_dir
+        if what not in ('all', 'data', 'regions', 'input', 'runscript', 'xyz'):
+            self._fail(f'Unknown target: {what}; options: all, data, regions, input, runscript, xyz')
+            return
+
         if b is None:
+            if self.noninteractive:
+                self._fail("No current structure built. Run 'build' first.")
+                return
             print(C.warn("  No structure built. Run 'build' first."))
             ans = self._ask("Build now? (y/n)", 'y')
             if ans and ans.lower() in ('y', 'yes'):
                 self.do_build('')
                 b = s.build_result
                 if b is None:
+                    self.last_command_failed = True
                     return
             else:
+                self.last_command_failed = True
                 return
-
-        parts = shlex.split(arg) if arg.strip() else []
-        what = parts[0].lower() if parts else 'all'
-        directory = parts[1] if len(parts) > 1 else s.output_dir
 
         os.makedirs(directory, exist_ok=True)
         names = get_filenames(s)
@@ -620,7 +663,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
 
         for part in parts:
             if '=' not in part:
-                print(f"  {C.err('Error:')} expected key=value, got '{part}'")
+                self._fail(f"expected key=value, got '{part}'")
                 return
             key, val = part.split('=', 1)
             key = key.lower()
@@ -630,9 +673,15 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                 o2s = [int(n) for n in val.split(',')]
             elif key in ('output', 'dir', 'base'):
                 output_base = val
+            else:
+                self._fail(f'Unknown matrix setting: {key}')
+                return
 
-        if temps is None or o2s is None:
-            print("  Usage: matrix temps=300,500,800 o2=40,100,200 [output=./dir]")
+        if not temps or not o2s:
+            self._fail('Usage: matrix temps=300,500,800 o2=40,100,200 [output=./dir]')
+            return
+        if any(t < 1 for t in temps) or any(n < 0 for n in o2s):
+            self._fail('matrix temperatures must be positive and O2 counts nonnegative')
             return
 
         if output_base is None:
@@ -662,8 +711,8 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                 # Build
                 result = build_all(s)
                 if result is None:
-                    print(f"  {C.err('Build failed, skipping.')}")
-                    continue
+                    self._fail('Matrix build failed; generation stopped.')
+                    return
 
                 # Write
                 write_all(result, s, subdir)
@@ -708,7 +757,7 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
         pass
 
     def default(self, line):
-        print(f"  Unknown command: '{line}'. Type 'help' for available commands.")
+        self._fail(f"Unknown command: '{line}'. Type 'help' for available commands.")
 
     def do_help(self, arg):
         """Show help for a command or list all commands."""

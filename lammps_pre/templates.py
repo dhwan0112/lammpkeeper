@@ -5,6 +5,8 @@ Renders force-field-specific input scripts from PreState parameters.
 Templates reproduce the exact structure of the production atlas scripts.
 """
 
+import math
+
 from lammps_pre import VERSION
 from lammps_pre.writers import get_filenames
 from lammpkeeper.common.mapping import element_order
@@ -16,6 +18,12 @@ from lammpkeeper.common.mapping import element_order
 
 def render_input_script(build, state):
     """Dispatch to force-field-specific template."""
+    for name, value in (('equilibration time', state.get_eq_ps()),
+                        ('oxidation time', state.get_ox_ps()),
+                        ('spin time', state.get_spin_ps()),
+                        ('dense dump time', state.dump_dense_ps)):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f'{name} must be finite and nonnegative')
     ff = state.forcefield
     if ff == 'ace':
         return _render_ace(build, state)
@@ -33,6 +41,7 @@ def _render_ace(build, state):
     # Same element order as pair_coeff, straight from the shared mapping. Written
     # into every dump so the Fe_up/Fe_down/O convention travels with the file.
     elements = ' '.join(element_order('ace'))
+    nproc_x, nproc_y = s.get_processor_grid()
 
     return f"""\
 # ===================================================================
@@ -57,10 +66,11 @@ variable        SEED     index {s.velocity_seed}
 variable        SPIN_PS  index {s.get_spin_ps()}
 variable        EQ_PS    index {s.get_eq_ps()}
 variable        OX_PS    index {s.get_ox_ps()}
+variable        DENSE_PS index {s.dump_dense_ps}
 variable        MC_EVERY index {s.mc_every}
 variable        MC_N     index {s.mc_n}
-variable        NPROC_X  index {ff.get('nproc_x') or 6}
-variable        NPROC_Y  index {ff.get('nproc_y') or 8}
+variable        NPROC_X  index {nproc_x}
+variable        NPROC_Y  index {nproc_y}
 
 # --- Derived variables ---
 variable        dt        equal {ff['dt']}
@@ -68,8 +78,8 @@ variable        T_damp    equal {ff['T_damp']}
 variable        spin_steps equal round(${{SPIN_PS}}/${{dt}})
 variable        eq_steps   equal round(${{EQ_PS}}/${{dt}})
 variable        ox_steps   equal round(${{OX_PS}}/${{dt}})
-variable        ox_dense   equal round(50.0/${{dt}})
-variable        ox_remain  equal round((${{OX_PS}}-50.0)/${{dt}})
+variable        ox_dense   equal min(${{ox_steps}},max(0,round(${{DENSE_PS}}/${{dt}})))
+variable        ox_remain  equal max(0,${{ox_steps}}-${{ox_dense}})
 
 variable        label     string ace_${{T}}K
 
@@ -188,7 +198,7 @@ run             ${{eq_steps}}
 # ===================================================================
 print "========== Stage 3: Oxidation (${{OX_PS}} ps at ${{T}} K) =========="
 
-# 3a: First 50 ps — dense dump ({s.dump_dense_interval} steps)
+# 3a: First ${{DENSE_PS}} ps (clamped to oxidation duration) — dense dump ({s.dump_dense_interval} steps)
 undump          traj
 dump            traj_ox all custom {s.dump_dense_interval} traj_oxidation_${{label}}.lammpstrj &
                 {ff['dump_fields']}
@@ -362,6 +372,8 @@ def render_run_script(build, state):
     ff = s.ff
     names = get_filenames(s)
     ncpus = s.get_ncpus()
+    if s.has_spin:
+        s.get_processor_grid()  # fail before generating an incompatible MPI job
     mem = s.get_memory_gb()
     wt = s.get_walltime_hr()
     job_name = s.get_job_name()
@@ -453,12 +465,21 @@ echo "=== LAMMPS Done: $(date) | exit=$EXIT_CODE ==="
 echo "=== 4. Copy Results ==="
 if [ $EXIT_CODE -eq 0 ]; then
     DEST="$CurrDir"
+    DEST_READY=1
 else
     DEST="$CurrDir/failed_${{JOBID}}"
+    DEST_READY=0
+    # Exclusive creation rejects existing directories and even dangling symlinks.
+    if mkdir -- "$DEST"; then DEST_READY=1; fi
 fi
 COPY_OK=0
-if mkdir -p "$DEST"; then
-    if cp -a "$tdir"/. "$DEST"/; then COPY_OK=1; fi
+if [ $DEST_READY -eq 1 ]; then
+    # Copy children, including hidden outputs, NOT the scratch root's attributes:
+    # cp -a scratch/. DEST/ changes DEST's mode and may relax access permissions.
+    shopt -s dotglob nullglob
+    outputs=("$tdir"/*)
+    if [ ${{#outputs[@]}} -eq 0 ] || cp -a -- "${{outputs[@]}}" "$DEST"/; then COPY_OK=1; fi
+    shopt -u dotglob nullglob
 fi
 if [ $COPY_OK -ne 1 ]; then
     echo "Error: failed to copy results to $DEST"
