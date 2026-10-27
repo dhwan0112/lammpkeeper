@@ -9,6 +9,7 @@ Supports four modes:
 """
 
 import argparse
+import shlex
 
 from lammps_pre import VERSION
 from lammps_pre.display import C
@@ -52,57 +53,71 @@ def main(argv=None):
     from lammps_pre.shell import LammpsPreShell
 
     shell = LammpsPreShell()
-    s = shell.state
+    shell.noninteractive = bool(args.batch or args.matrix or args.build or
+                                args.write is not None or args.preview)
+
+    def run(command):
+        stop = shell.onecmd(command)
+        if shell.last_command_failed:
+            # Legacy entrypoints call main() without sys.exit(main()), so errors
+            # must raise rather than merely return an ignored numeric status.
+            raise SystemExit(1)
+        return stop
 
     # ── Apply quick setup flags ──
     if args.ff:
-        shell.do_set(f'ff {args.ff}')
-    if args.temp:
-        shell.do_set(f'temperature {args.temp}')
+        run(f'set ff {args.ff}')
+    if args.temp is not None:
+        run(f'set temperature {args.temp}')
     if args.o2 is not None:
-        shell.do_set(f'o2 {args.o2}')
+        run(f'set o2 {args.o2}')
     if args.slab:
-        shell.do_set(f'slab {args.slab.replace("x", " ")}')
+        run(f'set slab {shlex.quote(args.slab)}')
     if args.surface:
-        shell.do_set(f'surface {args.surface}')
+        run(f'set surface {args.surface}')
     if args.boundary:
-        shell.do_set(f'boundary {args.boundary}')
-    if args.seed:
-        shell.do_set(f'seed {args.seed}')
+        run(f'set boundary {shlex.quote(args.boundary)}')
+    if args.seed is not None:
+        run(f'set seed {args.seed}')
 
     # ── Matrix mode ──
     if args.matrix:
         # Parse: "temps=300,500,800 o2=40,100,200"
         matrix_args = args.matrix
         if args.write is not None:
-            matrix_args += f' output={args.write}'
-        shell.do_matrix(matrix_args)
+            matrix_args += f' output={shlex.quote(args.write)}'
+        run(f'matrix {matrix_args}')
         return
 
     # ── One-shot mode ──
     one_shot = args.build or args.write is not None or args.preview
 
     if args.build or args.write is not None:
-        shell.do_build('')
+        run('build')
 
     if args.write is not None:
-        shell.do_set(f'output {args.write}')
-        shell.do_write('all')
+        run(f'set output {shlex.quote(args.write)}')
+        run('write all')
 
     if args.preview:
-        shell.do_show('')
+        run('show')
 
     if one_shot:
         return
 
     # ── Batch mode ──
     if args.batch:
-        with open(args.batch) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    print(f"{shell.prompt}{line}")
-                    shell.onecmd(line)
+        try:
+            with open(args.batch) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        print(f"{shell.prompt}{line}")
+                        if run(line):
+                            break
+        except OSError as exc:
+            print(C.err(f'  Error: {exc}'))
+            raise SystemExit(1) from exc
         return
 
     # ── Interactive mode ──

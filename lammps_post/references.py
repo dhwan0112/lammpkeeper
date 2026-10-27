@@ -213,44 +213,30 @@ CRYSTAL_DB['Fe2O3'] = {
 }
 
 # ── Fe3O4 magnetite (Fd-3m, origin choice 2) ──
-# Asymmetric unit: Fe_tet at 8a (1/8,1/8,1/8), Fe_oct at 16d (1/2,1/2,1/2),
-#                  O at 32e (x,x,x) with x=0.2549
-_spinel_symops = [
-    'x,y,z', '-x,-y,z', '-x,y,-z', 'x,-y,-z',
-    'z,x,y', 'z,-x,-y', '-z,-x,y', '-z,x,-y',
-    'y,z,x', '-y,z,-x', 'y,-z,-x', '-y,-z,x',
-    'y,x,-z', '-y,-x,-z', 'y,-x,z', '-y,x,z',
-    'x,z,-y', '-x,z,y', '-x,-z,-y', 'x,-z,y',
-    'z,y,-x', 'z,-y,x', '-z,y,x', '-z,-y,-x',
-    # + FCC centering translations
-    'x,y+1/2,z+1/2', '-x,-y+1/2,z+1/2', '-x,y+1/2,-z+1/2', 'x,-y+1/2,-z+1/2',
-    'z,x+1/2,y+1/2', 'z,-x+1/2,-y+1/2', '-z,-x+1/2,y+1/2', '-z,x+1/2,-y+1/2',
-    'y,z+1/2,x+1/2', '-y,z+1/2,-x+1/2', 'y,-z+1/2,-x+1/2', '-y,-z+1/2,x+1/2',
-    'y,x+1/2,-z+1/2', '-y,-x+1/2,-z+1/2', 'y,-x+1/2,z+1/2', '-y,x+1/2,z+1/2',
-    'x,z+1/2,-y+1/2', '-x,z+1/2,y+1/2', '-x,-z+1/2,-y+1/2', 'x,-z+1/2,y+1/2',
-    'z,y+1/2,-x+1/2', 'z,-y+1/2,x+1/2', '-z,y+1/2,x+1/2', '-z,-y+1/2,-x+1/2',
-    'x+1/2,y,z+1/2', '-x+1/2,-y,z+1/2', '-x+1/2,y,-z+1/2', 'x+1/2,-y,-z+1/2',
-    'z+1/2,x,y+1/2', 'z+1/2,-x,-y+1/2', '-z+1/2,-x,y+1/2', '-z+1/2,x,-y+1/2',
-    'y+1/2,z,x+1/2', '-y+1/2,z,-x+1/2', 'y+1/2,-z,-x+1/2', '-y+1/2,-z,x+1/2',
-    'y+1/2,x,-z+1/2', '-y+1/2,-x,-z+1/2', 'y+1/2,-x,z+1/2', '-y+1/2,x,z+1/2',
-    'x+1/2,z,-y+1/2', '-x+1/2,z,y+1/2', '-x+1/2,-z,-y+1/2', 'x+1/2,-z,y+1/2',
-    'z+1/2,y,-x+1/2', 'z+1/2,-y,x+1/2', '-z+1/2,y,x+1/2', '-z+1/2,-y,-x+1/2',
-    'x+1/2,y+1/2,z', '-x+1/2,-y+1/2,z', '-x+1/2,y+1/2,-z', 'x+1/2,-y+1/2,-z',
-    'z+1/2,x+1/2,y', 'z+1/2,-x+1/2,-y', '-z+1/2,-x+1/2,y', '-z+1/2,x+1/2,-y',
-    'y+1/2,z+1/2,x', '-y+1/2,z+1/2,-x', 'y+1/2,-z+1/2,-x', '-y+1/2,-z+1/2,x',
-    'y+1/2,x+1/2,-z', '-y+1/2,-x+1/2,-z', 'y+1/2,-x+1/2,z', '-y+1/2,x+1/2,z',
-    'x+1/2,z+1/2,-y', '-x+1/2,z+1/2,y', '-x+1/2,-z+1/2,-y', 'x+1/2,-z+1/2,y',
-    'z+1/2,y+1/2,-x', 'z+1/2,-y+1/2,x', '-z+1/2,y+1/2,x', '-z+1/2,-y+1/2,-x',
-]
-_magnetite_asym = [
-    ('Fe', [0.125, 0.125, 0.125]),    # 8a tetrahedral
-    ('Fe', [0.5, 0.5, 0.5]),          # 16d octahedral
-    ('O',  [0.2549, 0.2549, 0.2549]), # 32e
+# Explicit Wyckoff motifs plus F centering, rather than an incomplete set of
+# point rotations (Fd-3m also needs non-symmorphic translations). Origin 2:
+# 8a = +/- (1/8,1/8,1/8) + F; 16d = four-site pyrochlore motif + F;
+# 32e = (u,u,u), permutations of (u,1/4-u,1/4-u), and inversions + F.
+# AUDIT-20261027: tested against independent periodic Fe-O coordination
+# (8 tetrahedral / 16 octahedral) and ASE space group 227, setting 2.
+_spinel_u = 0.2549
+_spinel_tet = [(0.125, 0.125, 0.125), (-0.125, -0.125, -0.125)]
+_spinel_oct = [(0.5, 0.5, 0.5), (0.5, 0.75, 0.75),
+               (0.75, 0.5, 0.75), (0.75, 0.75, 0.5)]
+_spinel_oxygen = [(_spinel_u, _spinel_u, _spinel_u),
+                   (_spinel_u, 0.25 - _spinel_u, 0.25 - _spinel_u),
+                   (0.25 - _spinel_u, _spinel_u, 0.25 - _spinel_u),
+                   (0.25 - _spinel_u, 0.25 - _spinel_u, _spinel_u)]
+_spinel_oxygen += [tuple(-v for v in p) for p in _spinel_oxygen]
+_magnetite_atoms = [
+    (element, ((np.asarray(position) + translation) % 1.0).tolist())
+    for element, motif in [('Fe', _spinel_tet), ('Fe', _spinel_oct), ('O', _spinel_oxygen)]
+    for position in motif for translation in _fcc_trans
 ]
 CRYSTAL_DB['Fe3O4'] = {
     'name': 'Fe₃O₄ (magnetite)',
     'cell': _cubic_cell(8.396),
-    'atoms': _expand_symmetry(_magnetite_asym, _spinel_symops),
+    'atoms': _magnetite_atoms,
 }
 
 
@@ -270,7 +256,8 @@ def parse_cif(source):
 
     Returns a crystal dict compatible with CRYSTAL_DB format:
         {'name': str, 'cell': 3x3 array, 'atoms': [(elem, [fx,fy,fz]), ...]}
-    Returns None on failure.
+    Returns None for missing/unreadable input. Raises ValueError when symmetry
+    cannot be established: supply explicit symmetry operations, or declare P1.
     """
     # ── Fetch CIF content ──
     if source.lower().startswith('cod:'):
@@ -293,9 +280,9 @@ def parse_cif(source):
     # ── Parse CIF fields ──
     def _get_value(tag):
         """Extract a single value for a CIF tag."""
-        pattern = rf'{re.escape(tag)}\s+(\S+)'
-        m = re.search(pattern, cif_text)
-        return m.group(1) if m else None
+        pattern = rf'''^\s*{re.escape(tag)}\s+('([^']*)'|"([^"]*)"|([^\s#]+))'''
+        m = re.search(pattern, cif_text, re.MULTILINE | re.IGNORECASE)
+        return next((v for v in m.groups()[1:] if v is not None), None) if m else None
 
     def _strip_uncertainty(val_str):
         """Remove parenthetical uncertainty: '2.8665(3)' -> 2.8665"""
@@ -418,7 +405,22 @@ def parse_cif(source):
             break
 
     if not symops:
-        symops = ['x, y, z']  # Identity only (no symmetry expansion)
+        # Coordinates in a CIF normally describe an asymmetric unit. Missing
+        # operations are NOT evidence of identity symmetry/full-cell positions.
+        numbers = [_get_value(tag) for tag in
+                   ('_space_group_IT_number', '_symmetry_Int_Tables_number')]
+        names = [_get_value(tag) for tag in
+                 ('_space_group_name_H-M_alt', '_symmetry_space_group_name_H-M',
+                  '_space_group_name_Hall')]
+        declared = [v for v in numbers + names if v not in (None, '?', '.')]
+        p1 = ([v.strip() == '1' for v in numbers if v not in (None, '?', '.')]
+              + [re.sub(r'\s+', '', v).lower() == 'p1'
+                 for v in names if v not in (None, '?', '.')])
+        if not declared or not all(p1):
+            raise ValueError('CIF symmetry is missing: explicit symmetry operations '
+                             'are required unless the declared space group is P1; '
+                             'cannot treat an asymmetric unit as a full cell.')
+        symops = ['x, y, z']
 
     # Build asymmetric unit atom list
     asym_atoms = [(elem, [fx, fy, fz])

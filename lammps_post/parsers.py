@@ -16,17 +16,21 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 ═══════════════════════════════════════════════════════════════
 """
 
+import ast
 import mmap
+import operator
 import os
 import queue
 import re
+import shlex
 import threading
+import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
 
 import numpy as np
 
-from lammpkeeper.common.mapping import type_to_label
+from lammpkeeper.common.mapping import FORCE_FIELDS, type_to_label
 
 # Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
 _native = None
@@ -96,11 +100,26 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
 # Non-numeric dump columns, kept out of the numeric 'atoms' array.
 STRING_COLUMNS = ('element',)
 
+
+def _validate_frame_limits(stride, max_frames):
+    """Require integer frame limits rather than silently rounding/slicing floats."""
+    try:
+        stride = operator.index(stride)
+    except TypeError:
+        raise ValueError(f"stride must be an integer >= 1, got {stride!r}") from None
+    if stride < 1:
+        raise ValueError(f"stride must be >= 1, got {stride}")
+    if max_frames is not None:
+        try:
+            max_frames = operator.index(max_frames)
+        except TypeError:
+            raise ValueError(f"max_frames must be an integer >= 0 or None, got {max_frames!r}") from None
+        if max_frames < 0:
+            raise ValueError(f"max_frames must be >= 0, got {max_frames}")
+    return stride, max_frames
+
 # Every column the analysis and plotting code reads, for DumpReader(columns=...).
 ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
-
-# Parse width for element labels; shrunk to the longest label afterwards.
-_ELEMENT_PARSE_DTYPE = 'U16'
 
 # DumpReader.index() returns scanned mmap pages to the OS every this many bytes.
 _INDEX_RELEASE_BYTES = 32 * 1024 ** 2
@@ -172,9 +191,9 @@ class DumpReader:
     """
 
     def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None):
-        if stride < 1:
-            raise ValueError(f"stride must be >= 1, got {stride}")
+        stride, max_frames = _validate_frame_limits(stride, max_frames)
         self.filepath = filepath
+        self._source_signature = self._signature()
         self.dtype = np.dtype(dtype)
         self.stride = stride
         self.max_frames = max_frames
@@ -190,8 +209,6 @@ class DumpReader:
         # Positions within `kept`, used to split the structured record array.
         self._numeric_pos = [k for k, c in enumerate(kept) if c not in STRING_COLUMNS]
         self._element_pos = kept.index('element') if self.has_elements else None
-        self._row_dtype = [(f'c{k}', _ELEMENT_PARSE_DTYPE if c in STRING_COLUMNS else self.dtype)
-                           for k, c in enumerate(kept)]
         self._element_col = self._usecols[self._element_pos] if self.has_elements else None
         self._native = _native if self.dtype in (np.float64, np.float32) else None
 
@@ -201,11 +218,68 @@ class DumpReader:
         self.boundary = None
         with open(self.filepath, 'r') as f:
             for line in f:
-                if line.startswith('ITEM: BOX BOUNDS'):
-                    self.boundary = parse_boundary_flags(line)
-                elif line.startswith('ITEM: ATOMS'):
-                    return line.split()[2:]
+                if line.strip() == 'ITEM: TIMESTEP':
+                    _, _, _, header = self._read_header(f, first=True)
+                    return header
+                if line.strip():
+                    raise ValueError(f"{self.filepath}: invalid dump header: {line.strip()}")
         return []
+
+    def _signature(self):
+        st = os.stat(self.filepath)
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def _check_source(self):
+        if self._signature() != self._source_signature:
+            raise ValueError(f"{self.filepath}: dump source changed; create a new DumpReader/index/cache")
+
+    def _read_header(self, stream, first=False):
+        """Shared structural/geometry preflight for streaming and indexed paths."""
+        def line():
+            value = stream.readline()
+            return value.decode().strip() if isinstance(value, bytes) else value.strip()
+
+        timestep = int(line())
+        if line() != 'ITEM: NUMBER OF ATOMS':
+            raise ValueError(f"{self.filepath}: invalid atom-count header at step {timestep}")
+        natoms = int(line())
+        if natoms < 0:
+            raise ValueError(f"{self.filepath}: negative atom count at step {timestep}")
+        bounds_header = line()
+        if bounds_header.split()[:3] != ['ITEM:', 'BOX', 'BOUNDS']:
+            raise ValueError(f"{self.filepath}: invalid box header at step {timestep}")
+        tokens = bounds_header.split()[3:]
+        if any(t in tokens for t in ('xy', 'xz', 'yz', 'abc', 'origin')):
+            raise ValueError(f"{self.filepath}: triclinic dump boxes are not supported (step {timestep})")
+        boundary = parse_boundary_flags(bounds_header)
+        if tokens and (len(tokens) != 3 or boundary is None):
+            raise ValueError(f"{self.filepath}: malformed boundary flags at step {timestep}")
+        if first:
+            self.boundary = boundary
+        elif boundary != self.boundary:
+            raise ValueError(f"{self.filepath}: boundary flags change at step {timestep}: "
+                             f"{boundary} != {self.boundary}")
+        box = []
+        for _ in range(3):
+            parts = line().split()
+            if len(parts) > 2:
+                raise ValueError(f"{self.filepath}: triclinic/extra box values at step {timestep}")
+            if len(parts) != 2:
+                raise ValueError(f"{self.filepath}: malformed box bounds at step {timestep}")
+            lo, hi = map(float, parts)
+            if not np.isfinite([lo, hi]).all() or hi <= lo:
+                raise ValueError(f"{self.filepath}: invalid box bounds at step {timestep}")
+            box.append([lo, hi])
+        header = line().split()
+        if header[:2] != ['ITEM:', 'ATOMS'] or len(header) < 3:
+            raise ValueError(f"{self.filepath}: invalid ATOMS header at step {timestep}")
+        header = header[2:]
+        if len(set(header)) != len(header):
+            raise ValueError(f"{self.filepath}: duplicate atom column header at step {timestep}")
+        if not first and header != self.raw_columns:
+            raise ValueError(f"{self.filepath}: column layout changes at step {timestep}: "
+                             f"{header} != {self.raw_columns}")
+        return timestep, natoms, np.array(box), header
 
     def index(self):
         """
@@ -217,6 +291,7 @@ class DumpReader:
         span of the atom block, which read_frame() uses for random access.
         """
         idx = DumpIndex()
+        self._check_source()
         if os.path.getsize(self.filepath) == 0:
             return idx.finalize()
         marker = b'ITEM: TIMESTEP'
@@ -235,16 +310,7 @@ class DumpReader:
                     released = upto
                 mm.seek(pos)
                 mm.readline()                   # ITEM: TIMESTEP
-                timestep = int(mm.readline())
-                mm.readline()                   # ITEM: NUMBER OF ATOMS
-                natoms = int(mm.readline())
-                mm.readline()                   # ITEM: BOX BOUNDS ...
-                box = [[float(v) for v in mm.readline().split()[:2]] for _ in range(3)]
-                header = mm.readline().decode().split()[2:]
-                if header != self.raw_columns:
-                    raise ValueError(
-                        f"{self.filepath}: column layout changes at step {timestep}: "
-                        f"{header} != {self.raw_columns}")
+                timestep, natoms, box, _ = self._read_header(mm)
                 start = mm.tell()
                 pos = mm.find(marker, start)
                 idx.add(timestep, natoms, box, start, size if pos == -1 else pos)
@@ -252,6 +318,7 @@ class DumpReader:
 
     def read_frame(self, index, k):
         """Parse frame k of `index` (from self.index()) with one seek + read."""
+        self._check_source()
         start, end = int(index.block_start[k]), int(index.block_end[k])
         natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
         with open(self.filepath, 'rb') as f:
@@ -272,6 +339,7 @@ class DumpReader:
         return natoms * per_atom
 
     def __iter__(self):
+        self._check_source()
         n_seen = 0
         n_yielded = 0
         with open(self.filepath, 'r') as f:
@@ -279,21 +347,11 @@ class DumpReader:
                 line = f.readline()
                 if not line:
                     return
-                if 'ITEM: TIMESTEP' not in line:
+                if not line.strip():
                     continue
-
-                timestep = int(f.readline())
-                f.readline()                    # ITEM: NUMBER OF ATOMS
-                natoms = int(f.readline())
-                f.readline()                    # ITEM: BOX BOUNDS ...
-                # lo/hi per axis; a triclinic tilt factor (3rd value) is ignored.
-                box = np.array([[float(v) for v in f.readline().split()[:2]]
-                                for _ in range(3)])
-                header = f.readline().split()[2:]
-                if header != self.raw_columns:
-                    raise ValueError(
-                        f"{self.filepath}: column layout changes at step {timestep}: "
-                        f"{header} != {self.raw_columns}")
+                if line.strip() != 'ITEM: TIMESTEP':
+                    raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: {line.strip()}")
+                timestep, natoms, box, _ = self._read_header(f)
 
                 n_seen += 1
                 if (n_seen - 1) % self.stride:
@@ -318,6 +376,30 @@ class DumpReader:
     def _parse_block(self, block, natoms, timestep):
         """Parse the first natoms lines of the atom block `block` (bytes)."""
         n_numeric = len(self._numeric_pos)
+        lines = block.decode().splitlines()
+        if len(lines) != natoms or any(not row.strip() for row in lines):
+            raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "
+                             f"expected {natoms} (truncated or surplus dump?)")
+        fields = None
+        if self.has_elements or any(c in self.col_idx for c in ('id', 'type')):
+            fields = [row.split() for row in lines]
+            if any(len(row) != len(self.raw_columns) for row in fields):
+                raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: wrong column count")
+            # Integer identity must survive the homogeneous numeric array exactly.
+            for name in ('id', 'type'):
+                if name not in self.col_idx:
+                    continue
+                col = self.raw_columns.index(name)
+                for row in fields:
+                    try:
+                        value = int(row[col])
+                        converted = self.dtype.type(value)
+                        exact = np.isfinite(converted) and int(converted) == value
+                    except (ValueError, OverflowError):
+                        exact = False
+                    if not exact:
+                        raise ValueError(f"{self.filepath}: {name} precision/integer error "
+                                         f"at step {timestep}: {row[col]} cannot be stored as {self.dtype}")
         if natoms == 0:
             empty_elements = np.empty(0, dtype='U1') if self.has_elements else None
             return np.empty((0, n_numeric), dtype=self.dtype), empty_elements
@@ -336,13 +418,18 @@ class DumpReader:
                 return atoms, elements
 
         # Reference path; the native parser defers here for every error case.
-        lines = block.decode().split('\n', natoms)[:natoms]
         try:
-            if not self.has_elements:
+            if not self._usecols:
+                atoms = np.empty((natoms, 0), dtype=self.dtype)
+                elements = None
+            elif not self.has_elements:
                 atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2)
                 elements = None
             else:
-                rec = np.loadtxt(lines, dtype=self._row_dtype, usecols=self._usecols, ndmin=1)
+                width = max(1, max(len(row[self._element_col]) for row in fields))
+                row_dtype = [(f'c{k}', f'U{width}' if self.raw_columns[i] in STRING_COLUMNS else self.dtype)
+                             for k, i in enumerate(self._usecols)]
+                rec = np.loadtxt(lines, dtype=row_dtype, usecols=self._usecols, ndmin=1)
                 names = rec.dtype.names
                 elements = rec[names[self._element_pos]]
                 # Fixed-width str array: ~8 bytes/atom for 2-letter symbols,
@@ -389,6 +476,9 @@ class DumpIndex:
 # Default memory budget for LazyFrames' parsed-frame cache.
 DEFAULT_CACHE_BYTES = 128 * 1024 ** 2
 
+# Distinguish omitted view limits from explicit overrides (including None/0).
+_INHERIT_READER_LIMIT = object()
+
 
 class _FrameStore:
     """
@@ -410,6 +500,7 @@ class _FrameStore:
         self._lock = threading.Lock()
 
     def get(self, k):
+        self.reader._check_source()
         fr = self.cache.get(k)
         if fr is not None:
             return fr
@@ -443,19 +534,25 @@ class LazyFrames(Sequence):
     column) so it survives cache eviction.
 
     Args:
-        reader:      DumpReader — decides columns and dtype.
+        reader:      DumpReader — decides columns, dtype and default frame limits.
         index:       DumpIndex or None — from reader.index() (scanned if None).
         cache_bytes: int — Parsed-frame cache budget (0 = always stream).
-        stride:      int — Keep every Nth frame, starting with the first.
-        max_frames:  int or None — Keep at most this many frames (None/0 = all).
+        stride:      int — Keep every Nth frame, starting with the first;
+                     omitted inherits reader.stride.
+        max_frames:  int or None — Keep at most this many frames; omitted
+                     inherits reader.max_frames. Explicit None/0 means all.
     """
 
     def __init__(self, reader, index=None, cache_bytes=DEFAULT_CACHE_BYTES,
-                 stride=1, max_frames=None, transform=None, _store=None, _positions=None):
+                 stride=_INHERIT_READER_LIMIT, max_frames=_INHERIT_READER_LIMIT,
+                 transform=None, _store=None, _positions=None):
         new_store = _store is None
         if new_store:
-            if stride < 1:
-                raise ValueError(f"stride must be >= 1, got {stride}")
+            if stride is _INHERIT_READER_LIMIT:
+                stride = reader.stride
+            if max_frames is _INHERIT_READER_LIMIT:
+                max_frames = reader.max_frames
+            stride, max_frames = _validate_frame_limits(stride, max_frames)
             index = reader.index() if index is None else index
             _store = _FrameStore(reader, index, cache_bytes, transform)
             _positions = range(0, len(index), stride)
@@ -498,6 +595,8 @@ class LazyFrames(Sequence):
         order. `depth` frames may queue per iterator, so memory stays bounded.
         Random access and slices are unaffected.
         """
+        if depth < 1:
+            raise ValueError('shared_pass depth must be >= 1')
         shared = _SharedPass(self, depth)
         self._shared = shared
         try:
@@ -584,6 +683,11 @@ class _SharedPass:
         self.frames_parsed = 0
 
     def subscribe(self):
+        # Register only on first next(). Closing an unstarted generator otherwise
+        # never enters _consume's finally and leaves a permanently full queue.
+        yield from self._subscribe_started()
+
+    def _subscribe_started(self):
         n = len(self._view)
         with self._lock:
             start = self._next
@@ -666,12 +770,12 @@ def parse_log(filepath):
         Loop time of 123.45 on 4 procs ...
 
     This parser:
-    1. Scans for thermo header lines (containing 'Step' + energy keywords)
+    1. Scans for thermo header lines beginning with 'Step'
     2. Reads numeric data rows until a terminator is found
     3. Tracks simulation stages (spin_eq, minimize, equilibrate, oxidation)
     4. Extracts 'Loop time' values for performance analysis
     5. Normalizes column names (e.g., 'PotEng' -> 'pe', 'TotEng' -> 'etotal')
-    6. Returns data from the LARGEST thermo block (= production run)
+    6. Reassembles compatible MD blocks in source order, never optimizer steps
 
     Args:
         filepath: str — Path to the LAMMPS log file.
@@ -689,6 +793,14 @@ def parse_log(filepath):
             'stages'      : list[str]         — Stage label for each data row
             'stage_times' : dict[str, float]  — Stage name -> wall time (seconds)
             'raw_blocks'  : list              — All detected thermo blocks
+            'block_kinds' : list[str]         — 'md'/'minimize' for each raw block
+            'block_ids'   : np.array          — Source block index for each output row
+            'timeline_valid': bool           — False for ambiguous/reset or optimizer-only steps
+            'unit_system': str/None          — Explicit echoed metal/real units, never a dump guess
+            'dt_fs': float/None              — Explicit numeric echoed timestep in femtoseconds
+            'elapsed_md_steps': np.array/None — Within-block MD increments only,
+                                               excluding optimizer iterations;
+                                               not time without a confirmed timestep
         Returns None if no thermo data is found.
     """
     # Column name normalization map: LAMMPS uses different names depending
@@ -706,8 +818,11 @@ def parse_log(filepath):
         'density': 'density',
     }
 
+    block_kinds = []
+
     def _as_block(headers, rows, stages):
         # Nested float lists cost ~32 bytes/value; keep finished blocks as ndarrays.
+        block_kinds.append(block_kind)
         return (headers, np.array(rows, dtype=np.float64), stages)
 
     blocks = []              # Accumulated thermo blocks: [(headers, ndarray, stages), ...]
@@ -717,16 +832,52 @@ def parse_log(filepath):
     reading = False          # True when inside a thermo data block
     stage = "init"           # Current simulation stage label
     stage_times = {}         # Accumulated wall time per stage (seconds)
+    kind = 'md'
+    block_kind = 'md'
+    unit_system = None
+    timestep = None
+    unresolved_timestep = False
 
     with open(filepath, 'r') as fh:
         for raw in fh:
             line = raw.strip()
             low = line.lower()
+            if low.startswith('units '):
+                unit = line.split()[1]
+                if unit not in ('metal', 'real'):
+                    raise ValueError(f"{filepath}: unsupported units style {unit!r}; supported: metal, real")
+                if unit_system is not None and unit_system != unit:
+                    raise ValueError(f"{filepath}: mixed units styles require separate thermo histories")
+                unit_system = unit
+            if low.startswith('timestep '):
+                try:
+                    value = float(line.split()[1])
+                except ValueError:
+                    # LAMMPS may echo the substituted numeric command next.
+                    unresolved_timestep = True
+                else:
+                    if not np.isfinite(value) or value <= 0:
+                        raise ValueError(f"{filepath}: timestep must be finite and positive")
+                    if timestep is not None and timestep != value:
+                        raise ValueError(f"{filepath}: changing timestep requires separate thermo timelines")
+                    timestep = value
+                    unresolved_timestep = False
+
+            # Warnings may be interleaved with a running thermo table. They are
+            # diagnostics, not a table terminator or a simulation-stage marker.
+            if line.startswith('WARNING'):
+                continue
 
             # --- Stage detection ---
             # LAMMPS input scripts often print stage markers via 'print' commands.
             # We look for keywords to classify the current simulation phase.
-            if 'stage 0' in low or 'spin' in low:
+            if low.startswith('minimize ') or low.startswith('setting up ') and 'minimization' in low:
+                kind, stage = 'minimize', 'minimize'
+            elif low.startswith('run ') or low.startswith('setting up ') and 'run' in low:
+                kind = 'md'
+                if stage == 'minimize':
+                    stage = 'md'
+            if 'stage 0' in low or ('spin' in low and ('equil' in low or 'stage' in low)):
                 stage = 'spin_eq'         # MC spin equilibration phase
             elif 'stage 1' in low or 'minimiz' in low:
                 stage = 'minimize'        # Energy minimization (CG, FIRE, etc.)
@@ -747,10 +898,9 @@ def parse_log(filepath):
                     pass
 
             # --- Thermo header detection ---
-            # A thermo header line contains 'Step' and at least one energy keyword.
+            # A thermo header line begins with 'Step' (pressure-only is valid).
             # When found, we start reading numeric data rows.
-            if ('Step' in line and
-                any(k in line for k in ('Temp', 'PotEng', 'TotEng', 'KinEng', 'pe', 'ke'))):
+            if line.split() and line.split()[0] == 'Step' and len(line.split()) > 1:
                 if reading and current_data:
                     # Save the previous thermo block before starting a new one
                     blocks.append(_as_block(current_headers, current_data, current_stages))
@@ -758,14 +908,15 @@ def parse_log(filepath):
                 current_headers = line.split()
                 current_data = []
                 current_stages = []
+                block_kind = kind
                 reading = True
                 continue
 
             # --- End of thermo block ---
             # Thermo blocks end when LAMMPS prints a summary line, error,
-            # warning, or starts a new command (minimize, etc.).
+            # or starts a new command (minimize, etc.).
             if reading and ('Loop time' in line or line.startswith('ERROR') or
-                            line.startswith('WARNING') or 'cg style' in low or
+                            'cg style' in low or
                             'minimize' in low):
                 if current_data:
                     blocks.append(_as_block(current_headers, current_data, current_stages))
@@ -797,42 +948,72 @@ def parse_log(filepath):
     if not blocks:
         return None  # No thermo data found in the entire log file
 
-    # Reassemble the FULL run rather than only the largest thermo block.
-    #
-    # A multi-stage simulation writes one thermo block per run/minimize
-    # (spin-eq, minimize, equilibrate, oxidation, ...). Keeping only the
-    # largest block silently dropped every other stage — the ACE runs, for
-    # instance, lost the first ~170 ps (spin equilibration + thermalization)
-    # from every thermo/pressure plot. Concatenate all blocks that share the
-    # production block's column layout, ordered by step with duplicated
-    # boundary steps removed. Blocks printed with a different thermo_style
-    # (mismatched headers, e.g. a minimization block) are left out because
-    # their columns do not align.
-    headers = max(blocks, key=lambda x: len(x[1]))[0]
-    merged_data, stages = [], []
-    for hdr, data, stg in blocks:
-        if hdr == headers:
-            merged_data.append(data)
-            stages.extend(stg if len(stg) == len(data) else [''] * len(data))
+    # Keep raw blocks exactly as written. Optimizer iterations are not physical
+    # MD time even when their thermo_style happens to match the MD layout.
+    md_blocks = [(i, b) for i, b in enumerate(blocks) if block_kinds[i] == 'md']
+    candidates = md_blocks or list(enumerate(blocks))
+    headers = max(candidates, key=lambda item: len(item[1][1]))[1][0]
+    selected = [(i, b) for i, b in candidates if b[0] == headers]
+    merged_data, stages, block_ids, elapsed = [], [], [], []
+    timeline_valid = bool(md_blocks)
+    if any(kind == 'minimize' for kind in block_kinds[:selected[-1][0]]):
+        # Even after optimizer rows are excluded, the absolute Step counter can
+        # contain optimizer iterations. Only elapsed_md_steps removes that gap.
+        timeline_valid = False
+    elapsed_step = 0.0
+    elapsed_offsets = {}
+    previous_md_end = None
+    for bi, (hdr, data, _) in md_blocks:
+        step_column = hdr.index('Step')
+        steps = data[:, step_column]
+        if np.any(np.diff(steps) < 0) or (previous_md_end is not None and steps[0] < previous_md_end):
+            timeline_valid = False
+        elapsed_offsets[bi] = elapsed_step
+        elapsed_step += float(steps[-1] - steps[0])
+        previous_md_end = steps[-1]
+    si = headers.index('Step')
+    previous = None
+    for bi, (hdr, data, stg) in selected:
+        if np.any(np.diff(data[:, si]) < 0):
+            timeline_valid = False
+        local = data[:, si] - data[0, si]
+        # Only identical adjacent boundary records can be safely coalesced.
+        start = 0
+        if previous is not None:
+            if data[0, si] < previous[si]:
+                timeline_valid = False
+            elif data[0, si] == previous[si]:
+                if np.array_equal(previous, data[0]) and block_kinds[bi] == 'md':
+                    start = 1
+                else:
+                    timeline_valid = False
+        merged_data.append(data[start:])
+        stages.extend(stg[start:])
+        block_ids.extend([bi] * len(data[start:]))
+        elapsed.extend((elapsed_offsets.get(bi, 0.0) + local[start:]).tolist())
+        previous = data[-1]
     arr = np.concatenate(merged_data)
-
-    # Order by step and drop rows whose step repeats (block boundaries print
-    # the same step twice). These templates use one monotonic step counter, so
-    # this never collapses distinct data; a restart that reset the counter would.
-    step_cols = [i for i, h in enumerate(headers) if h.lower() == 'step']
-    if step_cols and len(arr):
-        si = step_cols[0]
-        order = np.argsort(arr[:, si], kind='stable')
-        arr = arr[order]
-        stages = [stages[k] for k in order]
-        _, first = np.unique(arr[:, si], return_index=True)
-        keep = np.sort(first)
-        arr = arr[keep]
-        stages = [stages[k] for k in keep]
+    if not timeline_valid:
+        warnings.warn(f"{filepath}: ambiguous/reset or non-MD thermo step timeline; "
+                      "source rows retained, do not interpret step as elapsed MD time", RuntimeWarning)
+    omitted = len(blocks) - len(selected)
+    if omitted:
+        warnings.warn(f"{filepath}: excluded {omitted} minimization/incompatible thermo block(s) "
+                      "from MD arrays; all source data remain in raw_blocks", RuntimeWarning)
 
     # Build the result dict with normalized column keys
     result = {'headers': headers, 'stages': stages, 'stage_times': stage_times,
-              'raw_blocks': blocks}
+              'raw_blocks': blocks, 'block_kinds': block_kinds,
+              'block_ids': np.array(block_ids, dtype=np.int64),
+              'timeline_valid': timeline_valid,
+              'elapsed_md_steps': np.array(elapsed) if md_blocks else None,
+              'unit_system': unit_system,
+              'dt_fs': (timestep * (1000.0 if unit_system == 'metal' else 1.0)
+                        if timestep is not None and unit_system is not None
+                        and not unresolved_timestep else None)}
+    if unresolved_timestep:
+        warnings.warn(f"{filepath}: unresolved timestep command in log; supply confirmed input metadata",
+                      RuntimeWarning)
 
     for i, h in enumerate(headers):
         # Normalize: 'PotEng' -> 'pe', 'TotEng' -> 'etotal', etc.
@@ -853,9 +1034,11 @@ def parse_data_file(filepath):
 
     Supports the 'atomic' atom style where each atom line is:
         atom_id  atom_type  x  y  z
-    Also works with 'charge' atom style (id type q x y z) by reading
-    the first 5 numeric columns. For charge style, the charge column
-    is skipped — use dump files for charge analysis.
+    Also supports charge, full, molecular, bond and angle styles when labelled
+    in the Atoms section comment, plus optional integer image flags. Only id,
+    type and xyz are returned. Unlabelled 5/8-field rows are atomic; ambiguous
+    6/9-field rows retain the legacy charge interpretation with a warning.
+    Triclinic cells, malformed rows and declared-count mismatches raise.
 
     Args:
         filepath: str — Path to the LAMMPS data file.
@@ -867,80 +1050,110 @@ def parse_data_file(filepath):
                 Returns empty array if no box bounds found.
         masses: dict[int, float] — Atom type ID -> mass in atomic mass units.
     """
-    atoms = []
-    box = []
-    masses = {}
-    in_atoms = False    # True when reading the 'Atoms' section
-    in_masses = False   # True when reading the 'Masses' section
-    atom_style = None   # 'charge' or 'atomic', detected from header
-
+    atoms, bounds, masses = [], {}, {}
+    section, atom_style, declared_atoms, declared_types = None, None, None, None
+    seen_ids = set()
+    saw_masses = False
+    # style -> (required fields, type column, xyz start)
+    styles = {'atomic': (5, 1, 2), 'charge': (6, 1, 3),
+              'full': (7, 2, 4), 'molecular': (6, 2, 3),
+              'bond': (6, 2, 3), 'angle': (6, 2, 3)}
     with open(filepath, 'r') as f:
-        for line in f:
-            stripped = line.strip()
-
-            # --- Box bounds (in the header, before any sections) ---
-            # Format: "xlo xhi xlo xhi" or similar
-            if 'xlo' in stripped and 'xhi' in stripped:
-                parts = stripped.split()
-                box.append([float(parts[0]), float(parts[1])])
-            elif 'ylo' in stripped and 'yhi' in stripped:
-                parts = stripped.split()
-                box.append([float(parts[0]), float(parts[1])])
-            elif 'zlo' in stripped and 'zhi' in stripped:
-                parts = stripped.split()
-                box.append([float(parts[0]), float(parts[1])])
-
-            # --- Section header detection ---
-            # Sections are delimited by keyword lines ('Masses', 'Atoms', etc.)
-            if stripped.startswith('Masses'):
-                in_masses = True
-                in_atoms = False
+        next(f, None)  # LAMMPS always reserves the first line for a title.
+        for lineno, line in enumerate(f, 2):
+            body, _, comment = line.partition('#')
+            stripped = body.strip()
+            if not stripped:
                 continue
-            if 'Atoms' in stripped:
-                in_atoms = True
-                in_masses = False
-                # Detect atom style from header: "Atoms # charge" or "Atoms # atomic"
-                if '# charge' in stripped:
-                    atom_style = 'charge'
-                elif '# atomic' in stripped:
-                    atom_style = 'atomic'
+            parts = stripped.split()
+            if (parts[-3:] == ['xy', 'xz', 'yz'] or
+                    any(token in parts for token in ('avec', 'bvec', 'cvec')) or
+                    parts[-1:] == ['abc']):
+                raise ValueError(f"{filepath}:{lineno}: triclinic data boxes are not supported")
+            if len(parts) == 2 and parts[1] == 'atoms':
+                declared_atoms = int(parts[0])
+                if declared_atoms < 0:
+                    raise ValueError(f"{filepath}:{lineno}: negative atom count")
                 continue
-            if stripped.startswith('Velocities') or stripped.startswith('Bonds'):
-                in_atoms = False  # End of Atoms section
+            if len(parts) == 3 and parts[1:] == ['atom', 'types']:
+                declared_types = int(parts[0])
+                if declared_types < 0:
+                    raise ValueError(f"{filepath}:{lineno}: negative atom type count")
                 continue
-
-            # --- Masses section: "type_id  mass" ---
-            if in_masses and stripped and not stripped.startswith('#'):
-                parts = stripped.split()
-                if len(parts) >= 2:
-                    try:
-                        masses[int(parts[0])] = float(parts[1])
-                    except ValueError:
-                        pass
-
-            # --- Atoms section ---
-            # atomic style: "id type x y z"           (5 columns)
-            # charge style: "id type q x y z"         (6+ columns)
-            if in_atoms and stripped and not stripped.startswith('#'):
-                parts = stripped.split()
-                if len(parts) >= 5:
-                    try:
-                        # Determine xyz column offset based on atom style
-                        if atom_style == 'charge' or (atom_style is None and len(parts) >= 6):
-                            # charge style: id(0) type(1) q(2) x(3) y(4) z(5)
-                            xyz_off = 3
+            if len(parts) == 4 and parts[-2:] in (['xlo', 'xhi'], ['ylo', 'yhi'], ['zlo', 'zhi']):
+                axis = parts[-2][0]
+                values = list(map(float, parts[:2]))
+                if axis in bounds or not np.isfinite(values).all() or values[1] <= values[0]:
+                    raise ValueError(f"{filepath}:{lineno}: invalid/duplicate box bounds")
+                bounds[axis] = values
+                continue
+            if stripped[0].isalpha():
+                # Every section header ends the previous section, including
+                # coefficient/topology sections that this API does not return.
+                if re.fullmatch(r'[A-Za-z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*)*', stripped):
+                    section = stripped
+                    if section == 'Masses':
+                        saw_masses = True
+                    if section == 'Atoms':
+                        atom_style = comment.strip().split()[0] if comment.strip() else None
+                        if atom_style is not None and atom_style not in styles:
+                            raise ValueError(f"{filepath}:{lineno}: unsupported atom style {atom_style!r}")
+                    continue
+            try:
+                if section == 'Masses':
+                    if len(parts) != 2:
+                        raise ValueError('mass row must contain type and mass')
+                    tid, mass = int(parts[0]), float(parts[1])
+                    if tid <= 0 or tid in masses or not np.isfinite(mass) or mass <= 0:
+                        raise ValueError('invalid/duplicate mass')
+                    if declared_types is not None and tid > declared_types:
+                        raise ValueError('mass type exceeds declared atom types')
+                    masses[tid] = mass
+                elif section == 'Atoms':
+                    if atom_style is None:
+                        if len(parts) in (5, 8):
+                            atom_style = 'atomic'
+                        elif len(parts) in (6, 9):
+                            atom_style = 'charge'
+                            warnings.warn(f"{filepath}:{lineno}: unlabelled six-field Atoms layout "
+                                          "guessed as charge; specify Atoms # charge to disambiguate molecular style",
+                                          RuntimeWarning)
                         else:
-                            # atomic style: id(0) type(1) x(2) y(3) z(4)
-                            xyz_off = 2
-                        atoms.append([int(parts[0]), int(parts[1]),
-                                      float(parts[xyz_off]), float(parts[xyz_off+1]),
-                                      float(parts[xyz_off+2])])
-                    except (ValueError, IndexError):
-                        pass
-
-    return (np.array(atoms) if atoms else np.empty((0, 5)),
-            np.array(box) if box else np.empty((0, 2)),
-            masses)
+                            raise ValueError('ambiguous Atoms layout; specify an atom style')
+                    required, type_col, xyz_col = styles[atom_style]
+                    if len(parts) not in (required, required + 3):
+                        raise ValueError(f'wrong field count for atom style {atom_style}')
+                    aid, tid = int(parts[0]), int(parts[type_col])
+                    xyz = list(map(float, parts[xyz_col:xyz_col + 3]))
+                    if aid <= 0 or aid in seen_ids or tid <= 0 or not np.isfinite(xyz).all():
+                        raise ValueError('invalid/duplicate atom ID, type or coordinates')
+                    if int(float(aid)) != aid or int(float(tid)) != tid:
+                        raise ValueError('atom ID/type precision loss in float64 output')
+                    if declared_types is not None and tid > declared_types:
+                        raise ValueError('atom type exceeds declared atom types')
+                    if len(parts) == required + 3:
+                        [int(value) for value in parts[-3:]]
+                    # Validate fields intentionally not returned (charge/molecule).
+                    if atom_style == 'charge':
+                        if not np.isfinite(float(parts[2])):
+                            raise ValueError('invalid atom charge')
+                    elif type_col == 2:
+                        int(parts[1])
+                        if atom_style == 'full' and not np.isfinite(float(parts[3])):
+                            raise ValueError('invalid atom charge')
+                    seen_ids.add(aid)
+                    atoms.append([aid, tid, *xyz])
+            except (ValueError, OverflowError) as exc:
+                raise ValueError(f"{filepath}:{lineno}: malformed {section} row: {exc}") from None
+    if declared_atoms is not None and len(atoms) != declared_atoms:
+        raise ValueError(f"{filepath}: atom count mismatch: read {len(atoms)}, declared {declared_atoms}")
+    if saw_masses and declared_types is not None and len(masses) != declared_types:
+        raise ValueError(f"{filepath}: Masses count mismatch: read {len(masses)}, declared {declared_types}")
+    if bounds and len(bounds) != 3:
+        raise ValueError(f"{filepath}: incomplete box bounds")
+    box = [bounds[axis] for axis in 'xyz'] if bounds else []
+    return (np.array(atoms, dtype=float).reshape(-1, 5),
+            np.array(box, dtype=float).reshape(-1, 2), masses)
 
 
 def parse_input(filepath):
@@ -985,8 +1198,6 @@ def parse_input(filepath):
             'reaction_type': str          — Inferred reaction description
             'z_variables'  : dict         — {name: float} for z-coordinate variables
     """
-    base_dir = os.path.dirname(os.path.abspath(filepath))
-
     config = {
         'units': None, 'atom_style': None, 'boundary': [],
         'pair_style': None, 'pair_coeff': None, 'element_map': {},
@@ -999,115 +1210,174 @@ def parse_input(filepath):
         'reaction_type': 'unknown', 'z_variables': {},
     }
 
-    # Pre-process: read file, handle continuations and includes
-    def _read_lines(fpath):
-        lines = []
-        try:
-            with open(fpath, 'r') as f:
-                raw_lines = f.readlines()
-        except (OSError, IOError):
-            return lines
-        i = 0
-        while i < len(raw_lines):
-            line = raw_lines[i].rstrip('\n')
-            # Handle line continuation with &
-            while line.rstrip().endswith('&'):
-                line = line.rstrip()[:-1].rstrip()
-                i += 1
-                if i < len(raw_lines):
-                    line += ' ' + raw_lines[i].strip()
-                else:
-                    break
-            # Handle include
-            stripped = line.strip()
-            if stripped.lower().startswith('include'):
-                parts = stripped.split(None, 1)
-                if len(parts) == 2:
-                    inc_path = os.path.join(base_dir, parts[1].strip())
-                    lines.extend(_read_lines(inc_path))
-            else:
-                lines.append(line)
-            i += 1
-        return lines
-
-    logical_lines = _read_lines(filepath)
-    current_stage = 'init'
-
-    def _resolve_numeric(val_str):
-        """Resolve a LAMMPS ${var} or $X reference to a float value.
-
-        Looks up the variable name in config['z_variables'] (numeric values
-        already parsed from 'variable ... equal ...' lines), then falls back
-        to extracting the first numeric token from config['variables'].
-        Returns float or None if unresolvable.
-        """
-        m = re.match(r'^\$\{(\w+)\}$|^\$(\w)$', val_str)
-        if not m:
-            return None
-        varname = m.group(1) or m.group(2)
-        # z_variables has floats from 'variable X equal <number>'
-        if varname in config['z_variables']:
-            return config['z_variables'][varname]
-        # Fall back: parse from raw variable definition
-        if varname in config['variables']:
-            defn_parts = config['variables'][varname].split()
-            # 'index 600' or 'equal 0.00025' → try the second token
-            if len(defn_parts) >= 2:
+    # Includes are expanded lazily so definitions before an include can resolve
+    # its filename. Missing files, include cycles and lexical errors propagate.
+    def _read_lines(fpath, parents=()):
+        fpath = os.path.realpath(fpath)
+        if fpath in parents or len(parents) >= 64:
+            raise ValueError(f"{fpath}: cyclic or excessive include nesting")
+        pending = ''
+        with open(fpath, 'r') as f:
+            for lineno, raw in enumerate(f, 1):
+                # Strip comments without losing the distinction between quoted
+                # filenames/strings and LAMMPS continuation characters.
+                quote, escaped, clean = None, False, []
+                for ch in raw.rstrip('\n'):
+                    if escaped:
+                        clean.append(ch)
+                        escaped = False
+                        continue
+                    if ch == '\\':
+                        escaped = True
+                    elif quote:
+                        if ch == quote:
+                            quote = None
+                    elif ch in ('"', "'"):
+                        quote = ch
+                    elif ch == '#':
+                        break
+                    clean.append(ch)
+                text = ''.join(clean).rstrip()
+                if quote is None and text.endswith('&'):
+                    pending += text[:-1] + ' '
+                    continue
+                text = pending + text
+                pending = ''
                 try:
-                    return float(defn_parts[1])
-                except ValueError:
-                    pass
-        return None
+                    parts = shlex.split(text, comments=True, posix=True)
+                except ValueError as exc:
+                    raise ValueError(f"{fpath}:{lineno}: quote/lexing error: {exc}") from None
+                if not parts:
+                    continue
+                if parts[0].lower() == 'include':
+                    if len(parts) != 2:
+                        raise ValueError(f"{fpath}:{lineno}: include requires one filename")
+                    inc_path = os.path.join(os.path.dirname(fpath), _resolve_string(parts[1]))
+                    yield from _read_lines(inc_path, parents + (fpath,))
+                else:
+                    yield parts
+        if pending:
+            raise ValueError(f"{fpath}: unterminated line continuation")
 
-    for line in logical_lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith('#'):
-            continue
-        # Remove inline comments (but not inside quotes)
-        if '#' in stripped:
-            in_quote = False
-            for ci, ch in enumerate(stripped):
-                if ch == '"':
-                    in_quote = not in_quote
-                elif ch == '#' and not in_quote:
-                    stripped = stripped[:ci].rstrip()
-                    break
+    current_stage = 'init'
+    mappings = {}
+    reference = re.compile(r'\$\{(\w+)\}|\$(\w)')
+    arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+                  ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod}
 
-        parts = stripped.split()
-        if not parts:
-            continue
+    def _variable(name, stack):
+        if name in stack or len(stack) > 32 or name not in config['variables']:
+            raise ValueError(f"{filepath}: cannot resolve variable {name!r} (unknown/cyclic)")
+        style, _, value = config['variables'][name].partition(' ')
+        if style == 'equal':
+            return format(_resolve_numeric(value, stack + (name,)), '.15g')
+        if style in ('string', 'index') and value and (style != 'index' or len(value.split()) == 1):
+            return _resolve_string(value, stack + (name,))
+        raise ValueError(f"{filepath}: cannot resolve variable {name!r} with style {style}")
+
+    def _resolve_string(value, stack=()):
+        value = reference.sub(lambda m: _variable(m.group(1) or m.group(2), stack), value)
+        if '$' in value:
+            raise ValueError(f"{filepath}: cannot resolve LAMMPS substitution {value!r}")
+        return value
+
+    def _resolve_numeric(value, stack=()):
+        """Bounded arithmetic only: no eval, functions, attributes or runtime data."""
+        value = _resolve_string(value, stack)
+        try:
+            if len(value) > 4096:
+                raise ValueError('expression too long')
+            tree = ast.parse(value.replace('^', '**'), mode='eval')
+            if len(list(ast.walk(tree))) > 64:
+                raise ValueError('expression too complex')
+
+            def calculate(node):
+                if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+                    result = float(node.value)
+                elif isinstance(node, ast.Name) and node.id.startswith('v_'):
+                    result = float(_variable(node.id[2:], stack))
+                elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                    result = calculate(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
+                elif isinstance(node, ast.BinOp) and type(node.op) in arithmetic:
+                    left, right = calculate(node.left), calculate(node.right)
+                    if isinstance(node.op, ast.Pow) and abs(right) > 100:
+                        raise ValueError('exponent too large')
+                    result = arithmetic[type(node.op)](left, right)
+                else:
+                    raise ValueError('unsupported expression')
+                if isinstance(result, complex) or not np.isfinite(result) or abs(result) > 1e100:
+                    raise ValueError('nonfinite/excessive expression')
+                return result
+
+            return calculate(tree.body)
+        except (ValueError, TypeError, SyntaxError, ArithmeticError) as exc:
+            raise ValueError(f"{filepath}: cannot resolve numeric expression {value!r}: {exc}") from None
+
+    for parts in _read_lines(filepath):
         cmd = parts[0].lower()
 
         if cmd == 'units' and len(parts) >= 2:
+            if config['units'] is not None and config['units'] != parts[1]:
+                raise ValueError(f"{filepath}: changing units requires separate configurations")
             config['units'] = parts[1]
+            if config['units'] not in ('metal', 'real'):
+                raise ValueError(f"{filepath}: unsupported units style {config['units']!r}; supported: metal, real")
         elif cmd == 'atom_style' and len(parts) >= 2:
             config['atom_style'] = parts[1]
         elif cmd == 'boundary' and len(parts) >= 4:
+            if config['boundary'] and config['boundary'] != parts[1:4]:
+                raise ValueError(f"{filepath}: changing boundary requires separate trajectories/configuration")
             config['boundary'] = parts[1:4]
         elif cmd == 'pair_style':
             config['pair_style'] = ' '.join(parts[1:])
+            mappings.clear()
+            config['element_map'] = {}
+            config['pair_coeff'] = None
         elif cmd == 'pair_coeff':
             # pair_coeff * * <potential_file> <elem1> <elem2> ...
             if len(parts) >= 4 and parts[1] == '*' and parts[2] == '*':
-                potential_file = parts[3]
-                elements = [e for e in parts[4:] if not e.startswith('-')]
+                args = [_resolve_string(part) for part in parts[3:]]
+                style = (config['pair_style'] or '').split()
+                substyle = style[0] if style else ''
+                if substyle.startswith('hybrid'):
+                    substyle = args.pop(0)
+                    if args and args[0].isdigit():
+                        substyle += ':' + args.pop(0)
+                    if not any(name in substyle for name in ('pace', 'ace', 'reax', 'hdnnp', 'n2p2')):
+                        # Numeric pair coefficients do not encode species maps.
+                        continue
+                if not args:
+                    raise ValueError(f"{filepath}: incomplete pair_coeff mapping")
+                try:
+                    float(args[0])
+                except ValueError:
+                    pass
+                else:
+                    # Ordinary numeric pair coefficients carry no species map.
+                    continue
+                if any(name in substyle for name in ('hdnnp', 'n2p2')):
+                    potential_file, elements = None, args
+                else:
+                    potential_file, elements = args[0], args[1:]
+                if any(not re.fullmatch(r'[A-Za-z][A-Za-z0-9_+.-]*', e) for e in elements):
+                    raise ValueError(f"{filepath}: unsupported/unresolved pair_coeff species mapping {elements}")
                 config['pair_coeff'] = {
                     'potential_file': potential_file,
                     'elements': elements,
                 }
-                for i, elem in enumerate(elements):
-                    if elem.upper() != 'NULL':
-                        config['element_map'][i + 1] = elem
+                mappings[substyle] = {i + 1: elem for i, elem in enumerate(elements) if elem.upper() != 'NULL'}
+                config['element_map'] = {}
+                for mapping in mappings.values():
+                    for tid, elem in mapping.items():
+                        if tid in config['element_map'] and config['element_map'][tid] != elem:
+                            raise ValueError(f"{filepath}: conflicting hybrid species for type {tid}")
+                        config['element_map'][tid] = elem
         elif cmd == 'timestep' and len(parts) >= 2:
-            try:
-                config['timestep'] = float(parts[1])
-            except ValueError:
-                # Resolve LAMMPS variable references like ${dt}
-                resolved = _resolve_numeric(parts[1])
-                if resolved is not None:
-                    config['timestep'] = resolved
+            config['timestep'] = _resolve_numeric(parts[1])
+            if config['timestep'] <= 0:
+                raise ValueError(f"{filepath}: timestep must be positive")
         elif cmd == 'read_data' and len(parts) >= 2:
-            config['read_data'] = parts[1]
+            config['read_data'] = _resolve_string(parts[1])
         elif cmd == 'group' and len(parts) >= 3:
             name = parts[1]
             defn = ' '.join(parts[2:])
@@ -1126,12 +1396,23 @@ def parse_input(filepath):
                         config['type_groups'][name] = type_nums
                 except (ValueError, IndexError):
                     pass
-        elif cmd == 'variable' and len(parts) >= 4:
+        elif cmd == 'variable' and len(parts) >= 3:
             vname = parts[1]
-            config['variables'][vname] = ' '.join(parts[2:])
+            if parts[2] == 'delete':
+                config['variables'].pop(vname, None)
+                config['z_variables'].pop(vname, None)
+                continue
+            if len(parts) < 4:
+                raise ValueError(f"{filepath}: incomplete variable definition for {vname!r}")
+            # ${name}/$X are immediate substitutions, unlike dynamic v_name
+            # references in equal expressions. Resolve before replacing the old
+            # definition so `variable dt equal ${dt}*2` reads the previous value.
+            definition = _resolve_string(' '.join(parts[3:]))
+            config['variables'][vname] = parts[2] + ' ' + definition
+            config['z_variables'].pop(vname, None)
             if parts[2] == 'equal':
                 try:
-                    config['z_variables'][vname] = float(parts[3])
+                    config['z_variables'][vname] = _resolve_numeric(definition, (vname,))
                 except ValueError:
                     pass
         elif cmd == 'fix':
@@ -1197,6 +1478,16 @@ def parse_input(filepath):
             elif 'oxid' in msg_low or 'stage 3' in msg_low:
                 current_stage = 'oxidation'
 
+    # Refresh dynamic equal expressions after all redefinitions. Never expose
+    # a stale cached value when a dependency changed or became unresolvable.
+    config['z_variables'].clear()
+    for name, definition in config['variables'].items():
+        if definition.startswith('equal '):
+            try:
+                config['z_variables'][name] = _resolve_numeric(definition[6:], (name,))
+            except ValueError:
+                pass
+
     # Derive forcefield from pair_style
     ps = (config['pair_style'] or '').lower()
     if 'reaxff' in ps or 'reax/c' in ps:
@@ -1215,7 +1506,7 @@ def parse_input(filepath):
             # real: timestep is already in fs
             config['dt_fs'] = config['timestep']
         else:
-            config['dt_fs'] = config['timestep']
+            warnings.warn(f"{filepath}: timestep present without explicit units; dt_fs remains unknown", RuntimeWarning)
 
     # Infer reaction type
     stages_text = ' '.join(config['stages']).lower()
@@ -1232,6 +1523,11 @@ def parse_input(filepath):
 def detect_forcefield(columns, col_idx, frames):
     """
     Auto-detect the force field type from dump file column layout and atom data.
+
+    This is a legacy heuristic, not authoritative metadata. Every inference
+    warns with the assumed force field, units, timestep and species labels.
+    Explicit dump labels override species guesses outside the established ACE
+    proxy-label convention. Use input/run metadata to confirm the assumptions.
 
     Detection logic (applied in order of priority):
 
@@ -1270,6 +1566,35 @@ def detect_forcefield(columns, col_idx, frames):
             'atom_types'   : dict — Type ID -> human-readable name mapping
     """
     cols_set = set(columns)
+    has_element = bool(frames and frames[0].get('elements') is not None)
+    explicit_map = {}
+    labels = set(frames[0]['elements']) if has_element else set()
+    if has_element and 'type' in col_idx:
+        for value, label in zip(frames[0]['atoms'][:, col_idx['type']], frames[0]['elements']):
+            tid = int(value)
+            if tid in explicit_map and explicit_map[tid] != str(label):
+                raise ValueError(f"type {tid} has inconsistent explicit dump element labels")
+            explicit_map[tid] = str(label)
+
+    def _metadata(info):
+        # Registry aliases apply only when explicit type -> element assignments
+        # agree with their canonical slots. The same element set in another
+        # order (or under different type IDs) is authoritative, not a proxy map.
+        canonical = FORCE_FIELDS.get(info['forcefield'], {})
+        alias_elements = {element for element, label in canonical.values() if element != label}
+        canonical_elements = {element for element, _label in canonical.values()}
+        matching_slots = all(tid in canonical and canonical[tid][0] == element
+                             for tid, element in explicit_map.items())
+        legacy_proxy = (bool(alias_elements & labels) and labels <= canonical_elements
+                        and matching_slots)
+        if has_element and not legacy_proxy:
+            info['atom_types'] = explicit_map
+        info['has_element'] = has_element
+        warnings.warn("Dump forcefield/units/timestep are heuristic guesses: "
+                      f"{info['forcefield']}, {info['unit_system']}, dt_fs={info['dt_fs']}; "
+                      f"atom labels={info['atom_types']}. Supply input metadata to confirm.", RuntimeWarning,
+                      stacklevel=3)
+        return info
 
     # --- Detection Rule 1: Charge column → ReaxFF ---
     if 'q' in cols_set:
@@ -1288,7 +1613,7 @@ def detect_forcefield(columns, col_idx, frames):
         else:
             type_map = type_to_label('reaxff')  # Fallback default: {1:'Fe', 2:'O'}
 
-        return {
+        return _metadata({
             'forcefield': 'reaxff',
             'unit_system': 'real',       # kcal/mol, Angstrom, fs
             'dt_fs': 0.25,               # Typical ReaxFF timestep: 0.25 fs
@@ -1296,35 +1621,36 @@ def detect_forcefield(columns, col_idx, frames):
             'has_velocity': 'vx' in cols_set,
             'has_element': False,
             'atom_types': type_map,
-        }
+        })
 
-    # --- Detection Rule 2: Element column with 'Mn' → ACE with spin tracking ---
-    has_element = frames and frames[0].get('elements') is not None
-
+    # --- Detection Rule 2: registry proxy elements imply an alias convention ---
     if has_element:
-        elements = set(frames[0]['elements'])
-        if 'Mn' in elements:
-            # 'Mn' is used as a proxy for spin-down Fe in ACE magnetite simulations.
-            # Real Mn is NOT present — it's a labeling convention from the potential.
+        for ff, canonical in FORCE_FIELDS.items():
+            alias_elements = {element for element, label in canonical.values() if element != label}
+            canonical_elements = {element for element, _label in canonical.values()}
+            if not (alias_elements & labels and labels <= canonical_elements):
+                continue
+            # Element-only dumps may infer the historical slot convention;
+            # explicit numeric slots must agree before aliases can be applied.
             # atom_types is keyed by type NUMBER, like every other rule: callers
             # (state._guess_o_type, state._guess_surface_z, shell's type labels)
             # index it with the numeric type column. Element-keyed entries used to
             # slip past their `isinstance(t, int)` guards and silently degrade to
             # a "Fe is type 1 only" fallback, which drops Fe_down.
-            return {
-                'forcefield': 'ace',
+            return _metadata({
+                'forcefield': ff,
                 'unit_system': 'metal',   # eV, Angstrom, ps
                 'dt_fs': 0.25,            # ACE Fe-O potential uses 0.00025 ps = 0.25 fs
                 'has_charge': False,
                 'has_velocity': 'vx' in cols_set,
                 'has_element': True,
-                'atom_types': type_to_label('ace'),
-            }
+                'atom_types': type_to_label(ff),
+            })
 
     # --- Detection Rule 3: ≥ 3 atom types → ACE (spin-resolved) ---
     if frames and 'type' in col_idx:
         types = frames[0]['atoms'][:, col_idx['type']].astype(int)
-        max_type = int(types.max())
+        max_type = int(types.max()) if len(types) else 0
 
         if max_type >= 3:
             unique_types = sorted(set(int(t) for t in types))
@@ -1375,7 +1701,7 @@ def detect_forcefield(columns, col_idx, frames):
                     type_map[ft] = f'Fe_type{ft}'
                 type_map[o_type] = 'O'
 
-            return {
+            return _metadata({
                 'forcefield': 'ace',
                 'unit_system': 'metal',
                 'dt_fs': 0.25,            # ACE Fe-O potential uses 0.00025 ps = 0.25 fs
@@ -1383,11 +1709,11 @@ def detect_forcefield(columns, col_idx, frames):
                 'has_velocity': 'vx' in cols_set,
                 'has_element': has_element,
                 'atom_types': type_map,
-            }
+            })
 
     # --- Detection Rule 4: Default → HDNNP ---
     # Two types without charge = 4G-HDNNP (or any simple 2-type potential)
-    return {
+    return _metadata({
         'forcefield': 'hdnnp',
         'unit_system': 'metal',
         'dt_fs': 1.0,
@@ -1395,5 +1721,4 @@ def detect_forcefield(columns, col_idx, frames):
         'has_velocity': 'vx' in cols_set,
         'has_element': has_element,
         'atom_types': type_to_label('hdnnp'),
-    }
-
+    })

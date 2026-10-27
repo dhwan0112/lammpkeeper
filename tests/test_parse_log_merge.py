@@ -1,11 +1,10 @@
-"""Guard: parse_log reassembles the full multi-stage run.
+"""Guard: preserve compatible MD blocks without treating minimization as time.
 
-Regression for the bug where parse_log kept only the LARGEST thermo block and
-silently dropped every other stage (e.g. an ACE run's spin-equilibration and
-thermalization prefix — the first ~170 ps — vanished from every thermo/pressure
-plot). The ACE example `regular_MD/log.lammps` fixture has four thermo blocks in
-two column layouts, so it exercises both the same-layout merge and the
-mismatched-layout exclusion. Skips cleanly without numpy or the fixture.
+AUDIT-20261027 physical correction: the fixture's second block matching the
+production layout is MINIMIZATION, not another MD segment. The historical
+assertion requiring more than 201 selected rows locked in optimizer iterations
+as physical time. Retain all four raw blocks, but exclude optimizer rows from
+MD arrays. A separate analytic test still requires genuine MD blocks to merge.
 """
 import os
 
@@ -20,7 +19,7 @@ def _available():
     return have_numpy() and os.path.exists(LOG)
 
 
-def test_parse_log_merges_same_layout_blocks():
+def test_parse_log_fixture_keeps_optimizer_iterations_out_of_md_arrays():
     if not _available():
         skip('numpy not installed or log fixture not found')
     import numpy as np
@@ -36,15 +35,34 @@ def test_parse_log_merges_same_layout_blocks():
     assert len({tuple(b[0]) for b in blocks}) > 1
 
     step = L['step']
-    largest = max(len(b[1]) for b in blocks)
-    same_layout = sum(len(b[1]) for b in blocks if list(b[0]) == list(L['headers']))
-
-    # Merged series spans more than the single largest block (blocks were joined)
-    # but no more than every row sharing the production layout (others excluded).
-    assert largest < len(step) <= same_layout
-
-    # Steps strictly increasing: sorted with duplicate boundary steps removed.
+    assert [len(b[1]) for b in blocks] == [1, 11, 201, 150]
+    assert L['block_kinds'] == ['md', 'md', 'md', 'minimize']
+    # Independent source-block identity, not just an adjusted row-count bound.
+    selected = blocks[2][1]
+    si = blocks[2][0].index('Step')
+    np.testing.assert_array_equal(step, selected[:, si])
+    np.testing.assert_array_equal(L['block_ids'], np.full(len(selected), 2))
+    assert step[0] == 100 and step[-1] == 2100
+    assert not any(stage == 'minimize' for stage in L['stages'])
     assert np.all(np.diff(step) > 0)
-
-    # 'stages' stays one label per data row.
     assert len(L['stages']) == len(step)
+
+
+def test_parse_log_merges_compatible_md_blocks_in_source_order():
+    if not have_numpy():
+        skip('numpy not installed')
+    import numpy as np
+    from pathlib import Path
+    import tempfile
+    from lammps_post.parsers import parse_log
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'log.lammps'
+        path.write_text('run 10\nStep Temp PotEng\n0 300 -10\n10 301 -11\n'
+                        'Loop time of 1 on 1 procs\n'
+                        'run 10\nStep Temp PotEng\n10 301 -11\n20 302 -12\n'
+                        'Loop time of 1 on 1 procs\n')
+        log = parse_log(path)
+    np.testing.assert_array_equal(log['step'], [0, 10, 20])
+    np.testing.assert_array_equal(log['pe'], [-10, -11, -12])
+    np.testing.assert_array_equal(log['elapsed_md_steps'], [0, 10, 20])
+    assert log['timeline_valid'] and log['block_kinds'] == ['md', 'md']

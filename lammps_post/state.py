@@ -65,6 +65,7 @@ class SessionState:
 
         # ── User-settable analysis parameters ──
         self.surface_z = None       # Fe surface z-coordinate (A), auto-detected or manual
+        self.surface_z_manual = False
         self.q_threshold = Q_OXIDIZED_E  # Charge threshold for "oxidized" Fe (e)
         self.normalize = False      # If True, plots show ratios/fractions instead of raw counts
         self.z_focus = None         # (zlo, zhi) tuple or None for full z-range in plots
@@ -123,6 +124,19 @@ class SessionState:
     def clear_cache(self):
         """Clear all cached analysis results. Called when input data changes."""
         self.cache.clear()
+        self._structure_atoms = None
+
+    @property
+    def pbc(self):
+        """Authoritative per-axis flags, preferring trajectory metadata."""
+        from lammps_post.parsers import pbc_from_boundary
+        reader = getattr(self.dump_frames, 'reader', None)
+        flags = pbc_from_boundary(getattr(reader, 'boundary', None))
+        if flags is not None:
+            return flags
+        if self.input_config and self.input_config.get('boundary'):
+            return tuple(b == 'p' for b in self.input_config['boundary'][:3])
+        return (True, True, self.surface_z is None)
 
     def apply_plot_style(self):
         """
@@ -180,11 +194,13 @@ class SessionState:
         if 'type' in self.dump_col_idx:
             ti = self.dump_col_idx['type']
             types = atoms[:, ti].astype(int)
-            at = self.atom_types
-            fe_type_nums = [t for t, n in at.items() if isinstance(t, int) and 'Fe' in str(n)]
-            if not fe_type_nums:
-                fe_type_nums = [1]
-            fe_mask = np.isin(types, fe_type_nums)
+            try:
+                fe_type_nums = self._guess_fe_types()
+            except ValueError:
+                # Explicit labels without the domain species cannot define an
+                # oxidation surface; do not guess from unrelated atom types.
+                return
+            fe_mask = np.isin(types, list(fe_type_nums))
             if np.any(fe_mask):
                 fe_max = float(np.max(atoms[fe_mask, zi]))
                 self.surface_z = fe_max - SURFACE_OFFSET_A
@@ -202,21 +218,33 @@ class SessionState:
         # Strategy 3: fallback — use max z of any atom
         self.surface_z = float(np.max(atoms[:, zi])) - SURFACE_OFFSET_A
 
+    def _guess_fe_types(self):
+        """All explicitly labeled surface species channels, including spins."""
+        fe_type_nums = frozenset(t for t, n in self.atom_types.items()
+                                if isinstance(t, int) and 'Fe' in str(n))
+        if not fe_type_nums:
+            raise ValueError('No surface species in the explicit atom type mapping')
+        return fe_type_nums
+
     def _guess_o_type(self):
         """
-        Determine the atom type number for oxygen atoms.
-        Searches the atom_types mapping for entries containing 'O'.
-        Falls back to the highest type number if no match is found.
-        Returns None if no type column exists (element-based dumps).
+        Return the oxygen type, or a frozen union for repeated labels.
+        Explicit labels are authoritative; only a missing map permits a
+        visibly reported legacy highest-type guess.
         """
         at = self.atom_types
-        for t, n in at.items():
-            if isinstance(t, int) and 'O' in str(n):
-                return t
+        matches = frozenset(t for t, n in at.items()
+                            if isinstance(t, int) and n == 'O')
+        if matches:
+            return next(iter(matches)) if len(matches) == 1 else matches
+        if at:
+            raise ValueError('No oxygen species in the explicit atom type mapping')
         # Default: highest type number from dump data
         if self.dump_frames and self.dump_col_idx and 'type' in self.dump_col_idx:
             types = self.dump_frames[0]['atoms'][:, self.dump_col_idx['type']].astype(int)
+            print('  Warning: no species metadata; guessing oxygen from the highest atom type')
             return int(types.max())
+        print('  Warning: no species metadata; using the legacy oxygen type default')
         return 2
 
     def compute_z_focus(self, margin=10.0):
@@ -261,13 +289,17 @@ class SessionState:
         if 'type' in self.dump_col_idx:
             ti = self.dump_col_idx['type']
             types = atoms[:, ti].astype(int)
-            o_type = self._guess_o_type()
-            o_z = atoms[types == o_type, zi]
-            fe_type_nums = [t for t, n in self.atom_types.items()
-                            if isinstance(t, int) and 'Fe' in str(n)]
-            if not fe_type_nums:
-                fe_type_nums = [1]
-            fe_mask = np.isin(types, fe_type_nums)
+            try:
+                o_type = self._guess_o_type()
+            except ValueError:
+                return None  # A domain-specific focus is unavailable for this system.
+            selection = [o_type] if np.isscalar(o_type) else list(o_type)
+            o_z = atoms[np.isin(types, selection), zi]
+            try:
+                fe_type_nums = self._guess_fe_types()
+            except ValueError:
+                return None
+            fe_mask = np.isin(types, list(fe_type_nums))
             fe_z = atoms[fe_mask, zi]
         elif fr.get('elements') is not None:
             elements = fr['elements']
@@ -281,7 +313,8 @@ class SessionState:
 
         # Focus range: from deepest O penetration - margin to highest O + margin
         # Also include Fe surface region
-        sz = self.surface_z or float(np.percentile(fe_z, 95))
+        sz = (self.surface_z if self.surface_z is not None
+              else float(np.percentile(fe_z, 95)))
         o_min = float(np.min(o_z))
         o_max = float(np.max(o_z))
 
@@ -295,4 +328,3 @@ class SessionState:
         zhi = min(zhi, box_zhi)
 
         return (zlo, zhi)
-

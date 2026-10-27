@@ -10,6 +10,45 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
+## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, unmerged)`
+
+The maintainer requested all reported findings be fixed on 2026-10-27. This is
+one bounded audit-remediation item, not the GEN architecture migration. Work is
+split into independently tested source areas; no fixture or thesis tag changes,
+real LAMMPS runs, HPC submissions or site-profile changes are authorized here.
+
+- **Workflow:** preserve canonical ACE analysis labels on input load; invalidate
+  dependent caches/surfaces/mass on load, unload and metadata changes; honor
+  species unions throughout; reliable batch/one-shot failure and quit handling;
+  paths with spaces and noninteractive plotting.
+- **Analysis:** correct same-species and variable-N/V RDF normalization and all
+  PBC axes; ID-aligned penetration histories without silent frame loss; honor
+  surface percentile and species sets.
+- **I/O:** log warnings/reset stages/minimization separation; data section/style
+  integrity; input includes, variables and hybrid mappings; reject unsupported
+  cells/units visibly; retain long labels and backend parity; bounded reader
+  validation, identity precision and subscriber/cache lifetime regressions.
+- **References/plots:** correct magnetite geometry, safe CIF symmetry handling,
+  native pressure units, explicitly qualified slab scaling and valid uptake t50.
+- **Prep:** refuse unsafe skew geometry, stale builds and failed oxygen placement;
+  validate layers and processor grids; nonnegative ACE durations; isotropic O2
+  initialization; exclusive failure archives and permission-preserving copyback.
+- **Verification:** reject empty generated output and false success in the local
+  verifier. Register all new regression modules in both execution paths.
+
+**Golden gate:** maintainer explicitly approved the RDF-only rebaseline during
+this session: `rdf_FeUp_O` hash `46e63f7e15ac805b` → `129e29ad92fc7d6f`,
+conditional on matching the independent explicit-pair calculation. Peak
+55.8132059165 → 55.8130906709; each frame uses its own N_a*N_b/V before
+arithmetic averaging. MSD goldens, fixtures and `v1.2.0-thesis` remain unchanged.
+This must be applied in a dedicated golden commit, not hidden in source fixes.
+
+**Done when:** each reported case has a collected regression and independent
+expected result; targeted fail-before/pass-after evidence is retained; full local
+verification passes in the available rich and NumPy environments (explicit skips
+listed). The maintainer explicitly approved feature-branch push and PR creation
+after final verification in this session. Direct main push and merge are excluded.
+
 ## Suggested order
 
 **Scheduling update (maintainer, 2026-10-26):** defer actual HPC submissions,
@@ -417,11 +456,17 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   by a script committed alongside it. Known answers: an O₂ crossing x/y, an atom
   near the z wall.
 
-### DOC-1 · P3 · Spin docstring contradicts itself — `open`
+### DOC-1 · P3 · Spin docstring contradicts itself — `done (AUDIT-20261027)`
 - **Where:** `analysis.py::analyze_spin_evolution`. "~1/3 → … 8 tetrahedral Fe↓ : 16
   octahedral Fe↑" — 16/24 is 2/3.
 - **Done when:** the docstring states which ACE type is majority in the fixture
   (Fe 64 / Mn 128) and the reference for that assignment.
+- **Completed in the audit correction:** docstring states type-1 Fe_up = 64,
+  type-2 Fe_down (Mn proxy) = 128, references the shared convention/potential,
+  and distinguishes measured fixture populations from a site/phase assignment.
+  Plot guides show encoding-dependent 1/3 and 2/3 populations without claiming
+  that a population ratio alone establishes magnetic order. Spin numbers and
+  mapping conventions are unchanged.
 
 ### DOC-2 · P3 · Stale design docs and docstrings — `open`
 - **Evidence (measured, Cursor P0 audit):**

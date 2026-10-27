@@ -19,6 +19,9 @@ mkdir -p "$EVID" || { echo "cannot create evidence dir $EVID" >&2; exit 2; }
 TMPHOME="$(mktemp -d)"; WORK="$(mktemp -d)"
 cleanup() { rm -rf "$TMPHOME" "$WORK"; }
 trap cleanup EXIT
+export HOME="$TMPHOME" LKPR_NO_HISTORY=1
+export MPLCONFIGDIR="$TMPHOME/matplotlib"
+: > "$EVID/outputs.txt"
 
 declare -a RESULTS=()
 record() { RESULTS+=("$1 $2${3:+ — $3}"); }   # STATUS STEP NOTE
@@ -42,7 +45,8 @@ have() { "$PY" -c "import $1" 2>/dev/null; }
 
 # ── Tests ───────────────────────────────────────────────────────────────
 if [ "$MODE" = full ]; then SLOW=1; else SLOW=0; fi
-if HOME="$TMPHOME" LKPR_SLOW="$SLOW" "$PY" tests/run.py > "$EVID/tests.log" 2>&1; then
+if HOME="$TMPHOME" LKPR_SLOW="$SLOW" "$PY" tests/run.py > "$EVID/tests.log" 2>&1 \
+   && grep -qE '^[1-9][0-9]* passed, 0 failed, [0-9]+ skipped$' "$EVID/tests.log"; then
   record PASS tests "$(tail -n 1 "$EVID/tests.log")"
 else
   record FAIL tests "$(tail -n 1 "$EVID/tests.log")"
@@ -55,16 +59,38 @@ while IFS= read -r line; do
   record SKIP "${line#SKIP }" ""
 done < <(grep '^SKIP ' "$EVID/tests.log" || true)
 
-# ── Drive: post one-shot on the fixture ─────────────────────────────────
+# ── Drive: post one-shot + persisted analysis evidence on the fixture ────
 if [ -f "$FIXTURE" ]; then
   PLOT=(); [ "$MODE" = full ] && have matplotlib && PLOT=(--plot all)
-  if (cd "$WORK" && HOME="$TMPHOME" "$PY" -m lammpkeeper post --dump "$FIXTURE" \
-        --analyze all "${PLOT[@]}" --output "$WORK/post_out" < /dev/null) > "$EVID/post.log" 2>&1 \
-     && ! grep -qE "Traceback|Error:" "$EVID/post.log"; then
-    record PASS post "analyze all${PLOT:+ + plot all}"
-  else
-    record FAIL post "see post.log"
+  post_bad=0
+  if ! (cd "$WORK" && HOME="$TMPHOME" "$PY" -m lammpkeeper post --dump "$FIXTURE" \
+        --analyze all "${PLOT[@]}" --output "$WORK/post_out" < /dev/null) > "$EVID/post.log" 2>&1; then
+    post_bad=1
   fi
+  # Quick mode also needs persisted proof that every expected analysis ran.
+  printf 'analyze all\nexport summary "%s/post_out/summary.txt"\n' "$WORK" > "$WORK/post.commands"
+  if ! (cd "$WORK" && HOME="$TMPHOME" "$PY" -m lammpkeeper post --dump "$FIXTURE" \
+        --batch "$WORK/post.commands" --output "$WORK/post_out" < /dev/null) > "$EVID/post-batch.log" 2>&1; then
+    post_bad=1
+  fi
+  # Structure is generated on-demand by plot all, not by dump-only analyze all.
+  for required in density_all spin dissociation penetration penetration_trend oar; do
+    grep -qFx -- "--- $required ---" "$WORK/post_out/summary.txt" 2>/dev/null || post_bad=1
+  done
+  for required in msd rdf; do
+    grep -qF -- "--- ${required}_" "$WORK/post_out/summary.txt" 2>/dev/null || post_bad=1
+  done
+  if [ ${#PLOT[@]} -gt 0 ]; then
+    for required in density_profile msd_Fe o2_dissociation oar penetration penetration_trend rdf_Fe_O snapshots spin_evolution structure; do
+      [ -s "$WORK/post_out/$required.png" ] || { echo "Missing/empty plot: $required.png" >> "$EVID/post.log"; post_bad=1; }
+    done
+  fi
+  if [ "$post_bad" = 0 ] && ! grep -qiE 'Traceback|Error:|Analysis failed' "$EVID/post.log" "$EVID/post-batch.log"; then
+    record PASS post "analyze all${PLOT:+ + plot all}; required analyses persisted"
+  else
+    record FAIL post "missing analyses/plots or command failure; see post.log and post-batch.log"
+  fi
+  [ ! -f "$WORK/post_out/summary.txt" ] || cp "$WORK/post_out/summary.txt" "$EVID/post-summary.txt"
   find "$WORK/post_out" -type f 2>/dev/null | sed "s|$WORK/||" | sort > "$EVID/outputs.txt"
 else
   record SKIP post "fixture missing"
@@ -80,7 +106,16 @@ if [ "$MODE" = full ]; then
         n=$((n+1)); bash -n "$s" >> "$EVID/prep.log" 2>&1 || bad=1
       done < <(find "$WORK/prep_out" -type f \( -name '*.sh' -o -name '*.pbs' \) 2>/dev/null)
       find "$WORK/prep_out" -type f 2>/dev/null | sed "s|$WORK/||" | sort >> "$EVID/outputs.txt"
-      if [ $bad = 0 ]; then record PASS prep "$n job script(s) pass bash -n"; else record FAIL prep "bash -n failed"; fi
+      # An exit status of zero is insufficient: writers used to swallow errors.
+      for required in ace_oxidation.in lammps_ace.data regions_ace.inc structure.xyz run.sh; do
+        [ -s "$WORK/prep_out/$required" ] || { echo "Missing/empty artifact: $required" >> "$EVID/prep.log"; bad=1; }
+      done
+      if [ "$bad" = 0 ] && [ "$n" -gt 0 ] \
+         && ! grep -qiE 'Traceback|Error:|failed' "$EVID/prep.log"; then
+        record PASS prep "$n job script(s) pass bash -n; required artifacts present"
+      else
+        record FAIL prep "missing artifacts, reported failure or invalid script; see prep.log"
+      fi
     else
       record FAIL prep "see prep.log"
     fi

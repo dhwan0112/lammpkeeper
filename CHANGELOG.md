@@ -12,6 +12,64 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Whole-code audit corrections (AUDIT-20261027)
+
+- Input loading preserves canonical ACE analysis identities and invalidates
+  dependent times, surfaces and cached results. Replacement/unload cannot retain
+  another source's structure, performance, mass or box. Density, oxygen and
+  charge analyses consistently honor explicit species unions.
+- One-shot/batch failures return nonzero, batch quit stops execution, spaced paths
+  load correctly, and noninteractive plots use explicit defaults without prompts.
+  A requested plot without matplotlib fails instead of reporting empty success.
+- RDF respects all PBC axes, removes the extra same-species division by two, and
+  averages per-frame normalized curves rather than using the last frame's N/V.
+  The separately approved RDF-only golden update is independently checked by
+  full pair matrices; MSD goldens and fixtures remain unchanged.
+- Penetration profiles align the union of atom IDs with explicit NaN gaps,
+  retain population-changing/empty samples and honor the surface percentile.
+- Prep refuses unsupported odd-width (110)/(111) slabs instead of dropping
+  lateral tilt. Fixed/NVT layer counts must be positive; zero-layer operation
+  is not supported by the current region templates.
+- Geometry changes invalidate previous builds, including direct Python state
+  changes. Failed or incomplete O₂ placement cannot become a writable build.
+- Random O₂ bond axes now sample uniform solid angle. This intentionally changes
+  seeded gas coordinates; seeds remain reproducible and all force fields still
+  share identical starting coordinates. No committed fixture was regenerated.
+- ACE CPU overrides use compatible explicit or automatic processor grids. The
+  configured dense dump stage is clamped to the requested oxidation duration;
+  remaining run steps cannot be negative.
+- Failed-job archives require exclusive directory creation. Existing archives
+  and destination symlinks are preserved; failed archival retains scratch.
+  Copyback preserves the destination directory's access mode.
+- Dump/data readers reject unsupported triclinic cells instead of dropping
+  tilt. Trajectory boundary changes, malformed structures, lossy numeric IDs
+  and changed indexed/cached sources fail visibly; native/NumPy paths preserve
+  long labels. Lazy views inherit reader limits unless explicitly overridden.
+- Log parsing retains source blocks and reset-step histories, continues through
+  warnings, and separates MD from optimizer iterations. New block identity and
+  elapsed-MD-step metadata avoid treating minimization counters as physical time.
+  Thermo plots consume those reconstructed MD increments, reject optimizer-only
+  time axes, and use explicit log units/timestep even with an unrelated dump.
+  Conflicting explicit log/input metadata or unconfirmed log-only units fail
+  visibly. Repeated step counters cannot supply ambiguous slab box heights.
+  The old fixture test requiring optimizer rows was replaced with source-block
+  checks and a separate genuine-MD merge test, with the physical reason recorded.
+- Input metadata handles quoted/commented/nested includes, safe consumed-variable
+  arithmetic, redefinitions and hybrid/NULL species mappings. Missing includes,
+  unresolved consumed metadata and unsupported units raise rather than guessing.
+  Dump-only force-field/unit/timestep guesses are now explicitly warned.
+- Correct the built-in magnetite reference to 24 Fe/32 O with eight tetrahedral
+  and sixteen octahedral Fe sites. CIFs without explicit symmetry operations
+  must establish P1; unsupported symmetry interpretation raises visibly.
+- Pressure plots convert real-unit atm and metal-unit bar correctly. Optional
+  slab scaling uses explicit per-sample Lz/thickness and states its stress
+  allocation assumptions; absent/inconsistent geometry is visibly uncorrected.
+- Adsorption t50 requires half the initial oxygen cohort to cross the surface,
+  not half the eventually crossed subset. ID-union profile gaps remain gaps.
+  Spin-fraction legends explicitly identify their different denominators.
+- The local verifier refuses empty test runs, absent requested plot output,
+  missing prep artifacts and logged prep errors even when process exit is zero.
+
 ### Species-group selection (PHYS-4)
 
 - Post-processing resolves explicit species labels to sets of atom types.

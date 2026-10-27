@@ -19,9 +19,10 @@ Dependencies:
 """
 
 import os
+import warnings
 import numpy as np
 
-from lammps_post import WONG_PALETTE, BAR_TO_GPA, DENSITY_CONVERSION
+from lammps_post import WONG_PALETTE, BAR_TO_GPA, ATM_TO_GPA, DENSITY_CONVERSION
 from lammps_post.display import C, progress_msg
 
 # ── Semantic color aliases from Wong palette ──
@@ -187,6 +188,77 @@ def _save_fig(fig, outpath, dpi=150, save_format=None):
     plt.close(fig)
 
 
+def _require_matplotlib():
+    if not HAS_MPL:
+        raise RuntimeError('matplotlib is required for requested plotting; install the post extra')
+
+
+def _thermo_time(log_data, dt_fs):
+    """Use parser-reconstructed MD increments, never optimizer/reset counters."""
+    step = np.asarray(log_data['step'], dtype=float)
+    if 'elapsed_md_steps' in log_data and log_data['elapsed_md_steps'] is None:
+        raise ValueError('Optimizer-only thermo has no elapsed MD timeline; plot iterations separately')
+    if 'time_ps' in log_data:
+        time = np.asarray(log_data['time_ps'], dtype=float)
+    else:
+        if log_data.get('timeline_valid') is False and 'elapsed_md_steps' not in log_data:
+            raise ValueError('Ambiguous thermo timeline: elapsed MD steps or explicit time_ps required')
+        increments = np.asarray(log_data.get('elapsed_md_steps', step), dtype=float)
+        if dt_fs is None:
+            warnings.warn('Thermo timestep unknown: assuming 1 fs for the time axis; '
+                          'supply confirmed dt_fs', RuntimeWarning, stacklevel=3)
+            dt_fs = 1.0
+        if not np.isfinite(dt_fs) or dt_fs <= 0:
+            raise ValueError('Thermo dt_fs must be finite and positive')
+        time = increments * dt_fs / 1000.0
+    if (time.shape != step.shape or not np.all(np.isfinite(time))
+            or np.any(np.diff(time) < 0)):
+        raise ValueError('Thermo MD time must be finite, aligned with rows and nondecreasing')
+    return time
+
+
+def _pressure_scale(unit_system, pressure_unit):
+    """Scale native LAMMPS pressure (metal: bar; real: atm) for display."""
+    native_gpa = {'metal': BAR_TO_GPA, 'real': ATM_TO_GPA}
+    if unit_system not in native_gpa:
+        raise ValueError(f'Unsupported LAMMPS pressure units style: {unit_system!r}')
+    display = pressure_unit.lower()
+    if display not in ('bar', 'gpa'):
+        raise ValueError(f'Unsupported pressure display unit: {pressure_unit!r}')
+    return (native_gpa[unit_system] / (BAR_TO_GPA if display == 'bar' else 1.0),
+            'bar' if display == 'bar' else 'GPa')
+
+
+def _slab_volume_scale(log_data, slab_z_range, n_frames):
+    """Explicit z-aligned slab volume ratio; never infer height from volume."""
+    bounds = np.asarray(slab_z_range, dtype=float)
+    if bounds.shape != (2,) or not np.all(np.isfinite(bounds)) or bounds[1] <= bounds[0]:
+        raise ValueError('slab_z_range must be finite (z_lo, z_hi) with z_hi > z_lo')
+    thickness = bounds[1] - bounds[0]
+    try:
+        lz = np.asarray(log_data.get('lz', []), dtype=float)
+        if lz.shape != (n_frames,) or not np.all(np.isfinite(lz)):
+            raise ValueError('lz must contain one finite box height per thermo sample')
+        if np.any(lz <= 0) or np.any(lz < thickness):
+            raise ValueError('lz must be positive and at least the chosen slab thickness')
+        # If supplied, other lengths/volume must agree. Lz alone is sufficient
+        # for this explicitly z-aligned, same-cross-section volume convention.
+        for key in ('lx', 'ly', 'vol'):
+            if key in log_data:
+                values = np.asarray(log_data[key], dtype=float)
+                if (values.shape != (n_frames,) or not np.all(np.isfinite(values))
+                        or np.any(values <= 0)):
+                    raise ValueError(f'{key} must contain positive finite per-frame values')
+        if all(key in log_data for key in ('lx', 'ly', 'vol')):
+            if not np.allclose(np.asarray(log_data['lx']) * np.asarray(log_data['ly']) * lz,
+                               log_data['vol'], rtol=1e-4, atol=1e-8):
+                raise ValueError('lx*ly*lz does not match the supplied box volume')
+        return lz / thickness
+    except (TypeError, ValueError) as exc:
+        warnings.warn(f'Slab pressure left uncorrected: {exc}', RuntimeWarning, stacklevel=3)
+        return None
+
+
 def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
                 pressure_unit='bar', total_mass_amu=None, figsize=None,
                 slab_z_range=None, unit_system='metal'):
@@ -212,10 +284,12 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
         pressure_unit:   str  — 'bar' or 'gpa'; controls pressure axis label/scale
         total_mass_amu:  float or None — Total system mass for density calculation
         figsize:         tuple or None — (width, height); None uses adaptive default
+        unit_system:     str — Native LAMMPS units ('metal': bar, 'real': atm)
 
     Output: thermo.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -223,13 +297,8 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
     if len(step) == 0:
         return
 
-    # ── Time axis ──
-    if 'time_ps' in d:
-        t = d['time_ps']
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0  # fs -> ps
-    else:
-        t = step * 0.001  # fallback: 1 fs = 0.001 ps (metal default)
+    # Parser MD increments exclude optimizer iterations and preserve resets.
+    t = _thermo_time(d, dt_fs)
 
     # ── Determine layout based on available data ──
     has_vol = 'vol' in d and len(d['vol']) == len(step)
@@ -255,13 +324,9 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
     fig.suptitle('Thermodynamic Properties')
     axes_flat = list(axes.flat)  # Convert to list; numpy flatiter is consumed by zip
 
-    # ── Pressure unit handling ──
-    if pressure_unit.lower() == 'gpa':
-        press_label = 'Pressure (GPa)'
-        press_scale = BAR_TO_GPA
-    else:
-        press_label = 'Pressure (bar)'
-        press_scale = 1.0
+    # Native pressure is bar in metal units, but atm in real units.
+    press_scale, punit = _pressure_scale(unit_system, pressure_unit)
+    press_label = f'Pressure ({punit})'
 
     energy_unit = 'kcal/mol' if unit_system == 'real' else 'eV'
     specs = [
@@ -283,12 +348,11 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
                 t_s = t[w // 2: w // 2 + len(smooth)]
                 ax.plot(t_s, smooth, color=CLR['smooth'], lw=1.5, label=f'Avg ({w} pts)')
                 ax.legend()
-            # Slab-corrected pressure annotation
+            # Explicitly label this overview as uncorrected box pressure.
             if key == 'press' and slab_z_range is not None and has_vol:
                 z_lo, z_hi = slab_z_range
-                slab_frac = (z_hi - z_lo)  # slab thickness in A
-                # Approximate: V_slab / V_box ≈ slab_thickness / Lz
-                # We annotate but don't replace, since exact Lz varies per frame
+                # This overview deliberately retains box pressure; the pressure
+                # analysis plot separately offers a conditional volume rescale.
                 ax.set_title(f'(box pressure — slab {z_lo:.0f}-{z_hi:.0f} Å)',
                              fontsize=8, style='italic')
         ax.set_xlabel('Time (ps)')
@@ -359,7 +423,7 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
 
 
 def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
-                            pressure_unit='bar', figsize=None):
+                            pressure_unit='bar', figsize=None, unit_system='metal'):
     """
     Plot a compact thermostat QC summary with dual y-axes (twinx).
     Temperature on the left axis (red), Pressure on the right axis (blue).
@@ -374,10 +438,12 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
         dt_fs:          float or None — Timestep in fs
         pressure_unit:  str  — 'bar' or 'gpa'
         figsize:        tuple or None — (width, height)
+        unit_system:    str — Native LAMMPS units ('metal': bar, 'real': atm)
 
     Output: thermostat_summary.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -385,16 +451,8 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
     if len(step) == 0 or 'temp' not in d:
         return
 
-    # Time axis
-    if 'time_ps' in d:
-        t = d['time_ps']
-        xlabel = 'Time (ps)'
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0
-        xlabel = 'Time (ps)'
-    else:
-        t = step * 0.001
-        xlabel = 'Time (ps)'
+    t = _thermo_time(d, dt_fs)
+    xlabel = 'Time (ps)'
 
     if figsize is None:
         figsize = (10, 5)
@@ -410,12 +468,9 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
     # Right axis: Pressure
     if 'press' in d:
         ax2 = ax1.twinx()
-        if pressure_unit.lower() == 'gpa':
-            press = d['press'] * BAR_TO_GPA
-            plabel = 'Pressure (GPa)'
-        else:
-            press = d['press']
-            plabel = 'Pressure (bar)'
+        pscale, punit = _pressure_scale(unit_system, pressure_unit)
+        press = d['press'] * pscale
+        plabel = f'Pressure ({punit})'
         ax2.set_ylabel(plabel, color=CLR['pe'])
         ax2.plot(t, press, color=CLR['pe'], alpha=0.6, lw=1.0)
         ax2.tick_params(axis='y', labelcolor=CLR['pe'])
@@ -426,19 +481,25 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
 
 
 def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
-                  pressure_unit='bar', slab_z_range=None, figsize=None):
+                  pressure_unit='bar', slab_z_range=None, figsize=None,
+                  unit_system='metal'):
     """
     Detailed pressure analysis plot for slab geometries.
 
     For slab simulations (p p f boundary), the total box pressure is
-    physically misleading because it includes vacuum volume. This plot
-    provides meaningful pressure metrics:
+    vacuum-diluted because the virial is normalized by the full box volume.
+    In-plane averaging alone does not remove that dilution. This plot shows:
 
     Panel (a): Raw pressure components Pxx, Pyy, Pzz
-               + in-plane average P_in = (Pxx + Pyy) / 2
-    Panel (b): In-plane vs normal pressure with running averages
-    Panel (c): Slab-corrected pressure (if slab_z_range provided):
-               P_eff = P_box * (Lz / slab_thickness)
+    Panel (b): In-plane P_in = (Pxx + Pyy) / 2 vs normal pressure,
+               with running averages
+    Panel (c): Conditional volume-rescaled in-plane pressure, if slab_z_range
+               and finite per-sample log_data['lz'] are provided:
+               P_eff = P_in * (Lz / slab_thickness).
+               Assumes a z-aligned slab of this thickness occupying the full
+               box cross-section and ALL relevant box stress belonging to it.
+               This is not a local/material pressure or surface-stress estimator.
+               Missing/invalid geometry warns and displays uncorrected box P.
 
     For bulk (fully periodic) systems, shows standard P with statistics.
 
@@ -450,10 +511,12 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
         pressure_unit: str   — 'bar' or 'gpa'
         slab_z_range:  tuple — (z_lo, z_hi) of slab region in A, or None
         figsize:       tuple — (width, height)
+        unit_system:   str — Native LAMMPS units ('metal': bar, 'real': atm)
 
     Output: pressure_analysis.png
     """
-    if not HAS_MPL or log_data is None:
+    _require_matplotlib()
+    if log_data is None:
         return
 
     d = log_data
@@ -471,29 +534,18 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
         return
 
     # Time axis
-    if 'time_ps' in d:
-        t = d['time_ps']
-    elif dt_fs is not None:
-        t = step * dt_fs / 1000.0
-    else:
-        t = step * 0.001
+    t = _thermo_time(d, dt_fs)
 
     # Pressure scaling
-    if pressure_unit.lower() == 'gpa':
-        pscale = BAR_TO_GPA
-        punit = 'GPa'
-    else:
-        pscale = 1.0
-        punit = 'bar'
+    pscale, punit = _pressure_scale(unit_system, pressure_unit)
 
     press = d['press'] * pscale
-    has_vol = 'vol' in d and len(d['vol']) == len(step)
 
     w = max(10, len(press) // 100)
 
     if has_stress:
         # ── 3-panel layout for full stress tensor ──
-        n_cols = 3 if slab_z_range else 2
+        n_cols = 3 if slab_z_range is not None else 2
         fig, axes = plt.subplots(1, n_cols, figsize=figsize or (6 * n_cols, 5))
         if n_cols == 1:
             axes = [axes]
@@ -534,31 +586,23 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
                title='(b) In-plane vs Normal')
         ax.legend()
 
-        # Panel (c): Slab-corrected (if z_range provided)
-        if slab_z_range and n_cols == 3:
+        # Panel (c): Explicit, physically conditional volume convention.
+        if slab_z_range is not None and n_cols == 3:
             ax = axes[2]
-            z_lo, z_hi = slab_z_range
-            slab_thick = z_hi - z_lo
-            if has_vol:
-                # Per-frame correction: P_eff = P_in * (V_box / V_slab)
-                # V_slab ~ Lx * Ly * slab_thick, V_box = Lx * Ly * Lz
-                # ratio = Lz / slab_thick (area cancels)
-                # Use volume: Lz = V / (Lx*Ly), but we don't know Lx*Ly separately
-                # Approximation: assume constant box, use first-frame estimate
-                box_vol_mean = np.mean(d['vol'])
-                # From V = Lx*Ly*Lz, and z_range defines slab, ratio = Lz/slab_thick
-                # We don't have Lz directly, but for slab: V_slab/V_box = slab_thick/Lz
-                # So P_eff_in = P_in * Lz / slab_thick
-                # Estimate Lz from thermo: not directly available.
-                # Use the fact that for standard slab, Lz ~ 3*slab_thick typically.
-                # Better: just report P_in which is already meaningful for slabs.
-                p_corr = p_in  # In-plane is already the meaningful quantity
-                label = f'In-plane P (slab {z_lo:.0f}-{z_hi:.0f} A)'
+            volume_scale = _slab_volume_scale(d, slab_z_range, len(step))
+            if volume_scale is not None:
+                p_corr = p_in * volume_scale
+                label = 'Volume-rescaled in-plane P'
+                note = ('Assumes z-aligned slab, full box area,\n'
+                        'all box stress assigned to chosen slab;\n'
+                        'not a local/material pressure estimate.')
             else:
                 p_corr = p_in
-                label = f'In-plane P (slab {z_lo:.0f}-{z_hi:.0f} A)'
+                label = 'Uncorrected in-plane box P'
+                note = 'No valid Lz/slab volume ratio; includes vacuum.'
 
-            ax.plot(t, p_corr, color=CLR['avg'], lw=0.3, alpha=0.4)
+            ax.plot(t, p_corr, color=CLR['avg'], lw=0.3, alpha=0.4, label=label)
+            ax.text(0.02, 0.98, note, transform=ax.transAxes, va='top', fontsize=7)
             if len(p_corr) > w:
                 sm = np.convolve(p_corr, np.ones(w) / w, mode='valid')
                 t_s = t[w//2:w//2+len(sm)]
@@ -573,7 +617,7 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
 
     else:
         # ── No stress tensor: show total pressure with statistics ──
-        n_cols = 2 if slab_z_range else 1
+        n_cols = 2 if slab_z_range is not None else 1
         fig, axes = plt.subplots(1, n_cols, figsize=figsize or (6 * n_cols, 5))
         if n_cols == 1:
             axes = [axes]
@@ -592,14 +636,16 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
                title='Total Box Pressure')
         ax.legend()
 
-        if slab_z_range and n_cols == 2:
+        if slab_z_range is not None and n_cols == 2:
+            warnings.warn('Slab pressure left uncorrected: Pxx/Pyy/Pzz are required '
+                          'for in-plane volume rescaling', RuntimeWarning, stacklevel=2)
             ax = axes[1]
             ax.plot(t, press, color=CLR['press'], lw=0.5, alpha=0.6)
             if len(press) > w:
                 ax.plot(t_s, sm, color=CLR['smooth'], lw=1.5)
             z_lo, z_hi = slab_z_range
             ax.set(xlabel='Time (ps)', ylabel=f'Pressure ({punit})',
-                   title=f'Box P (slab {z_lo:.0f}-{z_hi:.0f} A)')
+                   title=f'Uncorrected Box P (slab {z_lo:.0f}-{z_hi:.0f} A)')
             ax.text(0.05, 0.95,
                     'Note: Box P includes vacuum.\n'
                     'Add Pxx/Pyy/Pzz to thermo_style\n'
@@ -619,7 +665,8 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
     Right panel: oxidized Fe count or fraction (if normalize=True).
     Output: charge_evolution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (13, 5))
@@ -650,7 +697,8 @@ def plot_charge_z(data, output_dir, dpi=150, normalize=False, z_focus=None, figs
     vs z-coordinate. The z_focus parameter crops the view to the relevant region.
     Output: charge_z_distribution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, a1 = plt.subplots(figsize=figsize or (8, 6))
@@ -701,7 +749,8 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
 
     Output: rdf_<pair>.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     file_label = data['label']
@@ -792,7 +841,8 @@ def plot_oar(data, output_dir, dpi=150, normalize=False, figsize=None):
     Left: OAR percentage. Right: absorbed O count or fraction.
     Output: oar.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (12, 5))
@@ -821,7 +871,8 @@ def plot_or(data, output_dir, dpi=150, figsize=None):
     Shows the fraction of Fe atoms with charge > 0.3 e.
     Output: oxidation_rate.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -840,7 +891,8 @@ def plot_penetration(data, output_dir, dpi=150, normalize=False, figsize=None):
     (c) Penetration fraction (adsorbed / (adsorbed + near-surface)).
     Output: penetration.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, axes = plt.subplots(1, 3, figsize=figsize or (16, 5))
@@ -882,7 +934,8 @@ def plot_density(data_list, output_dir, dpi=150, z_focus=None, figsize=None):
     colored line. z_focus crops the view to the relevant surface region.
     Output: density_profile.png
     """
-    if not HAS_MPL or not data_list:
+    _require_matplotlib()
+    if not data_list:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (10, 6))
@@ -907,7 +960,8 @@ def plot_dissociation(data, output_dir, dpi=150, normalize=False, figsize=None):
     if normalize=True). Reveals the kinetics of O₂ bond breaking.
     Output: o2_dissociation.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -932,11 +986,12 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     """
     Plot magnetic species evolution over time (ACE only).
     Top: Fe_up, Fe_down, O populations (counts or fractions).
-    Bottom: spin-up fraction with reference lines for Fe₃O₄ (1/3)
+    Bottom: spin-up fraction with conditional 1:2 population guides, not phase identification
     and antiferromagnetic (1/2) ideal values.
     Output: spin_evolution.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, (a1, a2) = plt.subplots(2, 1, figsize=figsize or (12, 8))
@@ -945,13 +1000,13 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     t = data['time']
 
     if normalize and 'up_fraction' in data:
-        a1.plot(t, data['up_fraction'] * 100, color=CLR['up'], lw=1, label='Fe up fraction')
+        a1.plot(t, data['up_fraction'] * 100, color=CLR['up'], lw=1, label='Fe up / all Fe')
         a1.plot(t, data.get('down_fraction', 1 - data['up_fraction']) * 100,
-                color=CLR['down'], lw=1, label='Fe down fraction')
+                color=CLR['down'], lw=1, label='Fe down / all Fe')
         if 'o_fraction' in data:
-            a1.plot(t, data['o_fraction'] * 100, color=CLR['oar'], lw=1, label='O fraction')
-        a1.set(xlabel='Time (ps)', ylabel='Fraction of total (%)',
-               title='(a) Species Fraction')
+            a1.plot(t, data['o_fraction'] * 100, color=CLR['oar'], lw=1, label='O / all atoms')
+        a1.set(xlabel='Time (ps)', ylabel='Fraction (%; denominators in legend)',
+               title='(a) Species Fractions (different denominators)')
     else:
         a1.plot(t, data['n_up'], color=CLR['up'], lw=1, label='Fe up (type 1)')
         a1.plot(t, data['n_down'], color=CLR['down'], lw=1, label='Fe down (type 2)')
@@ -960,8 +1015,11 @@ def plot_spin(data, output_dir, dpi=150, normalize=False, figsize=None):
     a1.legend()
 
     a2.plot(t, data['up_fraction'], color=CLR['smooth'], lw=1)
-    a2.axhline(1 / 3, color=CLR['up'], ls='--', alpha=0.5, label='Fe3O4 ideal (1/3)')
-    a2.axhline(0.5, color=CLR['down'], ls='--', alpha=0.5, label='AF equal (1/2)')
+    a2.axhline(1 / 3, color=CLR['up'], ls='--', alpha=0.5,
+               label='1:2 population (1/3; encoding dependent)')
+    a2.axhline(2 / 3, color=CLR['up'], ls=':', alpha=0.5,
+               label='2:1 population (2/3; reversed encoding)')
+    a2.axhline(0.5, color=CLR['down'], ls='--', alpha=0.5, label='Equal populations (1/2; order not established)')
     a2.set(xlabel='Time (ps)', ylabel='Fe_up / (Fe_up + Fe_down)',
            title='(b) Spin Up Fraction', ylim=(0, 1))
     a2.legend()
@@ -976,7 +1034,8 @@ def plot_msd(data, species_name, output_dir, dpi=150, figsize=None):
     MSD growth rate indicates diffusivity: steeper = more mobile atoms.
     Output: msd_<species>.png (e.g., msd_Fe.png)
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
@@ -994,7 +1053,8 @@ def plot_performance(stage_times, output_dir, dpi=150, figsize=None):
     Useful for identifying computational bottlenecks.
     Output: performance.png
     """
-    if not HAS_MPL or not stage_times:
+    _require_matplotlib()
+    if not stage_times:
         return
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (13, 5))
@@ -1033,7 +1093,8 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
     Fe surface position marked.
     Output: structure.png
     """
-    if not HAS_MPL or len(atoms_array) == 0:
+    _require_matplotlib()
+    if len(atoms_array) == 0:
         return
 
     types = atoms_array[:, 1].astype(int)
@@ -1094,7 +1155,8 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     frames across the trajectory. z_focus crops the vertical axis.
     Output: snapshots.png (N panels side by side)
     """
-    if not HAS_MPL or not frames:
+    _require_matplotlib()
+    if not frames:
         return
 
     if indices is None:
@@ -1175,28 +1237,44 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
         z_focus:     tuple — (z_lo, z_hi) to crop z-range, or None for auto
         n_snapshots: int  — Number of time snapshots for ridge plot
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     time = data['time']
-    o_z = data['o_z_traj']   # (n_frames, n_o)
+    o_z = np.asarray(data['o_z_traj'])   # (n_frames, ID-union size); absent IDs are NaN
     surface = data['surface_z']
     min_z = data['min_o_z']
-    cross_times = data['cross_times']
+    cross_times = np.sort(data['cross_times'])
     n_o = data['n_o']
     n_frames = len(time)
+    # New ID-union analysis results distinguish the initial cohort from atoms
+    # that enter later. Kinetics of that cohort must not count later arrivals.
+    timeline_population = data.get('n_initial_o', n_o)
+    if 'n_initial_o' in data:
+        initially_present = np.flatnonzero(np.isfinite(o_z[0]))
+        initial_crossings = []
+        for j in initially_present:
+            below = o_z[:, j] < surface
+            if np.any(below):
+                initial_crossings.append(time[np.argmax(below)])
+        cross_times = np.sort(initial_crossings)
 
     # Auto z_focus
     if z_focus is None:
-        all_z = o_z.flatten()
-        z_lo = max(0, np.min(all_z) - 5)
-        z_hi = min(np.max(all_z) + 5, np.max(surface) + 15)
+        all_z = o_z[np.isfinite(o_z)]
+        if not len(all_z):
+            raise ValueError('Cannot plot penetration profile without any finite O positions')
+        z_lo = np.min(all_z) - 5
+        finite_surface = np.asarray(surface)[np.isfinite(surface)]
+        z_hi = max(np.max(all_z) + 5,
+                   np.max(finite_surface) if len(finite_surface) else -np.inf)
     else:
         z_lo, z_hi = z_focus
 
     # ── 1. Spaghetti plot: individual O trajectories ──
     fig, ax = plt.subplots(figsize=figsize or (12, 6))
-    for j in range(n_o):
+    for j in range(o_z.shape[1]):
         ax.plot(time, o_z[:, j], lw=0.5, alpha=0.4, color=CLR['O'])
     ax.plot(time, surface, color=CLR['Fe'], lw=2, ls='--', label='Fe surface')
     ax.plot(time, min_z, color=CLR['smooth'], lw=1.5, label='Deepest O')
@@ -1214,7 +1292,7 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
 
     heatmap = np.zeros((n_frames, n_zbins))
     for i in range(n_frames):
-        h, _ = np.histogram(o_z[i], bins=z_edges)
+        h, _ = np.histogram(o_z[i, np.isfinite(o_z[i])], bins=z_edges)
         heatmap[i] = h
 
     fig, ax = plt.subplots(figsize=figsize or (12, 6))
@@ -1237,7 +1315,7 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
 
     fig, ax = plt.subplots(figsize=figsize or (10, 2 + 1.2 * n_snapshots))
     for k, idx in enumerate(snap_indices):
-        hist, _ = np.histogram(o_z[idx], bins=z_hist_edges)
+        hist, _ = np.histogram(o_z[idx, np.isfinite(o_z[idx])], bins=z_hist_edges)
         offset = k * offset_step
         ax.fill_between(z_hist_centers, offset, hist + offset, alpha=0.3, color=colors[k])
         ax.plot(z_hist_centers, hist + offset, color=colors[k], lw=1.5)
@@ -1246,10 +1324,12 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
 
     # Surface marker
-    mean_surf = np.mean(surface)
-    ax.axvline(mean_surf, color=CLR['Fe'], ls='--', lw=1, alpha=0.6)
-    ax.text(mean_surf + 0.3, n_snapshots * offset_step * 0.95, 'Fe surface',
-            color=CLR['Fe'], fontsize=8, rotation=90, va='top')
+    finite_surface = np.asarray(surface)[np.isfinite(surface)]
+    if len(finite_surface):
+        mean_surf = np.mean(finite_surface)
+        ax.axvline(mean_surf, color=CLR['Fe'], ls='--', lw=1, alpha=0.6)
+        ax.text(mean_surf + 0.3, n_snapshots * offset_step * 0.95, 'Fe surface',
+                color=CLR['Fe'], fontsize=8, rotation=90, va='top')
 
     ax.set_yticks([])
     ax.set(xlabel=r'$z$ (Å)', ylabel='O count (offset)',
@@ -1263,15 +1343,19 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     if len(cross_times) > 0:
         cumulative = np.arange(1, len(cross_times) + 1)
         ax.step(cross_times, cumulative, color=CLR['avg'], lw=2, where='post')
-        # 50% annotation
-        half_idx = len(cross_times) // 2
-        if half_idx > 0:
+        # t50 refers to the INITIAL cohort, not the eventually crossed subset.
+        # ceil(N/2) crossings are required; the corresponding index is count-1.
+        half_count = int(np.ceil(timeline_population / 2))
+        half_idx = half_count - 1
+        if half_count > 0 and len(cross_times) >= half_count:
             ax.axhline(cumulative[half_idx], color='grey', ls=':', alpha=0.5)
             ax.axvline(cross_times[half_idx], color='grey', ls=':', alpha=0.5)
             ax.text(cross_times[half_idx], cumulative[half_idx] + 1,
                     f' t₅₀ = {cross_times[half_idx]:.0f} ps', fontsize=9)
         ax.set(xlabel='Time (ps)', ylabel='Cumulative O atoms adsorbed',
-               title=f'O Adsorption Timeline — {len(cross_times)}/{n_o} adsorbed')
+               title=f'O Adsorption Timeline — {len(cross_times)}/{timeline_population} '
+                     'initial O adsorbed')
+        ax.set_ylim(bottom=0, top=max(timeline_population, len(cross_times)) + 2)
     else:
         ax.text(0.5, 0.5, 'No O atoms crossed the surface', transform=ax.transAxes,
                 ha='center', va='center', fontsize=12)
@@ -1318,8 +1402,13 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
         return arr, time
 
     # (a) Mean O z-position + std band
-    mean_z = np.mean(o_z, axis=1)
-    std_z = np.std(o_z, axis=1)
+    present = np.isfinite(o_z)
+    present_count = np.sum(present, axis=1)
+    mean_z = np.divide(np.sum(np.where(present, o_z, 0.), axis=1), present_count,
+                       out=np.full(n_frames, np.nan), where=present_count > 0)
+    squared = np.where(present, (o_z - mean_z[:, None])**2, 0.)
+    std_z = np.sqrt(np.divide(np.sum(squared, axis=1), present_count,
+                            out=np.full(n_frames, np.nan), where=present_count > 0))
     sm_mean, t_sm = _smooth(mean_z)
     sm_std, _ = _smooth(std_z)
 
@@ -1332,13 +1421,15 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     ax.legend()
 
     # (b) Fraction of O below surface (adsorption ratio)
-    frac_below = np.array([np.mean(o_z[i] < surface[i]) for i in range(n_frames)])
+    below_count = np.sum(present & (o_z < np.asarray(surface)[:, None]), axis=1)
+    frac_below = np.divide(below_count, present_count, out=np.full(n_frames, np.nan),
+                           where=(present_count > 0) & np.isfinite(surface))
     sm_frac, t_sm2 = _smooth(frac_below)
 
     ax = axes[0, 1]
     ax.plot(time, frac_below * 100, color=CLR['oar'], lw=0.5, alpha=0.4)
     ax.plot(t_sm2, sm_frac * 100, color=CLR['smooth'], lw=1.5, label='Adsorption ratio')
-    ax.set(xlabel='Time (ps)', ylabel='O below surface (%)',
+    ax.set(xlabel='Time (ps)', ylabel='Present O below surface (%)',
            title='(b) Adsorption Ratio', ylim=(-2, None))
     ax.legend()
 
@@ -1365,7 +1456,7 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
         t_onset = time[onset_idx]
         t_rel = time[onset_idx:] - t_onset
         d_rel = depth[onset_idx:]
-        valid = t_rel > 0
+        valid = (t_rel > 0) & np.isfinite(d_rel)
         if np.sum(valid) > 5:
             A = np.median(d_rel[valid] / np.sqrt(t_rel[valid]))
             t_model = np.linspace(0, t_rel[-1], 200)
@@ -1391,7 +1482,8 @@ def plot_penetration_trend(data, output_dir, dpi=150, figsize=None):
     Each subplot shows a faint raw trace with a bold smoothed overlay.
     Output: penetration_trend.png
     """
-    if not HAS_MPL or data is None:
+    _require_matplotlib()
+    if data is None:
         return
 
     t = data['time']
@@ -1436,5 +1528,3 @@ def plot_penetration_trend(data, output_dir, dpi=150, figsize=None):
 
     plt.tight_layout()
     _save_fig(fig, os.path.join(output_dir, 'penetration_trend.png'), dpi)
-
-

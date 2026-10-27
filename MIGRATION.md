@@ -9,7 +9,25 @@ checks.
 
 ---
 
-## Stage 1 — dispatcher-only (current)
+## Audit correction note (2026-10-27)
+
+The historical validation statements below describe the limited checks performed
+at the time; they do not certify the full RDF, parser or geometry implementation.
+The whole-code audit reproduced same-species RDF undercounting, final-frame
+normalization dependence, unsafe cell interpretation and workflow cache errors.
+The maintainer requested all audit findings be corrected under
+`AUDIT-20261027` (see `docs/agent/BACKLOG.md`). This is an in-place correctness
+repair, not a module-layout change or a new architecture decision.
+
+The explicitly approved RDF rebaseline normalizes each frame by its own
+N_a*N_b/V, then averages frame RDFs equally. An independent full A-B pair matrix
+on the last 20 reference frames gives peak 55.8130906709 instead of
+55.8132059165. These frames include minimization and remain regression data, not
+an equilibrium or kinetics validation. Fixtures and the thesis tag stay unchanged.
+Real LAMMPS/HPC execution remains deferred; local generated-script tests cannot
+certify dynamics or scheduler/site behavior.
+
+## Stage 1 — dispatcher-only (historical)
 
 Minimal, non-destructive. No files were moved; no analysis/physics code changed.
 

@@ -22,7 +22,14 @@ GOLDEN_FAST = {
    'spin': 'bf7fa759103f2883',
 }
 GOLDEN_SLOW = {
-    'rdf_FeUp_O': '46e63f7e15ac805b',
+    # AUDIT-20261027, explicitly approved by maintainer during this session:
+    # mean of per-frame RDFs, each normalized by its own N_a*N_b/V, replaces
+    # normalization of the pooled histogram by the FINAL frame's density.
+    # Old hash 46e63f7e15ac805b; peak 55.81320591646232 -> 55.81309067093663.
+    # Independent full A-B displacement matrices agree (test_audit_rdf_oracle).
+    # Last 20 frames include minimization: an arithmetic regression, not an
+    # equilibrium phase/kinetics validation. Fixtures and MSD goldens unchanged.
+    'rdf_FeUp_O': '129e29ad92fc7d6f',
     'msd_O': 'ce2e617b3ad32239',
     # PHYS-1/2, maintainer-approved 2026-10-27: the bulk dump says pp pp pp.
     # The old slab-default hash eb7f778ead75a17d ended at 17.4725703688831 A^2;

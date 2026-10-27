@@ -27,6 +27,7 @@ import importlib.util
 import readline  # noqa: F401  (line editing for input())
 import threading
 import traceback
+import warnings
 
 import numpy as np
 
@@ -43,6 +44,7 @@ from lammps_post.parsers import (
 
 from lammpkeeper.common.mapping import (
     element_to_type as ff_element_to_type,
+    type_to_label as ff_type_to_label,
     species_type_sets, resolve_species, species_display_name,
 )
 
@@ -130,11 +132,42 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def __init__(self):
         super().__init__()
         self.state = SessionState()
+        self.noninteractive = False
+        self.last_command_ok = True
+        self.command_failures = 0
         self._setup_history('~/.lammps-post_history')
+
+    @property
+    def _no_prompt(self):
+        return getattr(self, 'noninteractive', False) or not sys.stdin.isatty()
+
+    def onecmd(self, line):
+        """Keep interactive errors recoverable, and expose batch failure status."""
+        self.last_command_ok = True
+        try:
+            return super().onecmd(line)
+        except Exception as exc:
+            self.last_command_ok = False
+            self.command_failures = getattr(self, 'command_failures', 0) + 1
+            print(C.err(f"  {type(exc).__name__}: {exc}"))
+            return False
+
+    def _invalidate_metadata(self):
+        """Invalidate every derived result before recomputing geometry metadata."""
+        s = self.state
+        s.clear_cache()
+        s.z_focus = None
+        if not s.surface_z_manual:
+            s.surface_z = None
+            s._guess_surface_z()
 
     # ─── Interactive prompt helper ───
     def _ask(self, prompt, default=None):
         """Prompt user for input. Returns None if empty and no default."""
+        if self._no_prompt:
+            if default is None:
+                raise ValueError(f'{prompt}: an explicit value is required in noninteractive mode')
+            return default
         suffix = f" [{default}]" if default else ""
         try:
             ans = input(f"  \x01{C.YELLOW}\x02?\x01{C.RESET}\x02 {prompt}{suffix}: ").strip()
@@ -168,9 +201,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if config.get('dt_fs'):
             s.ff_info['dt_fs'] = config['dt_fs']
         if config['element_map']:
-            s.ff_info['atom_types'] = dict(config['element_map'])
-        if config.get('pair_coeff') and config['pair_coeff'].get('elements'):
+            elements = dict(config['element_map'])
+            try:
+                canonical = {t: element for element, t in
+                             ff_element_to_type(config['forcefield']).items()}
+            except KeyError:
+                canonical = None
+            # Element slots are not analysis identities. Restore the canonical
+            # labels only when the complete explicit map matches that preset.
+            s.ff_info['atom_types'] = (ff_type_to_label(config['forcefield'])
+                                      if elements == canonical else elements)
+        if not s.dump_frames and config.get('pair_coeff') and config['pair_coeff'].get('elements'):
             s.ff_info['has_charge'] = config['forcefield'] == 'reaxff'
+
+        self._invalidate_metadata()
 
         progress_msg(f"Applied input config: {config['forcefield'].upper()}, "
                      f"types={config['element_map']}")
@@ -183,6 +227,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         from the default).
         """
         s = self.state
+        if self._no_prompt:
+            return
         # Only suggest if still using the default output directory
         if s.output_dir != './lammps-post_output':
             return
@@ -225,9 +271,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if self.state.dump_frames is not None:
             return True
         print(C.warn("  No dump file loaded."))
+        if self._no_prompt:
+            raise ValueError('No dump file loaded')
         path = self._ask("Enter dump file path (or empty to cancel)")
         if path and os.path.exists(path):
-            self.do_load(f'dump {path}')
+            self.do_load(f'dump {shlex.quote(path)}')
             return self.state.dump_frames is not None
         if path:
             print(C.err(f"  File not found: {path}"))
@@ -237,9 +285,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if self.state.log_data is not None:
             return True
         print(C.warn("  No log file loaded."))
+        if self._no_prompt:
+            raise ValueError('No log file loaded')
         path = self._ask("Enter log file path (or empty to cancel)")
         if path and os.path.exists(path):
-            self.do_load(f'log {path}')
+            self.do_load(f'log {shlex.quote(path)}')
             return self.state.log_data is not None
         if path:
             print(C.err(f"  File not found: {path}"))
@@ -249,6 +299,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if self.state.has_charge:
             return True
         print(C.warn("  Charge data not available (requires ReaxFF dump with q column)."))
+        if self._no_prompt:
+            raise ValueError('Charge data not available')
         if self.state.dump_frames:
             print(f"  Current FF: {self.state.ff.upper()} — available analyses: "
                   f"rdf, penetration, density, dissociation, msd"
@@ -265,13 +317,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return False
         if val.lower() == 'auto':
             self.state._guess_surface_z()
-            if self.state.surface_z:
+            if self.state.surface_z is not None:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
                 return True
             print(C.err("  Could not auto-detect surface z."))
             return False
         try:
             self.state.surface_z = float(val)
+            self.state.surface_z_manual = True
             progress_msg(f"Surface z set to: {self.state.surface_z:.1f} A")
             return True
         except ValueError:
@@ -304,7 +357,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         print(C.warn("  No data file loaded."))
         path = self._ask("Enter LAMMPS data file path (or empty to cancel)")
         if path and os.path.exists(path):
-            self.do_load(f'data {path}')
+            self.do_load(f'data {shlex.quote(path)}')
             return self.state.data_atoms is not None and len(self.state.data_atoms) > 0
         if path:
             print(C.err(f"  File not found: {path}"))
@@ -387,11 +440,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             elif parts[i] == '--all-columns':
                 all_columns = True; i += 1
             else:
-                i += 1
+                raise ValueError(f'Unknown or incomplete load option: {parts[i]}')
 
         if not os.path.exists(fpath):
-            print(C.err(f"  File not found: {fpath}"))
-            return
+            raise ValueError(f"File not found: {fpath}")
 
         if ftype == 'dump':
             progress_msg(f"Loading dump: {fpath} ...")
@@ -404,11 +456,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 if frames:
                     frames[-1]   # parse the last frame now so a truncated dump fails at load
             except (ValueError, OSError) as e:
-                print(C.err(f"  {e}"))
-                return
+                raise ValueError(str(e)) from e
             if not frames:
-                print(C.err("  No frames found in dump file."))
-                return
+                raise ValueError('No frames found in dump file')
             columns, col_idx = list(reader.columns), dict(reader.col_idx)
 
             # If the dump has 'element' column but no 'type' column,
@@ -462,8 +512,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             ff_info['has_velocity'] = 'vx' in reader.raw_columns
             self.state.ff_info = ff_info
 
-            # Auto-detect surface z
-            self.state._guess_surface_z()
+            # Authoritative species must precede surface detection in both
+            # load orders, not merely overwrite labels after deriving geometry.
+            if self.state.input_config:
+                self._apply_input_config()
+            else:
+                self._invalidate_metadata()
 
             n_atoms = frames[0]['natoms']
             n_frames = len(frames)
@@ -487,19 +541,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if self.state.surface_z:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
 
-            # If input file was loaded first, apply its config to enhance ff_info
-            if self.state.input_config:
-                self._apply_input_config()
-
         elif ftype == 'log':
             progress_msg(f"Loading log: {fpath} ...")
             log_data = parse_log(fpath)
             if log_data is None:
-                print(C.err("  No thermo data found in log file."))
-                return
+                raise ValueError('No thermo data found in log file')
 
             self.state.log_path = fpath
             self.state.log_data = log_data
+            self.state.clear_cache()
 
             n_points = len(log_data.get('step', []))
             headers = log_data.get('headers', [])
@@ -513,22 +563,25 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             progress_msg(f"Loading data file: {fpath} ...")
             atoms, box, masses = parse_data_file(fpath)
             if len(atoms) == 0:
-                print(C.err("  No atoms found in data file."))
-                return
+                raise ValueError('No atoms found in data file')
 
             self.state.data_path = fpath
             self.state.data_atoms = atoms
             self.state.data_box = box
             self.state.data_masses = masses
+            self.state.total_mass_amu = None
+            self.state.clear_cache()
 
             # Compute total system mass from type counts and masses
             if masses and len(atoms) > 0:
                 types = atoms[:, 1].astype(int)
-                total_mass = sum(
-                    np.sum(types == t) * m for t, m in masses.items()
-                )
-                self.state.total_mass_amu = total_mass
-                progress_msg(f"Total mass: {total_mass:.2f} amu")
+                missing = set(types) - masses.keys()
+                if missing:
+                    print(C.warn(f'  Total mass unavailable: missing masses for types {sorted(missing)}'))
+                else:
+                    total_mass = sum(np.sum(types == t) * m for t, m in masses.items())
+                    self.state.total_mass_amu = total_mass
+                    progress_msg(f"Total mass: {total_mass:.2f} amu")
 
             progress_msg(f"Loaded {C.ok(str(len(atoms)))} atoms")
             if masses:
@@ -537,6 +590,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         elif ftype == 'input':
             progress_msg(f"Loading input: {fpath} ...")
             config = parse_input(fpath)
+            s = self.state
+            s.ff_info = (detect_forcefield(s.dump_columns, s.dump_col_idx, s.dump_frames)
+                         if s.dump_frames else SessionState().ff_info)
             self.state.input_path = fpath
             self.state.input_config = config
 
@@ -575,8 +631,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self._apply_input_config()
 
         else:
-            print(f"  Unknown file type: {ftype}. Use dump|log|data|input.")
-            return
+            raise ValueError(f"Unknown file type: {ftype}. Use dump|log|data|input.")
 
         # ── After first load: suggest output directory ──
         self._suggest_output_dir(fpath)
@@ -609,21 +664,35 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                                   'dt_fs': 1.0, 'has_charge': False, 'has_velocity': False,
                                   'has_element': False, 'atom_types': {}}
             self.state.clear_cache()
+            self.state.surface_z = None
+            self.state.surface_z_manual = False
+            self.state.z_focus = None
+            if self.state.input_config:
+                self._apply_input_config()
             progress_msg("Dump data unloaded.")
         elif ftype == 'log':
             self.state.log_path = None
             self.state.log_data = None
+            self.state.clear_cache()
             progress_msg("Log data unloaded.")
         elif ftype == 'data':
             self.state.data_path = None
             self.state.data_atoms = None
+            self.state.data_box = None
+            self.state.data_masses = None
+            self.state.total_mass_amu = None
+            self.state.clear_cache()
             progress_msg("Data file unloaded.")
         elif ftype == 'input':
             self.state.input_path = None
             self.state.input_config = None
+            s = self.state
+            s.ff_info = (detect_forcefield(s.dump_columns, s.dump_col_idx, s.dump_frames)
+                         if s.dump_frames else SessionState().ff_info)
+            self._invalidate_metadata()
             progress_msg("Input file unloaded.")
         else:
-            print("  Usage: unload dump|log|data|input|all")
+            raise ValueError('Usage: unload dump|log|data|input|all')
 
     def complete_unload(self, text, line, begidx, endidx):
         return [t for t in ['dump', 'log', 'data', 'input', 'all'] if t.startswith(text)]
@@ -823,17 +892,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print("  Usage: set <key> <value>")
             print("  Keys: output, surface_z, dt, forcefield, types, dpi, normalize,")
             print("        z_focus, linewidth, markersize, fontsize, grid, grid_alpha, figsize")
-            return
+            raise ValueError('set requires a setting and value')
 
         key = parts[0].lower()
         val = parts[1]
         s = self.state
+        if key not in ('types', 'z_focus', 'figsize') and len(parts) != 2:
+            raise ValueError(f'Setting {key!r} requires one value; quote paths containing spaces')
 
         if key == 'output':
             s.output_dir = val
             progress_msg(f"Output directory: {val}")
         elif key == 'surface_z':
             s.surface_z = float(val)
+            s.surface_z_manual = True
             s.clear_cache()  # Penetration and OAR depend on surface_z
             progress_msg(f"Surface z: {s.surface_z} A")
         elif key == 'dt':
@@ -844,18 +916,24 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             valid = ['reaxff', 'ace', 'hdnnp']
             if val.lower() in valid:
                 s.ff_info['forcefield'] = val.lower()
+                self._invalidate_metadata()
                 progress_msg(f"Force field: {val.upper()}")
             else:
-                print(f"  Invalid. Choose from: {', '.join(valid)}")
+                raise ValueError(f"Invalid force field. Choose from: {', '.join(valid)}")
         elif key == 'types':
             # Parse "1=Fe 2=O 3=Cr" format from remaining arguments
             type_map = {}
             for pair in parts[1:]:
-                if '=' in pair:
-                    k, v = pair.split('=', 1)
-                    type_map[int(k)] = v
+                if '=' not in pair:
+                    raise ValueError('Type mapping requires TYPE=LABEL entries')
+                k, v = pair.split('=', 1)
+                type_id = int(k)
+                if type_id in type_map:
+                    raise ValueError(f'Duplicate type mapping for {type_id}')
+                type_map[type_id] = v
+            species_type_sets(type_map, ff=s.ff)  # Validate before changing state.
             s.ff_info['atom_types'] = type_map
-            s.clear_cache()
+            self._invalidate_metadata()
             progress_msg(f"Types: {type_map}")
         elif key == 'dpi':
             s.dpi = int(val)
@@ -869,7 +947,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 s.normalize = False
                 progress_msg("Normalize: OFF (plots show raw counts)")
             else:
-                print("  Usage: set normalize on|off")
+                raise ValueError('Usage: set normalize on|off')
         elif key == 'z_focus':
             if val.lower() == 'auto':
                 zf = s.compute_z_focus()
@@ -885,7 +963,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 s.z_focus = (float(parts[1]), float(parts[2]))
                 progress_msg(f"z_focus: [{s.z_focus[0]:.1f}, {s.z_focus[1]:.1f}] A")
             else:
-                print("  Usage: set z_focus auto | off | <zlo> <zhi>")
+                raise ValueError('Usage: set z_focus auto | off | <zlo> <zhi>')
         # ── Plot style settings ──
         elif key == 'linewidth' or key == 'lw':
             s.linewidth = float(val)
@@ -909,7 +987,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 s.apply_plot_style()
                 progress_msg("Grid: OFF")
             else:
-                print("  Usage: set grid on|off")
+                raise ValueError('Usage: set grid on|off')
         elif key == 'grid_alpha':
             s.grid_alpha = float(val)
             s.apply_plot_style()
@@ -942,8 +1020,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 s.figsize_override = (s.fig_width, s.fig_height)
                 progress_msg(f"Figure size: {s.fig_width} x {s.fig_height} inches")
             else:
-                print("  Usage: set figsize <W> <H> | single_col | double_col | 1.5col |")
-                print("                     slide16x9 | slide4x3 | a4 | reset")
+                raise ValueError('Usage: set figsize <W> <H> | single_col | double_col | '
+                                 '1.5col | slide16x9 | slide4x3 | a4 | reset')
         elif key == 'pressure_unit' or key == 'press_unit':
             if val.lower() in ('gpa', 'giga'):
                 s.pressure_unit = 'gpa'
@@ -952,7 +1030,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 s.pressure_unit = 'bar'
                 progress_msg("Pressure unit: bar")
             else:
-                print("  Usage: set pressure_unit bar|gpa")
+                raise ValueError('Usage: set pressure_unit bar|gpa')
         elif key == 'mass':
             s.total_mass_amu = float(val)
             progress_msg(f"Total mass: {s.total_mass_amu:.2f} amu (manual override)")
@@ -985,7 +1063,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Theme: {s.theme} (grid={'on' if s.grid else 'off'}, "
                              f"dpi={s.dpi}, format={s.save_format})")
             else:
-                print(f"  Usage: set theme {' | '.join(valid_themes)}")
+                raise ValueError(f"Usage: set theme {' | '.join(valid_themes)}")
         elif key == 'save_format' or key == 'format':
             valid_fmts = ['png', 'pdf', 'svg', 'both']
             if val.lower() in valid_fmts:
@@ -993,12 +1071,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Save format: {s.save_format}" +
                              (" (PNG + PDF + SVG)" if s.save_format == 'both' else ""))
             else:
-                print(f"  Usage: set save_format {' | '.join(valid_fmts)}")
+                raise ValueError(f"Usage: set save_format {' | '.join(valid_fmts)}")
         else:
-            print(f"  Unknown setting: {key}")
-            print("  Available: output, surface_z, dt, forcefield, types, dpi, normalize,")
-            print("             z_focus, pressure_unit, mass, linewidth, markersize,")
-            print("             fontsize, grid, grid_alpha, figsize, theme, save_format")
+            raise ValueError(f'Unknown setting: {key}')
 
     def complete_set(self, text, line, begidx, endidx):
         """Tab completion for the 'set' command — lists all configurable settings."""
@@ -1100,6 +1175,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
 
         if what == 'all':
+            if len(parts) != 1:
+                raise ValueError('analyze all does not accept options')
             self._analyze_all()
             return
 
@@ -1120,9 +1197,19 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         }
 
         if what in analyzers:
-            analyzers[what](parts[1:])
+            if len(parts) > 1 and what not in ('rdf', 'msd', 'density', 'charge_z'):
+                raise ValueError(f'Analysis {what!r} does not accept options')
+            if what == 'structure' and s.data_atoms is None and not s.dump_frames:
+                raise ValueError('No data file or dump loaded')
+            if what == 'charge_z' and len(parts) > 2:
+                raise ValueError('charge_z accepts one frame index')
+            analyzer = analyzers[what]
+            if what in ('rdf', 'msd', 'density', 'charge_z'):
+                analyzer(parts[1:], _batch=self._no_prompt)
+            else:
+                analyzer(parts[1:])
         else:
-            print(f"  Unknown analysis: '{what}'")
+            raise ValueError(f"Unknown analysis: '{what}'")
 
     def _analyze_all(self):
         """
@@ -1186,9 +1273,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         jobs = []
         if s.surface_z is None:
             s._guess_surface_z()
-            if s.surface_z:
+            if s.surface_z is not None:
                 progress_msg(f"Auto-detected surface z: {s.surface_z:.1f} A")
-        if s.surface_z:
+        if s.surface_z is not None:
             jobs.append(lambda: self._analyze_oar([]))
             jobs.append(lambda: self._analyze_penetration([]))
             jobs.append(lambda: self._analyze_penetration_trend([]))
@@ -1246,11 +1333,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             sys.stdout.write(out.getvalue())
             if err:
                 print(C.err(f"  Analysis failed: {err.strip().splitlines()[-1]}"))
+        if any(errors):
+            self.state.clear_cache()
+            raise RuntimeError(f'{sum(err is not None for err in errors)} shared analysis job(s) failed')
         progress_msg(f"Shared read parsed {shared.frames_parsed} of {len(frames)} frames once "
                      f"for all analyses")
 
     def _density_species(self):
-        return {str(v): k for k, v in self.state.atom_types.items() if isinstance(k, int)}
+        return species_type_sets(self.state.atom_types, ff=self.state.ff)
 
     def _density_one(self, species_type, species_name):
         s = self.state
@@ -1266,7 +1356,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         progress_msg("Computing charge evolution...")
         result = analyze_charge_evolution(
             s.dump_frames, s.dump_col_idx,
-            dt_fs=s.dt_fs, q_thr=s.q_threshold)
+            dt_fs=s.dt_fs, q_thr=s.q_threshold, fe_type=s._guess_fe_types())
         s.cache['charge'] = result
         if result:
             progress_msg(f"Final avg Fe charge: {result['avg'][-1]:.4f} e")
@@ -1296,7 +1386,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             frame_idx = int(ans)
 
         progress_msg(f"Computing z-direction charge distribution (frame {frame_idx})...")
-        result = analyze_charge_z(s.dump_frames[frame_idx], s.dump_col_idx)
+        result = analyze_charge_z(s.dump_frames[frame_idx], s.dump_col_idx,
+                                  fe_type=s._guess_fe_types(), o_type=s._guess_o_type())
         s.cache['charge_z'] = result
         print(C.ok("  Done. Use 'plot charge_z' to visualize."))
 
@@ -1402,9 +1493,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 if max_frames <= 0:
                     raise ValueError('RDF frame count must be a positive integer')
 
-        # z periodicity from the dump's boundary flags, else the input file,
-        # else surface_z (see _periodicity). compute_rdf always wraps x and y,
-        # so only the z flag is used here.
+        # Each periodic axis comes from the dump, input, or visible legacy
+        # surface heuristic, in that order (see _periodicity).
         pbc, pbc_src = self._periodicity()
         z_pbc = pbc[2]
 
@@ -1414,7 +1504,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                              type_a=type_a, type_b=type_b,
                              max_frames=max_frames,
                              label_a=pair_parts[0], label_b=pair_parts[1],
-                             z_pbc=z_pbc)
+                             z_pbc=z_pbc, pbc=s.pbc)
         result['label'] = pair_str
         result['display_label'] = f'{display_a}-{display_b}'
         s.cache[cache_key] = result
@@ -1446,7 +1536,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
         progress_msg("Computing oxidation rate...")
         result = compute_or(s.dump_frames, s.dump_col_idx,
-                            dt_fs=s.dt_fs, q_thr=s.q_threshold)
+                            dt_fs=s.dt_fs, q_thr=s.q_threshold,
+                            fe_type=s._guess_fe_types())
         s.cache['or'] = result
         if result:
             progress_msg(f"Final OR: {result['or'][-1]:.4f}")
@@ -1495,14 +1586,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
 
-        # Parse --species from opts
-        species_name = None
-        for i, o in enumerate(opts):
-            if o == '--species' and i + 1 < len(opts):
-                species_name = opts[i + 1]
+        requested = [opts[i + 1] for i, o in enumerate(opts)
+                     if o == '--species' and i + 1 < len(opts)
+                     and not opts[i + 1].startswith('--')]
+        unique_species = list(dict.fromkeys(requested))
+        if len(unique_species) > 1:
+            raise ValueError(f'Ambiguous density species {unique_species!r}; specify one species')
+        species_name = unique_species[0] if unique_species else None
+        if opts and (len(opts) != 2 or opts[0] != '--species'
+                     or opts[1].startswith('--')):
+            s.cache.pop(f'density_{species_name or "all"}', None)
+            raise ValueError('Density selection requires --species NAME')
 
         at = s.atom_types
-        inv = {str(v): k for k, v in at.items() if isinstance(k, int)}
+        inv = self._density_species()
         species_list = list(inv.keys())
 
         # Interactive: ask whether to run for a specific species or all
@@ -1523,11 +1620,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         if species_name is not None:
             # Single species requested
-            species_type = inv.get(species_name)
-            if species_type is None:
-                print(C.err(f"  Unknown species: '{species_name}'. "
-                            f"Available: {', '.join(species_list)}"))
-                return
+            s.cache.pop(f'density_{species_name}', None)
+            species_type = resolve_species(species_name, at, ff=s.ff)
             progress_msg(f"Computing density profile (species: {species_name})...")
             result = compute_density_profile(s.dump_frames, s.dump_col_idx,
                                              species_type=species_type,
@@ -1568,8 +1662,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
         if s.ff != 'ace':
-            print(C.warn("  Spin analysis is only applicable to ACE simulations."))
-            return
+            raise ValueError('Spin analysis is not applicable to the current force field')
         progress_msg("Computing spin evolution...")
         result = analyze_spin_evolution(s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs)
         s.cache['spin'] = result
@@ -1878,7 +1971,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # Shows current path and lets user change it (Enter to keep).
         # Only prompt if stdin is interactive (skip in batch/one-shot mode).
         current = s.output_dir or './lammps-post_output'
-        if sys.stdin.isatty():
+        if not self._no_prompt:
             new_dir = self._ask(f"Output directory", current)
             if new_dir and new_dir != current:
                 s.output_dir = new_dir
@@ -1894,6 +1987,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s.apply_plot_style()
 
         if what == 'all':
+            if len(parts) != 1:
+                raise ValueError('plot all does not accept options')
+            if not s.cache and s.log_data is None and s.data_atoms is None and not s.dump_frames:
+                raise ValueError('No data loaded')
             self._plot_all()
             return
 
@@ -1920,12 +2017,29 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         }
 
         if what in plot_dispatch:
+            if parts[1:] and what not in ('rdf', 'msd', 'snapshot'):
+                raise ValueError(f'Plot {what!r} does not accept options')
+            if what in ('rdf', 'msd') and len(parts) > 2:
+                raise ValueError(f'Plot {what!r} accepts one selection')
+            if what in ('thermo', 'thermostat', 'pressure') and s.log_data is None:
+                raise ValueError('No log data loaded')
+            if what == 'structure' and s.data_atoms is None and not s.dump_frames:
+                raise ValueError('No data file or dump loaded')
+            if what == 'penetration_profile' and not s.dump_frames:
+                raise ValueError('No dump data loaded')
             # Determine mode: redo (silent with saved recipe) or edit (interactive with saved defaults)
             is_redo = (what in s.plot_recipes and
                        len(arg.split()) >= 2 and arg.split()[0] == 'redo')
-            plot_dispatch[what](parts[1:], _batch=is_redo, _edit_mode=_edit_mode)
+            # A direct noninteractive request must never silently skip because
+            # no analysis has been cached yet. Plot-all still skips inapplicable
+            # data, but a requested plot either computes its data or fails.
+            if self._no_prompt and what in ('rdf', 'density', 'msd'):
+                if not any(k.startswith(f'{what}_') for k in s.cache) and not parts[1:]:
+                    getattr(self, f'_analyze_{what}')([], _batch=True)
+            plot_dispatch[what](parts[1:], _batch=is_redo or self._no_prompt,
+                                _edit_mode=_edit_mode)
         else:
-            print(f"  Unknown plot type: '{what}'")
+            raise ValueError(f"Unknown plot type: '{what}'")
 
     # ── Per-type interactive plot methods ──
     # Each method: (1) ensures data exists (auto-analyze if missing),
@@ -2041,17 +2155,49 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 return key in s.cache or any(k.startswith(f'{key}_') for k in s.cache)
         return False
 
+    def _thermo_plot_metadata(self):
+        """Thermo units belong to the log, not an independently loaded dump."""
+        s = self.state
+        log = s.log_data or {}
+        input_units = (s.input_config or {}).get('units')
+        units = log.get('unit_system')
+        if units and input_units and units != input_units:
+            raise ValueError('Conflicting explicit log/input units; load matching run metadata')
+        if units:
+            if s.dump_frames and units != s.ff_info.get('unit_system'):
+                warnings.warn('Log and trajectory unit metadata differ; using explicit log units '
+                              'for thermo plots', RuntimeWarning, stacklevel=2)
+        elif input_units:
+            units = input_units
+        elif s.dump_frames:
+            units = s.ff_info['unit_system']
+            warnings.warn('Native log units are unconfirmed; using trajectory metadata for thermo plots',
+                          RuntimeWarning, stacklevel=2)
+        else:
+            raise ValueError('Native log units are unknown; load an input script with explicit units')
+        dt_fs = log.get('dt_fs')
+        input_dt = (s.input_config or {}).get('dt_fs')
+        if dt_fs is not None and input_dt is not None and not np.isclose(dt_fs, input_dt):
+            raise ValueError('Conflicting explicit log/input timesteps; load matching run metadata')
+        if dt_fs is None:
+            dt_fs = input_dt if input_dt is not None else s.dt_fs
+            if input_dt is None:
+                warnings.warn('Log timestep is unconfirmed; using session timestep for thermo plots',
+                              RuntimeWarning, stacklevel=2)
+        return units, dt_fs
+
     def _iplot_thermo(self, opts, _batch=False, _edit_mode=False):
         """Interactive thermo plot — passes dt_fs, pressure_unit, total_mass_amu, figsize."""
         s = self.state
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
             return
+        unit_system, dt_fs = self._thermo_plot_metadata()
         plot_thermo(s.log_data, s.output_dir, s.dpi,
-                    dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
+                    dt_fs=dt_fs, pressure_unit=s.pressure_unit,
                     total_mass_amu=s.total_mass_amu,
                     figsize=s.figsize_override,
-                    unit_system=s.ff_info.get('unit_system', 'metal'))
+                    unit_system=unit_system)
         self._save_recipe('thermo', {'pressure_unit': s.pressure_unit})
 
     def _iplot_thermostat(self, opts, _batch=False, _edit_mode=False):
@@ -2060,9 +2206,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if s.log_data is None:
             print(C.warn("  No log data loaded. Use 'load log' first."))
             return
+        unit_system, dt_fs = self._thermo_plot_metadata()
         plot_thermostat_summary(s.log_data, s.output_dir, s.dpi,
-                                dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
-                                figsize=s.figsize_override)
+                                dt_fs=dt_fs, pressure_unit=s.pressure_unit,
+                                figsize=s.figsize_override,
+                                unit_system=unit_system)
         self._save_recipe('thermostat', {'pressure_unit': s.pressure_unit})
 
     def _iplot_pressure(self, opts, _batch=False, _edit_mode=False):
@@ -2104,9 +2252,23 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         else:
             slab_z = s.plot_recipes.get('pressure', {}).get('slab_z_range')
 
-        plot_pressure(s.log_data, s.output_dir, s.dpi,
-                      dt_fs=s.dt_fs, pressure_unit=s.pressure_unit,
-                      slab_z_range=slab_z, figsize=s.figsize_override)
+        pressure_data = s.log_data
+        if slab_z is not None and 'lz' not in pressure_data and s.dump_frames:
+            # Never apply the last structure's height to an unrelated thermo
+            # history. Only supplement missing lengths at matching timesteps.
+            heights = {fr['timestep']: float(fr['box'][2, 1] - fr['box'][2, 0])
+                       for fr in s.dump_frames}
+            steps = pressure_data.get('step', [])
+            unique_steps = (len(heights) == len(s.dump_frames)
+                            and len(set(steps)) == len(steps))
+            if len(steps) and unique_steps and all(step in heights for step in steps):
+                pressure_data = dict(pressure_data,
+                                     lz=np.array([heights[step] for step in steps]))
+        unit_system, dt_fs = self._thermo_plot_metadata()
+        plot_pressure(pressure_data, s.output_dir, s.dpi,
+                      dt_fs=dt_fs, pressure_unit=s.pressure_unit,
+                      slab_z_range=slab_z, figsize=s.figsize_override,
+                      unit_system=unit_system)
         self._save_recipe('pressure', {
             'pressure_unit': s.pressure_unit,
             'slab_z_range': slab_z,
@@ -2375,7 +2537,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             progress_msg("Computing O penetration profile...")
             o_type = s._guess_o_type()
             result = analyze_penetration_profile(
-                s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs, o_type=o_type)
+                s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs, o_type=o_type,
+                fe_type=s._guess_fe_types())
             if result is None:
                 print(C.warn("  No O atoms found in trajectory."))
                 return
@@ -2606,8 +2769,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             try:
                 indices = [int(x) for x in opts]
             except ValueError:
-                print(C.err("  Frame indices must be integers."))
-                return
+                raise ValueError('Frame indices must be integers') from None
             plot_snapshot(s.dump_frames, s.dump_col_idx, s.atom_types,
                           s.output_dir, indices, s.dpi,
                           z_focus=s.compute_z_focus(), figsize=s.figsize_override)
@@ -3171,10 +3333,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def default(self, line):
         """Handle unknown commands."""
-        print(f"  Unknown command: '{line}'. Type 'help' for available commands.")
+        raise ValueError(f"Unknown command: '{line}'. Type 'help' for available commands.")
 
     def emptyline(self):
         """Do nothing on empty input."""
         pass
-
-
