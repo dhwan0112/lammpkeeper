@@ -12,6 +12,21 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Species-group selection (PHYS-4)
+
+- Post-processing resolves explicit species labels to sets of atom types.
+  The canonical ACE `Fe` selection includes both spin channels; `Fe_up` and
+  `Fe_down` remain individually selectable. Existing type/element mapping tables
+  and legacy conversion functions are unchanged.
+- Unknown MSD species, unknown RDF pair members and malformed selection options
+  now raise errors listing valid choices instead of silently analyzing all atoms
+  or substituting default types. Failed target selections do not leave stale
+  cached curves available for plotting.
+- RDF accepts integer type IDs or type sets. Singleton selections preserve the
+  existing numeric results; no golden values or fixtures are re-baselined.
+- Human-readable labels distinguish all-spin from spin-resolved results while
+  retaining the existing cache keys and output file names.
+
 ### MSD atom identity and bulk regression (PHYS-2, PHYS-1)
 
 - MSD selects an initial cohort by atom type (an integer, a set of type IDs, or

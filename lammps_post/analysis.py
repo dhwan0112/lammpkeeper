@@ -229,8 +229,8 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     Args:
         frames:     list[dict] — Trajectory frames
         col_idx:    dict       — Column index mapping
-        type_a:     int        — Atom type for reference species (default: 1 = Fe)
-        type_b:     int        — Atom type for target species (default: 2 = O)
+        type_a:     int or iterable[int] — Reference type(s), selected each frame.
+        type_b:     int or iterable[int] — Target type(s), selected each frame.
         r_max:      float      — Maximum radial distance in Angstroms (default: 6.0)
         n_bins:     int        — Number of histogram bins (default: 200)
         max_frames: int        — Use only the last N frames for averaging (default: 20)
@@ -246,6 +246,22 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
             'label'    : str      — Pair label (e.g., 'Fe-O')
             'n_frames' : int      — Number of frames used in averaging
     """
+    def type_set(selection):
+        if isinstance(selection, (int, np.integer)):
+            members = [selection]
+        else:
+            try:
+                members = list(selection)
+            except TypeError:
+                raise ValueError('RDF selections must be integer type IDs or iterables of type IDs') from None
+        if not members or any(isinstance(t, (bool, np.bool_))
+                              or not isinstance(t, (int, np.integer)) or t <= 0
+                              for t in members):
+            raise ValueError('RDF selections must contain positive integer type IDs')
+        return frozenset(map(int, members))
+
+    types_a, types_b = type_set(type_a), type_set(type_b)
+    same_species = types_a == types_b
     xi, yi, zi, ti = col_idx['x'], col_idx['y'], col_idx['z'], col_idx['type']
     dr = r_max / n_bins       # Bin width in Angstroms
     hist_total = np.zeros(n_bins)  # Accumulated distance histogram across all frames
@@ -260,8 +276,9 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     for fr in use_frames:
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
-        mask_a = types == type_a  # Boolean mask for reference species
-        mask_b = types == type_b  # Boolean mask for target species
+        # Keep singleton arithmetic unchanged while allowing explicit unions.
+        mask_a = types == next(iter(types_a)) if len(types_a) == 1 else np.isin(types, list(types_a))
+        mask_b = types == next(iter(types_b)) if len(types_b) == 1 else np.isin(types, list(types_b))
 
         # Extract xyz positions for both species
         pos_a = atoms[mask_a][:, [xi, yi, zi]]
@@ -277,7 +294,7 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         vol_last = L[0] * L[1] * L[2]  # Total box volume
 
         pairs = _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
-                                     same_species=(type_a == type_b))
+                                     same_species=same_species)
         if pairs is not None:
             # cKDTree only nominates pairs; distances are recomputed below with
             # the brute-force formula so every r lands in the same bin as before.
@@ -330,9 +347,9 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     shell_vol = (4 / 3) * np.pi * (bins_edge[1:] ** 3 - bins_edge[:-1] ** 3)
     rho_b = n_b_last / vol_last  # Average number density of type_b
     g = hist_total / (n_frames_used * n_a_last * shell_vol * rho_b)
-    # When type_a == type_b, each pair (i,j) is counted twice (once from
-    # each side), so divide by 2 to correct the double-counting.
-    if type_a == type_b:
+    # Preserve the historical same-species normalization for both singletons
+    # and equal sets. PHYS-4 changes selection only, not this convention.
+    if same_species:
         g /= 2
 
     return {'r': r_centers, 'g': g, 'label': f'{label_a}-{label_b}',

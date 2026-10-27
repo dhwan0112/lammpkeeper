@@ -704,7 +704,8 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
     if not HAS_MPL or data is None:
         return
 
-    label = data['label']
+    file_label = data['label']
+    label = data.get('display_label', file_label)
 
     if ref_rdfs:
         # ── Stacked overlay style (like EELS comparison figures) ──
@@ -782,7 +783,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
         ax.legend()
 
     plt.tight_layout()
-    _save_fig(fig, os.path.join(output_dir, f'rdf_{label.replace("-","_")}.png'), dpi)
+    _save_fig(fig, os.path.join(output_dir, f'rdf_{file_label.replace("-","_")}.png'), dpi)
 
 
 def plot_oar(data, output_dir, dpi=150, normalize=False, figsize=None):
@@ -981,7 +982,7 @@ def plot_msd(data, species_name, output_dir, dpi=150, figsize=None):
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
     ax.plot(data['time'], data['msd'], color=CLR['avg'], lw=1.5)
     ax.set(xlabel='Time (ps)', ylabel=r'MSD (Å$^2$)',
-           title=f'Mean Square Displacement — {species_name}')
+           title=f'Mean Square Displacement — {data.get("display_label", species_name)}')
     plt.tight_layout()
     _save_fig(fig, os.path.join(output_dir, f'msd_{species_name}.png'), dpi)
 

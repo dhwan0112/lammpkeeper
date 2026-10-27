@@ -19,6 +19,9 @@ replaced. This does NOT change post's atom-count heuristic (detect_forcefield
 Rule 3), which is the separate, flagged reverse-map fragility.
 """
 
+from numbers import Integral
+
+
 # type_number -> (element_symbol, label)
 FORCE_FIELDS = {
    'ace': {1: ('Fe', 'Fe_up'), 2: ('Mn', 'Fe_down'), 3: ('O', 'O')},
@@ -55,3 +58,84 @@ def element_order(ff):
     what prep writes and what post reads from ever drifting apart.
     """
     return [el for _t, (el, _label) in sorted(FORCE_FIELDS[ff].items())]
+
+
+# Analysis aliases only: these do not change LAMMPS element slots or legacy
+# one-type conversion APIs. Apply a preset only while its member labels match
+# the explicitly supplied system map; user relabeling takes precedence.
+_SPECIES_GROUPS = {'ace': {'Fe': frozenset({1, 2})}}
+_SPECIES_DISPLAY = {'ace': {'Fe': 'Fe (all spins)',
+                            'Fe_up': 'Fe↑', 'Fe_down': 'Fe↓'}}
+
+
+def species_type_sets(atom_types, ff=None, groups=None):
+    """Resolve explicit type labels and optional groups to immutable type sets.
+
+    Repeated labels are an explicit union, not a last-type-wins inverse map.
+    Arbitrary underscore prefixes are never guessed. ``groups`` may add named
+    unions of existing type IDs but cannot silently redefine an exact label or
+    an applicable preset alias: conflicting definitions raise explicitly.
+    Canonical FF tables and legacy conversion helpers remain unchanged.
+    """
+    resolved = {}
+    for type_id, label in atom_types.items():
+        if (isinstance(type_id, bool) or not isinstance(type_id, Integral)
+                or type_id <= 0):
+            raise ValueError(f'Invalid atom type ID {type_id!r}; expected a positive integer')
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f'Invalid label for atom type {type_id}: {label!r}')
+        resolved.setdefault(label, set()).add(int(type_id))
+
+    canonical = FORCE_FIELDS.get(ff, {})
+    for name, members in _SPECIES_GROUPS.get(ff, {}).items():
+        if all(t in atom_types and atom_types[t] == canonical[t][1] for t in members):
+            # A system may explicitly use the same label for a different type.
+            # Do not replace it with a preset alias merely because ff matches.
+            if name not in resolved:
+                resolved[name] = set(members)
+
+    for name, selection in (groups or {}).items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f'Invalid species group name {name!r}')
+        try:
+            members = list(selection)
+        except TypeError:
+            raise ValueError(f'Group {name!r} must contain atom type IDs') from None
+        if not members or any(isinstance(t, bool) or not isinstance(t, Integral)
+                              or t <= 0 for t in members):
+            raise ValueError(f'Group {name!r} must contain positive integer atom type IDs')
+        members = set(map(int, members))
+        missing = members - atom_types.keys()
+        if missing:
+            raise ValueError(f'Group {name!r} refers to unknown atom type IDs {sorted(missing)}')
+        if name in resolved and resolved[name] != members:
+            raise ValueError(f'Conflicting definition for species {name!r}')
+        resolved[name] = members
+    return {name: frozenset(members) for name, members in resolved.items()}
+
+
+def resolve_species(name, atom_types, ff=None, groups=None):
+    """Return the explicit type set for a label; unknown names never mean all."""
+    available = species_type_sets(atom_types, ff=ff, groups=groups)
+    if name not in available:
+        choices = ', '.join(sorted(available)) or '(none; supply explicit type labels)'
+        raise ValueError(f'Unknown species {name!r}. Valid species: {choices}')
+    return available[name]
+
+
+def species_display_name(name, atom_types, ff=None, groups=None):
+    """Human-readable selection name, separate from cache/file identifiers."""
+    members = resolve_species(name, atom_types, ff=ff, groups=groups)
+    canonical = FORCE_FIELDS.get(ff, {})
+    canonical_members = _SPECIES_GROUPS.get(ff, {}).get(name)
+    if canonical_members is None:
+        canonical_members = frozenset(t for t, (_element, label) in canonical.items()
+                                      if label == name)
+    if (members == canonical_members
+            and all(t in canonical and atom_types[t] == canonical[t][1] for t in members)):
+        display = _SPECIES_DISPLAY.get(ff, {}).get(name)
+        if display is not None:
+            return display
+    if len(members) > 1:
+        return f'{name} (types {", ".join(map(str, sorted(members)))})'
+    return name
