@@ -27,6 +27,17 @@ an equilibrium or kinetics validation. Fixtures and the thesis tag stay unchange
 Real LAMMPS/HPC execution remains deferred; local generated-script tests cannot
 certify dynamics or scheduler/site behavior.
 
+## Synthetic slab coverage (TEST-3)
+
+A reusable generated `pp pp ff` toy reference now checks serialized parsing,
+metadata/load order, shared/cached processing and analytic RDF/MSD/O2/penetration
+answers. `tests/synthetic_slab.py` creates the 16-atom/six-frame dump only in
+runtime output directories; committed fixtures and goldens stay unchanged.
+`docs/agent/TEST-3.md` gives the independent expectations and explicit limits.
+This establishes synthetic slab-path integration, not material dynamics, a real
+LAMMPS run or the undecided non-Fe GEN-8 reference system. The historical bulk
+fixture and historical verification claims below retain their original scope.
+
 ## Stage 1 — dispatcher-only (historical)
 
 Minimal, non-destructive. No files were moved; no analysis/physics code changed.

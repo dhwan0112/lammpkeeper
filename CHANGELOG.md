@@ -12,6 +12,18 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Serialized synthetic slab reference (TEST-3)
+
+- Add a deterministic stdlib generator for a 16-atom, six-frame `pp pp ff` toy
+  reference, generated in temporary directories rather than changing fixtures.
+- Collected analytic checks cover x/y boundary pairs, nonperiodic z, ID-tracked
+  MSD, RDF normalization, absorption/penetration counts and initial-cohort uptake.
+- Exercise serialized readers, native/NumPy access paths, real SciPy RDF versus
+  fallback, both shell load orders, cached/shared work and real CLI dispatch.
+  Optional real PNG tests inspect curves and reject a false t50 annotation.
+- The wall-jump probe is deliberately nonphysical, not a dynamics/chemistry or
+  GEN-8 reference. Production code, mapping conventions and goldens are unchanged.
+
 ### Complete English source annotations (DOC-ALL)
 
 - Add or clarify maintenance documentation in every tracked Python, Rust, Shell

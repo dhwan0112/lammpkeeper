@@ -10,7 +10,7 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
-## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, unmerged)`
+## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, merged 2026-10-27)`
 
 The maintainer requested all reported findings be fixed on 2026-10-27. This is
 one bounded audit-remediation item, not the GEN architecture migration. Work is
@@ -47,9 +47,11 @@ This must be applied in a dedicated golden commit, not hidden in source fixes.
 expected result; targeted fail-before/pass-after evidence is retained; full local
 verification passes in the available rich and NumPy environments (explicit skips
 listed). The maintainer explicitly approved feature-branch push and PR creation
-after final verification in this session. Direct main push and merge are excluded.
+after final verification in that session. Initial publication excluded merging;
+the maintainer subsequently requested merge explicitly and PR #15 was merged
+as `703185b`. Direct main pushes remain gated.
 
-## DOC-ALL · P3 · English maintenance comments across every source file — `done (PR #16, unmerged)`
+## DOC-ALL · P3 · English maintenance comments across every source file — `done (PR #16, merged 2026-10-27)`
 
 Maintainer explicitly requested every code file, then selected **all files,
 functions/classes and major logic** (not every execution line), in **English**.
@@ -69,7 +71,8 @@ The branch is based on verified audit PR #15 (`f62f0a4`), not a merge to main.
   parsed TOML agree with the baseline, and full verification still passes in
   the rich, forced-NumPy and default environments with explicit skips.
 - Maintainer explicitly approved push and a separate stacked PR based on audit
-  PR #15 after verification. Neither branch is merged by the agent.
+  PR #15 after verification. The subsequent explicit merge request was completed:
+  PR #16 was retargeted to main after PR #15 and merged as `4db45c4`.
 
 ## Suggested order
 
@@ -471,12 +474,29 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
   values, an independent check, and a behaviour test (static-crystal MSD ≈ vibration
   only). **Human gate.**
 
-### TEST-3 · P2 · No slab (`p p f`) fixture — `open`
-- **Why:** the fixture is bulk. The slab z handling in RDF/MSD/O₂/penetration is
-  unverified (MIGRATION.md says so too).
-- **Fix direction:** a small synthetic slab dump (≤ 200 atoms, ≤ 20 frames) generated
-  by a script committed alongside it. Known answers: an O₂ crossing x/y, an atom
-  near the z wall.
+### TEST-3 · P2 · No slab (`p p f`) reference case — `done (39f0e95)`
+- **Why:** the committed ACE trajectory is bulk. Existing small unit systems
+  cover many slab paths, but there is no reusable, serialized slab reference
+  exercised end to end through parsing, shell metadata and multiple analyses.
+- **Scope:** a deterministic stdlib generator under `tests/` creates a 16-atom,
+  six-frame `pp pp ff` dump and explicit units/timestep metadata in temporary
+  directories. No `tests/fixtures/**`, production input, golden or runtime
+  analysis implementation is changed. This is not the undecided GEN-8 system.
+- **Known answers:** pairs straddle both x/y boundaries; two z-edge atoms are
+  not periodic neighbors; fixed substrate MSD is zero; translation/adsorption
+  and a deliberately nonphysical wall-jump probe have analytic displacements,
+  counts, RDF bins and first-below-surface observations.
+- **Done when:** the generator is reproducible and collected tests match
+  independently enumerated images/counts and analytic values through serialized
+  readers, both shell load orders, shared/uncached processing and available
+  native/NumPy/SciPy paths. Optional rendered plots are checked when available.
+  Full verification and existing Fe-O goldens pass unchanged; all skips are
+  explicit. Real LAMMPS/HPC and equilibrium/kinetics certification remain excluded.
+- **Measured result:** rich/native **261 passed, 0 failed, 0 skipped**;
+  forced NumPy **258/0/3** (native-only skips); default Python **246/0/15**
+  (four ASE and eleven Matplotlib skips). Required rich-environment CLI plots,
+  prep artifacts and job syntax pass. Independent review and fault injection
+  check false-pass risks. Full evidence and limits: `docs/agent/TEST-3.md`.
 
 ### DOC-1 · P3 · Spin docstring contradicts itself — `done (AUDIT-20261027)`
 - **Where:** `analysis.py::analyze_spin_evolution`. "~1/3 → … 8 tetrahedral Fe↓ : 16

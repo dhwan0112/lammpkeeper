@@ -2,10 +2,19 @@
 
 Status: annotation, semantic/coverage checks, selective independent review and
 full runtime verification complete. Published as
-[PR #16](https://github.com/dhwan0112/lammpkeeper/pull/16), unmerged and stacked
-on [audit PR #15](https://github.com/dhwan0112/lammpkeeper/pull/15).
+[PR #16](https://github.com/dhwan0112/lammpkeeper/pull/16), originally stacked
+on [audit PR #15](https://github.com/dhwan0112/lammpkeeper/pull/15). Both were
+subsequently merged into main on 2026-10-27 at the maintainer's explicit request.
 Baseline: `f62f0a4a5d57ade623144470e369bd238d57e435` (verified audit PR #15).
-Branch: `docs/all-source-comments`, stacked on that audit branch, not merged main.
+Original branch: `docs/all-source-comments`, based on the audit branch before
+both PRs were merged into main.
+
+This inventory records the completed PR #16 annotation snapshot, not a claim
+that future roadmap additions do not add source files. TEST-3 subsequently adds
+`tests/synthetic_slab.py` and `tests/test_slab_reference.py`, with English module,
+function and nested-helper docstrings; their behavior/coverage is recorded in
+`docs/agent/TEST-3.md`. The original annotation-only AST comparison still applies
+to its original 63-file baseline, not newly added test logic.
 
 ## Agreed scope
 
