@@ -12,6 +12,19 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Periodic O₂ detection (PHYS-3)
+
+- O₂ candidate search and minimum-image distances honor explicit per-axis PBC.
+  The shell passes dump/input boundary metadata; direct calls keep the legacy
+  slab default `(True, True, False)`. Candidate search reuses the periodic RDF
+  helper; existing RDF callers and numeric goldens retain their behavior.
+- The atom-type selector accepts an integer or a set of types. Invalid supplied
+  bounds, PBC, cutoff, selected positions or selected IDs fail visibly; parsed
+  triclinic geometry remains an existing separate limitation (GEN-3).
+- Frames with no selected atoms now retain their time point with zero counts
+  and zero fractions instead of silently disappearing. Output keys and file
+  names are unchanged, and failed recomputation invalidates its target cache.
+
 ### MSD atom identity and bulk regression (PHYS-2, PHYS-1)
 
 - MSD selects an initial cohort by atom type (an integer, a set of type IDs, or

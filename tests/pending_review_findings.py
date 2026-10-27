@@ -7,7 +7,8 @@ register that module in tests/run.py MODULES, and delete it from here.
 
 MSD repros (PHYS-2/PHYS-1) are now collected in tests/test_msd.py.
 
-  test_o2_detected_across_x_boundary_on_tree_path  -> PHYS-3
+PHYS-3 periodicity repro is now collected in tests/test_o2_periodicity.py.
+
   test_o2_count_independent_of_total_o_count       -> PHYS-5
 """
 import numpy as np
@@ -20,16 +21,6 @@ COL = {'id': 0, 'type': 1, 'x': 2, 'y': 3, 'z': 4}
 
 def _fr(rows, box, ts=0):
     return {'atoms': np.array(rows, float), 'box': np.array(box, float), 'timestep': ts}
-
-
-def test_o2_detected_across_x_boundary_on_tree_path():
-    # Same O2 straddling x=0 (0.6 A apart). Distant O atoms push n_O > 20.
-    box = [[0, 10], [0, 10], [0, 30]]
-    rows = [[1, 2, 0.3, 5, 5], [2, 2, 9.7, 5, 5]]
-    for k in range(19):
-        rows.append([3 + k, 2, (k % 5) * 2 + 1, (k // 5) * 2 + 1, 15 + (k % 3) * 4])
-    r = detect_o2_dissociation([_fr(rows, box)], COL, bond_cutoff=1.5, o_type=2)
-    assert r['n_o2'][0] == 1, f"boundary O2 missed: {r['n_o2'][0]}"
 
 
 def test_o2_count_independent_of_total_o_count():

@@ -155,15 +155,16 @@ def analyze_charge_z(frame, col_idx, z_bins=50):
     return {'z': ctr, 'fe_charge': fe_q_avg, 'fe_count': fe_n, 'o_count': o_n}
 
 
-def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False):
+def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pbc=None):
     """
     (ia, ib, weight) for every (a, b) pair whose minimum-image distance may be
     below r_max, found with a periodic cKDTree; None without scipy.
 
     The search radius carries a small margin, so the result is a superset of
-    the pairs the brute-force loop would bin. x and y are periodic; z is too
-    when z_pbc, otherwise it gets a box longer than the coordinate span plus
-    r_max, so no wrapped image can come within the cutoff.
+    the pairs the brute-force loop would bin. Explicit pbc overrides the legacy
+    x/y-periodic, optional-z convention. Each nonperiodic axis gets a padded
+    box larger than its coordinate span, so no wrapped image enters the cutoff.
+    Legacy RDF callers omitting pbc retain their original behavior.
 
     For same_species, each unordered pair is returned once with weight 2: the
     brute-force loop sees (i, j) and (j, i), whose minimum-image distances are
@@ -179,16 +180,17 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False):
     wa = pos_a - lo
     wb = pos_b - lo
     boxsize = L.astype(float)
-    periodic_dims = (0, 1, 2) if z_pbc else (0, 1)
-    for dim in periodic_dims:
-        for w in (wa, wb):
-            w[:, dim] %= L[dim]
-            w[w[:, dim] >= L[dim], dim] = 0.0   # x % L can round up to L
-    if not z_pbc:
-        zmin = min(wa[:, 2].min(), wb[:, 2].min())
-        wa[:, 2] -= zmin
-        wb[:, 2] -= zmin
-        boxsize[2] = max(wa[:, 2].max(), wb[:, 2].max()) + 2 * r_max + 1.0
+    periodic = (True, True, z_pbc) if pbc is None else pbc
+    for dim, is_periodic in enumerate(periodic):
+        if is_periodic:
+            for w in (wa, wb):
+                w[:, dim] %= L[dim]
+                w[w[:, dim] >= L[dim], dim] = 0.0   # x % L can round up to L
+        else:
+            lower = min(wa[:, dim].min(), wb[:, dim].min())
+            wa[:, dim] -= lower
+            wb[:, dim] -= lower
+            boxsize[dim] = max(wa[:, dim].max(), wb[:, dim].max()) + 2 * r_max + 1.0
 
     radius = r_max * (1 + 1e-6) + 1e-6
     tree_a = cKDTree(wa, boxsize=boxsize)
@@ -649,7 +651,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
             'n_frames': n_used}
 
 
-def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=1.0, o_type=2):
+def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=1.0,
+                           o_type=2, pbc=(True, True, False)):
     """
     Track O₂ molecule dissociation over time by detecting O-O bonds.
 
@@ -674,7 +677,13 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
         col_idx:     dict       — Column index mapping
         bond_cutoff: float      — Maximum O-O distance to consider bonded (A)
         dt_fs:       float      — Timestep in femtoseconds
-        o_type:      int        — Atom type number for oxygen
+        o_type:      int or iterable[int] — Types selected independently per frame.
+        pbc:         three bools — Periodic axes; default retains legacy slab PBC.
+
+    Only supplied orthogonal (3, 2) bounds are supported; upstream tilt loss
+    remains a parser limitation. Invalid settings, selected positions or selected
+    IDs fail visibly. Empty selections retain a time point with zero counts.
+    IDs, when present, determine tie order; counts do not follow a fixed cohort.
 
     Returns:
         dict with keys:
@@ -685,55 +694,92 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
             'frac_in_o2'      : np.array — Fraction of O atoms in O₂ (0 to 1)
             'frac_dissociated': np.array — Fraction of dissociated O atoms
     """
+    try:
+        pbc = tuple(pbc)
+    except TypeError:
+        raise ValueError('Pair detection pbc must contain exactly three booleans') from None
+    if len(pbc) != 3 or not all(isinstance(v, (bool, np.bool_)) for v in pbc):
+        raise ValueError('Pair detection pbc must contain exactly three booleans')
+    try:
+        if isinstance(bond_cutoff, (bool, np.bool_)):
+            raise ValueError
+        bond_cutoff = float(bond_cutoff)
+    except (TypeError, ValueError):
+        raise ValueError('Bond cutoff must be finite and positive') from None
+    if not np.isfinite(bond_cutoff) or bond_cutoff <= 0:
+        raise ValueError('Bond cutoff must be finite and positive')
+    if isinstance(o_type, (int, np.integer)):
+        selected_types = [o_type]
+    else:
+        try:
+            selected_types = list(o_type)
+        except TypeError:
+            raise ValueError('o_type must be an integer or iterable of type IDs') from None
+    if not selected_types or any(isinstance(t, (bool, np.bool_))
+                                 or not isinstance(t, (int, np.integer)) or t <= 0
+                                 for t in selected_types):
+        raise ValueError('o_type must contain positive integer type IDs')
+
     ti = col_idx['type']
     xi, yi, zi_col = col_idx['x'], col_idx['y'], col_idx['z']
-
+    id_col = col_idx.get('id')
+    periodic_dims = [dim for dim, periodic in enumerate(pbc) if periodic]
     time, n_o2_list, n_diss_list, n_total_list = [], [], [], []
 
     for fr in frames:
         atoms = fr['atoms']
-        box = fr['box']
+        box = np.asarray(fr['box'], dtype=float)
+        step = fr['timestep']
+        if box.shape != (3, 2):
+            raise ValueError(f'Timestep {step}: pair detection requires orthogonal (3, 2) bounds; '
+                             'triclinic geometry is unsupported')
         L = box[:, 1] - box[:, 0]
-        o_mask = atoms[:, ti].astype(int) == o_type
-        o_pos = atoms[o_mask][:, [xi, yi, zi_col]]
+        if (not np.all(np.isfinite(box)) or not np.all(np.isfinite(L))
+                or np.any(L <= 0)):
+            raise ValueError(f'Timestep {step}: box lengths must be finite and positive')
+        o_mask = np.isin(atoms[:, ti], selected_types)
+        selected = atoms[o_mask]
+        o_pos = selected[:, [xi, yi, zi_col]].astype(float, copy=True)
         n_o = len(o_pos)
+        if not np.all(np.isfinite(o_pos)):
+            raise ValueError(f'Timestep {step}: selected positions must be finite')
+        if id_col is not None:
+            ids = selected[:, id_col]
+            if (not np.all(np.isfinite(ids)) or np.any(ids <= 0)
+                    or np.any(ids != np.floor(ids)) or len(np.unique(ids)) != n_o):
+                raise ValueError(f'Timestep {step}: selected atom IDs must be unique positive integers')
+            order = np.argsort(ids)
+        else:
+            # Coordinate ordering is only a deterministic fallback for counts,
+            # not a substitute for IDs in a per-atom time series.
+            canonical_pos = o_pos.copy()
+            for dim in periodic_dims:
+                canonical_pos[:, dim] = (canonical_pos[:, dim] - box[dim, 0]) % L[dim]
+            order = np.lexsort((canonical_pos[:, 2], canonical_pos[:, 1], canonical_pos[:, 0]))
+        o_pos = o_pos[order]
 
         if n_o < 2:
-            if n_o > 0:
-                time.append(fr['timestep'] * dt_fs / 1000)
-                n_o2_list.append(0)
-                n_diss_list.append(n_o)
-                n_total_list.append(n_o)
+            time.append(step * dt_fs / 1000)
+            n_o2_list.append(0)
+            n_diss_list.append(n_o)
+            n_total_list.append(n_o)
             continue
 
         bonded = np.zeros(n_o, dtype=bool)  # Track which O atoms are paired
         n_o2 = 0  # Count of detected O₂ molecules
 
-        # Lazy import: only load scipy when actually needed for O2 detection
-        try:
-            from scipy.spatial import cKDTree
-            _has_scipy = True
-        except ImportError:
-            _has_scipy = False
-
-        if _has_scipy and n_o > 20:
-            # --- Fast path: scipy cKDTree for neighbor finding ---
-            # Wrap O positions into the primary box image for consistent
-            # distance queries (cKDTree doesn't handle PBC natively).
-            pos_wrapped = o_pos.copy()
-            box_lo = box[:, 0]  # [xlo, ylo, zlo]
-            pos_wrapped[:, 0] = (pos_wrapped[:, 0] - box_lo[0]) % L[0] + box_lo[0]
-            pos_wrapped[:, 1] = (pos_wrapped[:, 1] - box_lo[1]) % L[1] + box_lo[1]
-            # Build KD-tree and find all pairs within bond_cutoff.
-            # Note: this may miss pairs across PBC boundaries, but the
-            # subsequent PBC distance recalculation catches them.
-            tree = cKDTree(pos_wrapped)
-            pairs = tree.query_pairs(bond_cutoff, output_type='ndarray')
+        # Periodic candidates must be found before MIC distance filtering;
+        # a missing cross-boundary candidate cannot be recovered afterwards.
+        candidates = (_rdf_candidate_pairs(o_pos, o_pos, box, bond_cutoff,
+                                            z_pbc=pbc[2], same_species=True, pbc=pbc)
+                      if n_o > 20 else None)
+        if candidates is not None:
+            ia, ib, _weight = candidates
+            pairs = np.column_stack((ia, ib))
             if len(pairs) > 0:
-                # Recalculate distances with proper PBC (minimum image convention)
                 dr = o_pos[pairs[:, 1]] - o_pos[pairs[:, 0]]
-                dr[:, 0] -= L[0] * np.round(dr[:, 0] / L[0])
-                dr[:, 1] -= L[1] * np.round(dr[:, 1] / L[1])
+                for dim in periodic_dims:
+                    dr[:, dim] -= L[dim] * np.round(dr[:, dim] / L[dim])
                 dists = np.linalg.norm(dr, axis=1)
                 valid = dists < bond_cutoff
 
@@ -761,9 +807,8 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
                     if bonded[j]:
                         continue
                     dr = o_pos[j] - o_pos[i]
-                    # Minimum image convention for x and y
-                    dr[0] -= L[0] * np.round(dr[0] / L[0])
-                    dr[1] -= L[1] * np.round(dr[1] / L[1])
+                    for dim in periodic_dims:
+                        dr[dim] -= L[dim] * np.round(dr[dim] / L[dim])
                     dist = np.linalg.norm(dr)
                     if dist < best_dist:
                         best_dist = dist
