@@ -138,7 +138,10 @@ Rules while getting there:
     are unchanged.
   - **Shipping / Opening a PR:** branch `fix/<id>-<slug>` or `gen/<id>-<slug>`, based
     on the branch the user names (default `main`). Push feature branches only.
-    Never merge.
+    Merge PRs only when the user explicitly requests merging and the relevant
+    verification passes; never merge unsolicited. The orchestrator performs
+    remote actions directly, never a delegated worker. Direct pushes to `main`,
+    force-pushes and history rewrites still require their separate human gates.
   - **Orchestrate / Autopilot / Benny:** do not use.
   - **Arena / Swarm:** only when explicitly asked (useful for comparing API designs).
 - Before reporting done: run `/verify-lkpr`. For `io`/`analysis` changes, also run
