@@ -10,7 +10,7 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
-## AUDIT-20261027 · P1 · Whole-code audit corrections — `in-progress (fix/audit-20261027-integrity)`
+## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, unmerged)`
 
 The maintainer requested all reported findings be fixed on 2026-10-27. This is
 one bounded audit-remediation item, not the GEN architecture migration. Work is
