@@ -17,8 +17,11 @@ Each force field maps an atom TYPE NUMBER to (element_symbol, label):
 The canonical tables preserve the historical slot convention; analysis aliases
 below are additive views, not new LAMMPS types or a guess from label prefixes.
 Input/dump metadata can override a preset only through explicit matching rules
-in the caller. Legacy force-field/count inference remains separate in the post
-parser and is now visibly warned; these helpers do not certify that inference.
+in the caller. Stage B preserved historical values; Step C later replaced the
+three-type ACE population guess with this deterministic slot convention.
+Legacy force-field inference and a count-based fallback remain in the post
+parser, visibly warned and still subject to GEN-2; these helpers do not certify
+those guesses.
 """
 
 from numbers import Integral
