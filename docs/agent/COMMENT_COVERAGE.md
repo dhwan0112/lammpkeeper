@@ -25,7 +25,8 @@ extends maintained coverage without changing the original annotation-only claim.
 ## Current whole-source re-review (2026-10-28; after GEN-3)
 
 The maintainer requested another complete code review and annotation pass after
-PR #20. [`REVIEW-20261028.md`](REVIEW-20261028.md) is the exhaustive current
+PR #20; published as [PR #21](https://github.com/dhwan0112/lammpkeeper/pull/21).
+[`REVIEW-20261028.md`](REVIEW-20261028.md) is the exhaustive current
 inventory and findings record: **78 source/build files, 73 Python modules and
 978 function/class definitions**. Every target was reviewed; annotations were
 strengthened in **56 files**, while adequate existing English documentation in

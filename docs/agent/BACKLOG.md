@@ -74,7 +74,7 @@ The branch is based on verified audit PR #15 (`f62f0a4`), not a merge to main.
   PR #15 after verification. The subsequent explicit merge request was completed:
   PR #16 was retargeted to main after PR #15 and merged as `4db45c4`.
 
-## REVIEW-20261028 · P3 · Whole-source re-review and English annotations — `verified (fix/review-20261028-annotations; publication pending)`
+## REVIEW-20261028 · P3 · Whole-source re-review and English annotations — `done (PR #21; annotations only, runtime findings open)`
 
 Requested after GEN-3 by the maintainer: re-review all work to date and retain
 maintenance comments across all code. Baseline: merged main `75f5e66` (PR #20).
