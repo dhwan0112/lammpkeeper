@@ -4,6 +4,7 @@ Status: independent source review and parent reproduction complete; findings ope
 No correctness certification or runtime fix claimed.
 Baseline: `b9bd50333ad0b69a7274c89af850a56216d048c5` (merged PR #24).
 Branch: `docs/prior-work-review-20261029`.
+Published: [PR #25](https://github.com/dhwan0112/lammpkeeper/pull/25).
 
 ## Request and attribution boundary
 

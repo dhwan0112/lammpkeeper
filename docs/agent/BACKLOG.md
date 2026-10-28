@@ -161,7 +161,7 @@ on `gen/gen-2-explicit-metadata` (`e019dd7`), awaiting approval; this review doe
 accept it or authorize unrelated fixes.
 Review completed with **11 new reproduced items**, an additional hosted-inline
 case under REV-OPS-1 and several reconfirmed known issues: **33 open review items**
-in total. Parent reran all priority probe groups; full baseline remains **444/0/0**.
+in total; published as PR #25. Parent reran all priority probe groups; full baseline remains **444/0/0**.
 Silent scientific/input defects and stale-result publication should be addressed
 before generalization resumes. Detailed measured values and limitations are in
 the review report; no runtime fix or golden change is part of this review.
