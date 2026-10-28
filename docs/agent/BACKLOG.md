@@ -592,12 +592,30 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.
 
-### GEN-3 · Box model with triclinic + PBC — `open` (builds on PARSE-1)
-- **Target:** `io.Box(lo, hi, tilt, pbc)`. MIC and unwrap in fractional coordinates.
+### GEN-3 · Box model with triclinic + PBC — `done (PR #20; ADR-0003 accepted)` (builds on PARSE-1)
+- **Target:** `io.Box(lo, hi, tilt, pbc)`. Fractional transforms plus exact periodic
+  lattice MIC/unwrap; fractional component rounding is not an exact skew-cell MIC.
   Until analyses support tilt, they raise an error on triclinic input instead of
   ignoring it.
 - **Done when:** RDF and MSD of a synthetic triclinic cell match brute force over
   images, and orthogonal Fe-O goldens are unchanged.
+- **Architecture approval (2026-10-28):** two independent read-only reviews and a
+  measured fractional-rounding counterexample informed
+  `docs/adr/0003-box-geometry-contract.md`. The maintainer approved immutable Box
+  metadata, exact periodic-lattice MIC, additive opt-in readers, restricted
+  Cartesian triclinic RDF and fixed-cell MSD, with unsupported consumers rejected
+  visibly. No fixture/golden, generated prep/job/structure or FF mapping change
+  was approved; completion requires the checks above.
+- **Measured completion (2026-10-28):** exact image/RDF/MSD independent synthetic
+  oracles and all unchanged Fe-O goldens pass. Parent full verifier: expanded
+  environment/native **393 passed, 0 failed, 0 skipped**; forced NumPy **387/0/6**
+  (native-only skips); default Python **377/0/16** (ASE/Matplotlib skips). Post
+  analyses/real plots and prep artifact/script smoke pass in the expanded
+  environment. External installed wheel: **81/0/1**, native-only skip. The five
+  new modules add 82 tests. All 44 pre-existing tests/fixtures/golden files apart
+  from runner registration remain byte-for-byte unchanged; thesis tag preserved.
+  `docs/agent/GEN-3.md` records APIs, exact commands, named skips, evidence and
+  unsupported scope. Real LAMMPS/HPC and MDAnalysis remain unverified; GEN-2 next.
 
 ### GEN-4 · Split generic analyses from the `fe_oxidation` domain pack — `open`
 - **Move:** OAR, OR, penetration (+trend/profile), charge evolution/states

@@ -53,6 +53,7 @@ class SessionState:
         self.data_path = None       # Path to the loaded LAMMPS data file
         self.data_atoms = None      # np.array (N, 5): [id, type, x, y, z]
         self.data_box = None        # np.array (3, 2): [[xlo, xhi], ...]
+        self.data_cell = None       # Immutable physical cell; PBC may be unresolved
         self.data_masses = None     # dict[int, float]: type -> mass
 
         self.input_path = None      # Path to the loaded LAMMPS input (.in) file
@@ -358,20 +359,64 @@ class SessionState:
         self._structure_atoms = None
 
     @property
-    def pbc(self):
-        """Resolve x/y/z PBC from dump, input, then the legacy surface heuristic.
+    def input_pbc(self):
+        """Resolve only an explicitly parsed input boundary, never LAMMPS defaults."""
+        boundary = (getattr(self, 'input_config', None) or {}).get('boundary')
+        if not boundary:
+            return None
+        if not isinstance(boundary, (list, tuple)) or len(boundary) != 3:
+            raise ValueError('Input boundary must contain exactly three axis flags')
+        if any(not isinstance(flag, str) or len(flag) not in (1, 2)
+               or set(flag) - set('pfsm') or ('p' in flag and flag not in ('p', 'pp'))
+               for flag in boundary):
+            raise ValueError('Input boundary contains invalid axis flags')
+        return tuple(flag in ('p', 'pp') for flag in boundary)
 
-        The final fallback assumes periodic x/y and nonperiodic z only when
-        a surface is known; callers needing provenance use shell._periodicity.
+    @property
+    def pbc(self):
+        """Resolve lattice-vector PBC from dump, input, then orthogonal legacy fallback.
+
+        Unknown triclinic flags raise. The orthogonal fallback assumes periodic
+        x/y and nonperiodic z only when a surface is known; provenance is exposed
+        by shell._periodicity. Input-derived cells never own the source flags.
         """
         from lammps_post.parsers import pbc_from_boundary
-        reader = getattr(self.dump_frames, 'reader', None)
+        reader = getattr(getattr(self, 'dump_frames', None), 'reader', None)
         flags = pbc_from_boundary(getattr(reader, 'boundary', None))
         if flags is not None:
             return flags
-        if self.input_config and self.input_config.get('boundary'):
-            return tuple(b == 'p' for b in self.input_config['boundary'][:3])
-        return (True, True, self.surface_z is None)
+        flags = SessionState.input_pbc.fget(self)
+        if flags is not None:
+            return flags
+        if SessionState.has_triclinic_dump(self):
+            raise ValueError('Triclinic PBC is unresolved: supply dump boundary flags '
+                             'or load an input with an explicit boundary command')
+        return (True, True, getattr(self, 'surface_z', None) is None)
+
+    def has_triclinic_dump(self):
+        """Inspect authoritative cells without interpreting physical bounds as AABBs."""
+        frames = getattr(self, 'dump_frames', None)
+        if not frames:
+            return False
+        index = getattr(getattr(frames, '_store', None), 'index', None)
+        cells = getattr(index, 'cells', None)
+        if cells is not None:
+            return any(not cells[k].is_orthogonal for k in frames._positions)
+        if index is not None and not getattr(frames.reader, 'box_model', False):
+            return False  # The legacy reader itself rejects retained tilted cells.
+        return any((fr.get('cell') is not None and not fr['cell'].is_orthogonal)
+                   or fr.get('triclinic', False)
+                   or any(np.any(np.asarray(fr.get(key, 0)) != 0)
+                          for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))
+                   for fr in frames)
+
+    def require_orthogonal(self, operation, include_data=False):
+        """Reject unsupported slab/geometry interpretation, including manual planes."""
+        if (self.has_triclinic_dump() or
+                (include_data and self.data_cell is not None
+                 and not self.data_cell.is_orthogonal)):
+            raise ValueError(f'{operation} is orthogonal-only; triclinic geometry '
+                             'is supported only for RDF and constant-cell MSD')
 
     def apply_plot_style(self):
         """
@@ -421,6 +466,8 @@ class SessionState:
         the manual flag: its caller must decide whether recomputation is allowed.
         """
         if not self.dump_frames or not self.dump_col_idx:
+            return
+        if self.has_triclinic_dump():
             return
         if 'z' not in self.dump_col_idx:
             return
@@ -517,6 +564,7 @@ class SessionState:
         Returns:
             (zlo, zhi) tuple, or None if auto-detection fails.
         """
+        self.require_orthogonal('Automatic geometry focus', include_data=True)
         if self.z_focus is not None:
             return self.z_focus
 

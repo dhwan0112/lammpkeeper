@@ -11,7 +11,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 
 ---
 
-## Current status (DOC-2, 2026-10-28)
+## Current status (GEN-3, 2026-10-28)
 
 - The dispatcher and shared `common/display.py` / `common/mapping.py` are in use;
   the full ADR-0001 package layout is a target, not the current module layout.
@@ -19,6 +19,10 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
   element labels. GEN-1 adds the system-owned `core.SpeciesMap` under the approved
   ADR-0002 contract; its integration/evidence is recorded below. Force-field,
   units and timestep inference still has warned paths tracked under GEN-2.
+- GEN-3 adds immutable `io.Box` and NumPy `core.geometry` under accepted ADR-0003.
+  Restricted-triclinic Cartesian RDF and constant-cell MSD use the typed path;
+  unsupported tilted consumers reject. Legacy reader defaults and orthogonal
+  arithmetic remain compatible. See `docs/agent/GEN-3.md` for limits/evidence.
 - PHYS-1/2, PHYS-3/5, PHYS-4, the whole-code audit (PR #15) and the synthetic
   slab integration reference (TEST-3, PR #17) are complete. Their documented
   corrections are not value-preserving refactors of the original thesis state.
@@ -77,6 +81,32 @@ model, parser contracts remain compatible, and source/group loading uses managed
 cache invalidation. `docs/agent/GEN-1.md` records implementation/verification
 status and the optional manifest interface. FF classification remains GEN-2,
 triclinic support GEN-3, domain extraction GEN-4 and full package moves GEN-9.
+
+## Typed cells and exact periodic geometry (GEN-3; ADR-0003)
+
+The maintainer approved ADR-0003 before implementation. `io.Box` owns immutable
+physical restricted-cell bounds, `(xy,xz,yz)` tilts and explicit/unresolved PBC;
+`core.geometry` owns row-basis transforms, wrapping and exact closest images.
+Fractional rounding alone is not an exact MIC for a skew cell. The new bounded
+QR search uses protected original-input objective comparisons with exact-rational
+fallback; unsupported condition/scale/work ranges raise instead of approximating.
+
+Dump readers expose typed cells through additive `box_model=True`; the post shell
+opts in. Legacy defaults remain orthogonal-only and the old data tuple survives
+beside `read_data_file`. Compatibility bounds are physical lo/hi, not a complete
+cell or its enclosing dump box. Typed/retained geometry contradictions and foreign
+indexed-source contracts reject visibly. Managed PBC/source changes preserve the
+GEN-1 transaction, group and manual-override contracts.
+
+Only Cartesian restricted-triclinic RDF and constant-origin/matrix/PBC MSD gain
+geometry support. General rotated cells, scaled/unwrapped conversion, image
+reconstruction, deforming triclinic MSD and tilted slab/O₂ consumers remain out
+of scope. Wrapped MSD requires true successive displacements inside the periodic
+Voronoi cell; image aliasing cannot be diagnosed from arbitrary wrapped samples.
+Orthogonal RDF keeps the legacy `z_pbc` switch when `pbc=None`; explicit three-axis
+masks must agree with resolved typed metadata. No fixture/golden, mapping,
+generated prep/job/structure or thesis-baseline change is included. Detailed
+synthetic checks and measured verification are in `docs/agent/GEN-3.md`.
 
 ## Stage 1 — dispatcher-only (historical)
 
@@ -355,9 +385,11 @@ observation is retained as a historical question, not a current physics claim.
 - **PBC and supported boxes:** shell analyses use dump/input per-axis flags.
   Synthetic MSD/O₂/RDF checks and TEST-3 cover periodic x/y and nonperiodic z;
   slab handling is not an unconditional "z off" assumption. Direct analysis APIs
-  retain legacy defaults when PBC is omitted; supply it explicitly. Triclinic
-  dump/data boxes are rejected, not silently flattened or correctly handled;
-  fractional-coordinate support remains GEN-3.
+  retain legacy defaults when PBC is omitted; supply it explicitly. Legacy
+  readers still reject triclinic input by default; GEN-3's Box-aware path supports
+  restricted Cartesian cells for RDF and fixed-cell MSD. General rotated cells,
+  scaled/unwrapped conversion and unsupported tilted consumers still reject.
+  Core fractional transforms do not imply automatic dump-coordinate conversion.
 - **Atom identity and numerics:** MSD follows the initial atom-ID cohort and
   sums all three Cartesian displacement components; PBC controls unwrapping,
   not a projection onto periodic axes. The approved MSD and RDF fixes have

@@ -12,6 +12,28 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Restricted-triclinic geometry (GEN-3; ADR-0003)
+
+- Add immutable `lammpkeeper.io.Box` with physical bounds, restricted tilts and
+  explicit/unresolved lattice-vector PBC; add NumPy coordinate transforms,
+  wrapping, exact nearest images and constant-cell step unwrapping in core.
+- Add opt-in `box_model=True` dump reading and structured `read_data_file` while
+  preserving legacy reader defaults and data tuples. Indexed cells retain their
+  source/header contract; foreign/stale/incompatible indices reject before parsing.
+- Support restricted-triclinic Cartesian RDF and constant-origin/matrix/PBC MSD.
+  Closest-image selection uses complete bounded QR search, protected objective
+  comparisons and exact-rational fallback, not component-wise fractional rounding.
+  Unsupported conditioning, numeric scales or search work raise visibly.
+- Route post sessions through typed cells, preserve PBC ownership across input
+  changes/cache eviction and reject unsupported tilted slab/O₂/plot consumers.
+  Geometry-independent charge/spin quantities remain separate. General rotated
+  cells, scaled/unwrapped conversion, image reconstruction and deforming-cell
+  triclinic MSD remain unsupported.
+- Preserve orthogonal Fe-O goldens and the legacy RDF `z_pbc` override when no
+  three-axis mask is given. No fixture, prep output, FF mapping or thesis tag
+  change; synthetic checks do not constitute LAMMPS/HPC or material validation.
+  Additive APIs require no legacy API removal or deprecation.
+
 ### System-owned species selections (GEN-1; ADR-0002)
 
 - Add immutable `lammpkeeper.core.SpeciesMap` for explicit labels, repeated-label

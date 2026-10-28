@@ -35,8 +35,8 @@ import numpy as np
 
 from lammpkeeper.common.mapping import FORCE_FIELDS, type_to_label
 
-# Dump/data geometry here is orthogonal only; arbitrary property columns do not
-# imply support for tilted cells, scaled-coordinate conversion or every atom style.
+# Legacy dump/data APIs are orthogonal only. The typed opt-in accepts restricted
+# triclinic cells, but does not convert scaled/unwrapped dump coordinate families.
 # Units and species provenance come from input/log metadata when available;
 # detect_forcefield retains a visibly warned, domain-specific legacy guess.
 # Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
@@ -47,7 +47,7 @@ if not os.environ.get('LKPR_NO_NATIVE'):
     except ImportError:
         pass
 
-def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float64):
+def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float64, *, box_model=False):
     """
     Universal LAMMPS dump / lammpstrj trajectory file parser.
 
@@ -82,6 +82,8 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
         columns:    iterable[str] or None — Keep only these columns
                     (e.g. ANALYSIS_COLUMNS). None keeps every column.
         dtype:      numpy dtype of the 'atoms' arrays (float32 halves memory).
+        box_model:  bool — Opt into per-frame Box metadata and restricted tilt.
+                    Tilted frames require literal Cartesian x, y, z columns.
 
     All frames are held in memory; iterate a DumpReader instead to process
     one frame at a time.
@@ -98,7 +100,7 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
                    Example: col_idx['z'] = 4 means atoms[:, 4] gives z-coordinates.
     """
     reader = DumpReader(filepath, columns=columns, dtype=dtype,
-                        stride=stride, max_frames=max_frames)
+                        stride=stride, max_frames=max_frames, box_model=box_model)
     frames = list(reader)
     col_idx = dict(reader.col_idx) if reader.raw_columns else None
     return frames, list(reader.columns), col_idx
@@ -197,6 +199,9 @@ class DumpReader:
         stride:     int — Yield every Nth frame, starting with the first.
         max_frames: int or None — Stop after yielding this many frames
                     (None or 0 = no limit).
+        box_model:  bool — Add authoritative cell (Box) and tilt metadata to
+                    every frame; accept restricted-triclinic cells only with
+                    complete literal Cartesian x, y, z in the raw layout.
 
     Raises ValueError on a malformed or truncated atom block, or when a later
     frame changes the column layout.
@@ -205,7 +210,7 @@ class DumpReader:
     # Snapshot source identity and fix the retained column layout for this reader.
     # Selection follows file order, not the caller's requested order; unknown
     # requested names are ignored. Only float32/float64 use the native backend.
-    def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None):
+    def __init__(self, filepath, columns=None, dtype=np.float64, stride=1, max_frames=None, *, box_model=False):
         """Bind an unchanged source to fixed columns, dtype and validated limits."""
         stride, max_frames = _validate_frame_limits(stride, max_frames)
         self.filepath = filepath
@@ -213,6 +218,7 @@ class DumpReader:
         self.dtype = np.dtype(dtype)
         self.stride = stride
         self.max_frames = max_frames
+        self.box_model = bool(box_model)
         self.raw_columns = self._read_layout()
         self._type_ids = set()
         self._type_labels = {}
@@ -286,7 +292,7 @@ class DumpReader:
         with open(self.filepath, 'r') as f:
             for line in f:
                 if line.strip() == 'ITEM: TIMESTEP':
-                    _, _, _, header = self._read_header(f, first=True)
+                    _, _, _, header, _ = self._read_header(f, first=True)
                     return header
                 if line.strip():
                     raise ValueError(f"{self.filepath}: invalid dump header: {line.strip()}")
@@ -305,6 +311,24 @@ class DumpReader:
         if self._signature() != self._source_signature:
             raise ValueError(f"{self.filepath}: dump source changed; create a new DumpReader/index/cache")
 
+    def _index_contract(self):
+        """Snapshot header interpretation, excluding atom projection and view limits."""
+        boundary = None if self.boundary is None else tuple(self.boundary)
+        return self.box_model, tuple(self.raw_columns), boundary
+
+    def _check_index(self, index):
+        """Reject unbound, foreign/stale or incompatible indexes before atom parsing."""
+        source = getattr(index, '_source_signature', None)
+        contract = getattr(index, '_header_contract', None)
+        if source is None or contract is None:
+            raise ValueError(f"{self.filepath}: unbound index; create an index with DumpReader.index()")
+        if source != self._source_signature:
+            raise ValueError(f"{self.filepath}: dump index source does not match this reader "
+                             "(foreign or stale index); create a new index")
+        if contract != self._index_contract():
+            raise ValueError(f"{self.filepath}: dump index contract does not match this reader's "
+                             "box_model, raw column layout or boundary flags; create a compatible index")
+
     def _read_header(self, stream, first=False):
         """Shared structural/geometry preflight for streaming and indexed paths."""
         # Adapt both text streams and binary mmap streams to stripped header text.
@@ -322,13 +346,18 @@ class DumpReader:
         bounds_header = line()
         if bounds_header.split()[:3] != ['ITEM:', 'BOX', 'BOUNDS']:
             raise ValueError(f"{self.filepath}: invalid box header at step {timestep}")
-        # Reject restricted/general triclinic markers and extra bound values;
-        # dropping tilt would otherwise produce plausible but incorrect geometry.
+        # Recognize only LAMMPS restricted tilt in its exact xy/xz/yz order.
+        # General vectors and partial markers must not become orthogonal bounds.
         tokens = bounds_header.split()[3:]
-        if any(t in tokens for t in ('xy', 'xz', 'yz', 'abc', 'origin')):
+        restricted = tokens[:3] == ['xy', 'xz', 'yz']
+        if any(t in tokens for t in ('abc', 'origin', 'avec', 'bvec', 'cvec')):
             raise ValueError(f"{self.filepath}: triclinic dump boxes are not supported (step {timestep})")
+        if any(t in tokens for t in ('xy', 'xz', 'yz')) and (not self.box_model or not restricted):
+            raise ValueError(f"{self.filepath}: triclinic dump boxes require box_model=True and "
+                             f"the complete xy xz yz header (step {timestep})")
+        flag_tokens = tokens[3:] if restricted else tokens
         boundary = parse_boundary_flags(bounds_header)
-        if tokens and (len(tokens) != 3 or boundary is None):
+        if flag_tokens and (len(flag_tokens) != 3 or boundary is None):
             raise ValueError(f"{self.filepath}: malformed boundary flags at step {timestep}")
         if first:
             self.boundary = boundary
@@ -336,26 +365,44 @@ class DumpReader:
             raise ValueError(f"{self.filepath}: boundary flags change at step {timestep}: "
                              f"{boundary} != {self.boundary}")
         box = []
+        tilt = []
         for _ in range(3):
             parts = line().split()
-            if len(parts) > 2:
+            expected = 3 if restricted else 2
+            if len(parts) > expected:
                 raise ValueError(f"{self.filepath}: triclinic/extra box values at step {timestep}")
-            if len(parts) != 2:
+            if len(parts) != expected:
                 raise ValueError(f"{self.filepath}: malformed box bounds at step {timestep}")
-            lo, hi = map(float, parts)
-            if not np.isfinite([lo, hi]).all() or hi <= lo:
+            try:
+                values = list(map(float, parts))
+            except ValueError:
+                raise ValueError(f"{self.filepath}: invalid box bounds at step {timestep}") from None
+            lo, hi = values[:2]
+            if not np.isfinite(values).all() or hi <= lo:
                 raise ValueError(f"{self.filepath}: invalid box bounds at step {timestep}")
             box.append([lo, hi])
+            tilt.append(values[2] if restricted else 0.0)
+        cell = None
+        if self.box_model:
+            from lammpkeeper.io import Box
+            try:
+                cell = Box.from_dump_bounds(box, tilt=tilt, pbc=pbc_from_boundary(boundary))
+            except ValueError as exc:
+                raise ValueError(f"{self.filepath}: invalid box at step {timestep}: {exc}") from None
+            box = cell.bounds
         header = line().split()
         if header[:2] != ['ITEM:', 'ATOMS'] or len(header) < 3:
             raise ValueError(f"{self.filepath}: invalid ATOMS header at step {timestep}")
         header = header[2:]
         if len(set(header)) != len(header):
             raise ValueError(f"{self.filepath}: duplicate atom column header at step {timestep}")
+        if cell is not None and not cell.is_orthogonal and not {'x', 'y', 'z'}.issubset(header):
+            raise ValueError(f"{self.filepath}: nonorthogonal box requires literal Cartesian x, y, z "
+                             f"columns; scaled/unwrapped/image reconstruction is unsupported (step {timestep})")
         if not first and header != self.raw_columns:
             raise ValueError(f"{self.filepath}: column layout changes at step {timestep}: "
                              f"{header} != {self.raw_columns}")
-        return timestep, natoms, np.array(box), header
+        return timestep, natoms, np.array(box), header, cell
 
     def index(self):
         """
@@ -365,13 +412,17 @@ class DumpReader:
         speed), so indexing costs about one sequential read of the file.
         Returns a DumpIndex with per-frame timestep, natoms, box and the byte
         span of the atom block, which read_frame() uses for random access.
+        The index is bound to this unchanged source and header interpretation;
+        compatible readers may share it despite different projections/dtypes.
         """
         # Index every source frame; stride/max_frames belong to the later view.
         # This validates headers, not atom payloads: malformed rows fail on load.
         # Only offsets/metadata survive the mmap context; no borrowed mmap views do.
-        idx = DumpIndex()
         self._check_source()
+        idx = DumpIndex(source_signature=self._source_signature,
+                        header_contract=self._index_contract())
         if os.path.getsize(self.filepath) == 0:
+            self._check_source()
             return idx.finalize()
         marker = b'ITEM: TIMESTEP'
         can_release = hasattr(mmap, 'MADV_DONTNEED')
@@ -389,30 +440,49 @@ class DumpReader:
                     released = upto
                 mm.seek(pos)
                 mm.readline()                   # ITEM: TIMESTEP
-                timestep, natoms, box, _ = self._read_header(mm)
+                timestep, natoms, box, _, cell = self._read_header(mm)
                 start = mm.tell()
                 pos = mm.find(marker, start)
-                idx.add(timestep, natoms, box, start, size if pos == -1 else pos)
+                idx.add(timestep, natoms, box, start, size if pos == -1 else pos, cell=cell)
+        self._check_source()
         return idx.finalize()
 
     def read_frame(self, index, k):
-        """Parse frame k of `index` (from self.index()) with one seek + read."""
-        # The index must belong to this reader/source. Copy bounds so mutating a
-        # returned frame cannot change the index's geometry for future reads.
+        """Load frame k from an index of the same source and header contract.
+
+        Indexes from compatible readers of the unchanged source are accepted;
+        dtype, column projection, native backend and view limits may differ.
+        Unbound, foreign, stale or incompatible indexes fail before atom parsing.
+        """
+        # Require the same source/interpretation. Copy compatibility bounds so
+        # mutating a returned frame cannot change the index's geometry.
         self._check_source()
+        self._check_index(index)
         start, end = int(index.block_start[k]), int(index.block_end[k])
         natoms, timestep = int(index.natoms[k]), int(index.timesteps[k])
+        box = index.boxes[k].copy()
+        cell = None
+        if self.box_model:
+            cell = index.cells[k] if index.cells is not None else None
+            if cell is None or not np.array_equal(box, cell.bounds):
+                raise ValueError(f"{self.filepath}: indexed box/cell metadata disagree at step {timestep}; "
+                                 "create a Box-aware index with this reader")
         with open(self.filepath, 'rb') as f:
             f.seek(start)
             block = f.read(end - start)
+        self._check_source()
         atoms, elements = self._parse_block(block, natoms, timestep)
-        return {
+        frame = {
             'timestep': timestep,
             'natoms': natoms,
-            'box': index.boxes[k].copy(),
+            'box': box,
             'atoms': atoms,
             'elements': elements,
         }
+        if self.box_model:
+            frame['cell'] = cell
+            frame['tilt'] = cell.tilt
+        return frame
 
     def frame_nbytes(self, natoms):
         """Estimated memory of one parsed frame (atoms + 2-letter elements)."""
@@ -438,7 +508,7 @@ class DumpReader:
                     continue
                 if line.strip() != 'ITEM: TIMESTEP':
                     raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: {line.strip()}")
-                timestep, natoms, box, _ = self._read_header(f)
+                timestep, natoms, box, _, cell = self._read_header(f)
 
                 n_seen += 1
                 if (n_seen - 1) % self.stride:
@@ -448,13 +518,17 @@ class DumpReader:
 
                 block = ''.join([f.readline() for _ in range(natoms)]).encode()
                 atoms, elements = self._parse_block(block, natoms, timestep)
-                yield {
+                frame = {
                     'timestep': timestep,
                     'natoms': natoms,
                     'box': box,
                     'atoms': atoms,
                     'elements': elements,
                 }
+                if self.box_model:
+                    frame['cell'] = cell
+                    frame['tilt'] = cell.tilt
+                yield frame
 
                 n_yielded += 1
                 if self.max_frames and n_yielded >= self.max_frames:
@@ -548,17 +622,25 @@ class DumpReader:
 
 
 class DumpIndex:
-    """Per-frame metadata from DumpReader.index(): arrays of length n_frames."""
+    """Per-frame metadata bound to the source/header contract of DumpReader.index().
+
+    Arrays have length n_frames. A manually built index is unbound by default
+    and cannot be read through DumpReader.read_frame; use reader.index() for
+    validated source provenance. Reader compatibility excludes atom projections,
+    dtypes, parsing backends and frame-selection limits.
+    """
 
     # Accumulate scan results before converting them to compact typed arrays.
-    def __init__(self):
-        """Create an unfinished metadata builder with no frame payloads."""
+    def __init__(self, *, source_signature=None, header_contract=None):
+        """Create a metadata builder, optionally bound by the scanning reader."""
         self._rows = []
+        self._source_signature = source_signature
+        self._header_contract = header_contract
 
     # Append one frame's metadata and half-open atom-payload byte interval.
-    def add(self, timestep, natoms, box, block_start, block_end):
+    def add(self, timestep, natoms, box, block_start, block_end, *, cell=None):
         """Append source metadata and the half-open byte span of one atom block."""
-        self._rows.append((timestep, natoms, box, block_start, block_end))
+        self._rows.append((timestep, natoms, box, block_start, block_end, cell))
 
     # Seal the builder once, releasing row tuples; consumers treat the public
     # arrays as read-only even though NumPy write protection is not enforced.
@@ -570,6 +652,8 @@ class DumpIndex:
         self.boxes = np.array([r[2] for r in rows], dtype=np.float64).reshape(-1, 3, 2)
         self.block_start = np.array([r[3] for r in rows], dtype=np.int64)
         self.block_end = np.array([r[4] for r in rows], dtype=np.int64)
+        # Retain the authoritative cell, never reconstruct it from bare bounds.
+        self.cells = tuple(r[5] for r in rows) if rows and rows[0][5] is not None else None
         del self._rows
         return self
 
@@ -1233,11 +1317,31 @@ def parse_data_file(filepath):
                 Returns empty array if no box bounds found.
         masses: dict[int, float] — Atom type ID -> mass in atomic mass units.
     """
+    atoms, box, masses, _ = _parse_data_file(filepath)
+    return atoms, box, masses
+
+
+def read_data_file(filepath, *, pbc=None):
+    """Read stored Cartesian atoms, physical Box, masses and explicit species.
+
+    Restricted ``xy xz yz`` tilt is supported. Data-file bounds are already
+    physical, unlike enclosing dump bounds; image flags are validated but do
+    not unwrap coordinates. PBC remains unknown unless explicitly supplied.
+    """
+    atoms, cell, masses, species = _parse_data_file(filepath, box_model=True,
+                                                  pbc=pbc, collect_species=True)
+    return {'atoms': atoms, 'cell': cell, 'masses': masses, 'species': species}
+
+
+def _parse_data_file(filepath, *, box_model=False, pbc=None, collect_species=False):
+    """Share structural validation while preserving the legacy geometry contract."""
     # This is a structural subset reader: topology/velocities are not returned,
     # charge/molecule/image fields are validated but not used to unwrap positions.
     # Box bounds carry no PBC flags or unit style; callers must obtain those from
     # run metadata rather than infer them from lengths or numeric mass values.
     atoms, bounds, masses = [], {}, {}
+    tilt = None
+    mass_comments = []
     section, atom_style, declared_atoms, declared_types = None, None, None, None
     seen_ids = set()
     saw_masses = False
@@ -1253,10 +1357,21 @@ def parse_data_file(filepath):
             if not stripped:
                 continue
             parts = stripped.split()
-            if (parts[-3:] == ['xy', 'xz', 'yz'] or
-                    any(token in parts for token in ('avec', 'bvec', 'cvec')) or
-                    parts[-1:] == ['abc']):
+            if any(token in parts for token in ('avec', 'bvec', 'cvec', 'abc', 'origin')):
                 raise ValueError(f"{filepath}:{lineno}: triclinic data boxes are not supported")
+            if any(token in parts for token in ('xy', 'xz', 'yz')):
+                if not box_model:
+                    raise ValueError(f"{filepath}:{lineno}: triclinic data boxes are not supported")
+                if len(parts) != 6 or parts[-3:] != ['xy', 'xz', 'yz'] or section is not None:
+                    raise ValueError(f"{filepath}:{lineno}: malformed restricted triclinic tilt line")
+                try:
+                    values = tuple(map(float, parts[:3]))
+                except ValueError:
+                    raise ValueError(f"{filepath}:{lineno}: invalid box tilt") from None
+                if tilt is not None or not np.isfinite(values).all():
+                    raise ValueError(f"{filepath}:{lineno}: invalid/duplicate box tilt")
+                tilt = values
+                continue
             if len(parts) == 2 and parts[1] == 'atoms':
                 declared_atoms = int(parts[0])
                 if declared_atoms < 0:
@@ -1267,6 +1382,11 @@ def parse_data_file(filepath):
                 if declared_types < 0:
                     raise ValueError(f"{filepath}:{lineno}: negative atom type count")
                 continue
+            bound_names = ('xlo', 'xhi', 'ylo', 'yhi', 'zlo', 'zhi')
+            if (box_model and any(token in bound_names for token in parts) and
+                    not (len(parts) == 4 and parts[-2:] in
+                         (['xlo', 'xhi'], ['ylo', 'yhi'], ['zlo', 'zhi']))):
+                raise ValueError(f"{filepath}:{lineno}: malformed box bounds")
             if len(parts) == 4 and parts[-2:] in (['xlo', 'xhi'], ['ylo', 'yhi'], ['zlo', 'zhi']):
                 axis = parts[-2][0]
                 values = list(map(float, parts[:2]))
@@ -1296,6 +1416,8 @@ def parse_data_file(filepath):
                     if declared_types is not None and tid > declared_types:
                         raise ValueError('mass type exceeds declared atom types')
                     masses[tid] = mass
+                    if collect_species:
+                        mass_comments.append((tid, comment, lineno))
                 elif section == 'Atoms':
                     if atom_style is None:
                         if len(parts) in (5, 8):
@@ -1339,8 +1461,34 @@ def parse_data_file(filepath):
     if bounds and len(bounds) != 3:
         raise ValueError(f"{filepath}: incomplete box bounds")
     box = [bounds[axis] for axis in 'xyz'] if bounds else []
+    box = np.array(box, dtype=float).reshape(-1, 2)
+    if box_model:
+        from lammpkeeper.io import Box
+        if box.shape != (3, 2):
+            raise ValueError(f"{filepath}: complete physical box bounds are required")
+        box = Box(box[:, 0], box[:, 1], tilt=(0.0, 0.0, 0.0) if tilt is None else tilt, pbc=pbc)
+    labels = {}
+    for tid, comment, lineno in mass_comments:
+        label = _mass_species_label(comment, filepath, lineno)
+        if label is not None:
+            labels[tid] = label
     return (np.array(atoms, dtype=float).reshape(-1, 5),
-            np.array(box, dtype=float).reshape(-1, 2), masses)
+            box, masses, labels)
+
+
+def _mass_species_label(comment, filepath, lineno):
+    """Extract only an exact single label or species= label, warning on ambiguity."""
+    if not comment.strip():
+        return None
+    tokens = comment.split()
+    label = None
+    if len(tokens) == 1:
+        token = tokens[0]
+        label = (token[len('species='):] or None) if token.startswith('species=') else token
+    if label is None:
+        warnings.warn(f"{filepath}:{lineno}: ambiguous Masses species comment "
+                      f"{comment.strip()!r}; ignoring label", RuntimeWarning, stacklevel=3)
+    return label
 
 
 def parse_data_species(filepath):
@@ -1350,34 +1498,7 @@ def parse_data_species(filepath):
     unresolved; ambiguous comments warn rather than guessing from chemical mass.
     Sparse numeric IDs and the existing ``parse_data_file`` return stay intact.
     """
-    parse_data_file(filepath)
-    labels = {}
-    section = None
-    with open(filepath, 'r') as stream:
-        next(stream, None)
-        for lineno, line in enumerate(stream, 2):
-            body, _, comment = line.partition('#')
-            body = body.strip()
-            if not body:
-                continue
-            if re.fullmatch(r'[A-Za-z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*)*', body):
-                section = body
-                continue
-            if section != 'Masses' or not comment.strip():
-                continue
-            tokens = comment.split()
-            label = None
-            if len(tokens) == 1:
-                token = tokens[0]
-                if token.startswith('species='):
-                    label = token[len('species='):] or None
-                else:
-                    label = token
-            if label is None:
-                warnings.warn(f"{filepath}:{lineno}: ambiguous Masses species comment "
-                              f"{comment.strip()!r}; ignoring label", RuntimeWarning, stacklevel=2)
-                continue
-            labels[int(body.split()[0])] = label
+    _, _, _, labels = _parse_data_file(filepath, collect_species=True)
     return labels
 
 

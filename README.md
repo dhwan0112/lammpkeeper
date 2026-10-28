@@ -72,6 +72,22 @@ manifest/log changes retain it. Dump-only FF classification still has warned
 heuristics (GEN-2), so generic selection is not complete FF generality.
 See [`docs/agent/GEN-1.md`](docs/agent/GEN-1.md) for schema, commands and limits.
 
+## Restricted-triclinic geometry
+
+The post shell supports restricted LAMMPS `xy/xz/yz` cells with Cartesian
+`x,y,z` coordinates for **RDF** and **constant-cell MSD**. PBC must come from dump
+flags or explicit input boundaries; tilted cells do not infer it from a surface.
+Unsupported tilted slab/O₂ analyses and plots fail visibly, so use individual
+`analyze rdf` / `analyze msd` commands rather than `analyze all` for these cells.
+
+Python callers can opt into `parse_dump(..., box_model=True)` or use
+`read_data_file(...)` from `lammps_post.parsers`. Frames carry an immutable
+`lammpkeeper.io.Box` in `frame['cell']`; compatibility bounds alone are not the
+cell geometry. Legacy reader defaults remain orthogonal-only. General rotated
+cells, scaled/unwrapped conversion, image reconstruction and deforming-cell
+triclinic MSD are not supported. See [`docs/agent/GEN-3.md`](docs/agent/GEN-3.md)
+for numerical limits, sampling assumptions and the approved API.
+
 ## Tests
 
 ```bash
@@ -86,7 +102,7 @@ The numeric regression uses the ACE example trajectory shipped in
 ## Layout
 
 ```
-lammpkeeper/     unified CLI + core/ (SpeciesMap) + common/ (presets, display)
+lammpkeeper/     unified CLI + core/ (species, geometry) + io/ (Box) + common/
 lammps_pre/      structure building & LAMMPS input generation
 lammps_post/     trajectory analysis & plotting
 tests/           regression suite + fixtures
