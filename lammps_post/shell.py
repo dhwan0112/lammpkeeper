@@ -38,14 +38,14 @@ from lammpkeeper.common.hosted import HostedShellMixin
 
 from lammps_post.parsers import (
     parse_log, parse_data_file, detect_forcefield, parse_input,
+    parse_data_species, parse_run_manifest,
     DumpReader, LazyFrames, ANALYSIS_COLUMNS, DEFAULT_CACHE_BYTES,
     pbc_from_boundary,
 )
 
 from lammpkeeper.common.mapping import (
     element_to_type as ff_element_to_type,
-    type_to_label as ff_type_to_label,
-    species_type_sets, resolve_species, species_display_name,
+    species_type_sets,
 )
 
 from lammps_post.analysis import (
@@ -241,17 +241,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.ff_info['unit_system'] = config['units']
         if config.get('dt_fs'):
             s.ff_info['dt_fs'] = config['dt_fs']
-        if config['element_map']:
-            elements = dict(config['element_map'])
-            try:
-                canonical = {t: element for element, t in
-                             ff_element_to_type(config['forcefield']).items()}
-            except KeyError:
-                canonical = None
-            # Element slots are not analysis identities. Restore the canonical
-            # labels only when the complete explicit map matches that preset.
-            s.ff_info['atom_types'] = (ff_type_to_label(config['forcefield'])
-                                      if elements == canonical else elements)
+        s.species_sources = dict(s.species_sources,
+                                 input=dict(config.get('element_map', {})))
+        s.refresh_species()
         if not s.dump_frames and config.get('pair_coeff') and config['pair_coeff'].get('elements'):
             s.ff_info['has_charge'] = config['forcefield'] == 'reaxff'
 
@@ -418,8 +410,43 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # ─── FILE I/O ───
 
     def do_load(self, arg):
+        """Load dump|log|data|input|manifest <path> atomically per source.
+
+        Dump options: --max N, --stride N, --lite, --all-columns, --cache-mb N.
+        A manifest explicitly adds species groups/provenance; unresolved group
+        IDs remain pending until typed sources arrive. No sidecar is discovered
+        automatically. Comma-separated loads commit one source at a time.
         """
-        Load a file: load dump|log|data|input <filepath> [--max N] [--stride N]
+        if ',' in arg:
+            for segment in (part.strip() for part in arg.split(',')):
+                if segment:
+                    self.do_load(segment)
+            return
+        s = self.state
+        original = dict(s.__dict__)
+        s.ff_info = dict(s.ff_info, atom_types=dict(s.atom_types))
+        s.cache = dict(s.cache)
+        s.species_sources = {key: dict(value) for key, value in s.species_sources.items()}
+        s._metadata_transaction = True
+        try:
+            self._load_source(arg)
+            if original['_species_override'] is not None and s._species_override is None:
+                warnings.warn('Manual species override cleared by typed source load; '
+                              'restored automatic source metadata', RuntimeWarning, stacklevel=2)
+            if isinstance(s.dump_frames, LazyFrames):
+                # Frames parsed for load-time inspection must be checked again
+                # under the committed identity map before numerical analysis.
+                s.dump_frames.set_transform(s.dump_frames._store.transform)
+        except Exception:
+            s.__dict__.clear()
+            s.__dict__.update(original)
+            raise
+        finally:
+            s._metadata_transaction = original['_metadata_transaction']
+
+    def _load_source(self, arg):
+        """
+        Load a file: load dump|log|data|input|manifest <filepath> [--max N] [--stride N]
                      dump only: [--lite] [--all-columns] [--cache-mb N]
           Only the columns analyses read (id type element x y z q) are kept.
           --lite         store them as float32 (half the memory, approximate)
@@ -435,13 +462,6 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         successful segment remains loaded if a later segment raises.
         """
         parts = shlex.split(arg) if arg.strip() else []
-
-        # ── Multi-file: split on comma and load each ──
-        if ',' in arg:
-            segments = [s.strip() for s in arg.split(',') if s.strip()]
-            for seg in segments:
-                self.do_load(seg)
-            return
 
         # ── Auto-detect type from extension if only a path is given ──
         if len(parts) == 1 and os.path.exists(parts[0]):
@@ -462,8 +482,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # Ask for file type if missing
         if len(parts) < 1:
-            ftype = self._ask("File type (dump/log/data/input)")
-            if not ftype or ftype.lower() not in ('dump', 'log', 'data', 'input'):
+            ftype = self._ask("File type (dump/log/data/input/manifest)")
+            if not ftype or ftype.lower() not in ('dump', 'log', 'data', 'input', 'manifest'):
                 print("  Cancelled. Usage: load dump|log|data <filepath>")
                 return
             parts = [ftype]
@@ -504,6 +524,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             raise ValueError(f"File not found: {fpath}")
 
         if ftype == 'dump':
+            self.state._species_override = None
             progress_msg(f"Loading dump: {fpath} ...")
             try:
                 reader = DumpReader(fpath,
@@ -574,13 +595,51 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             ff_info = detect_forcefield(columns, col_idx, frames)
             ff_info['has_velocity'] = 'vx' in reader.raw_columns
             self.state.ff_info = ff_info
+            self.state._dump_ff_info = dict(ff_info, atom_types=dict(ff_info['atom_types']))
+            self.state.species_sources = dict(self.state.species_sources,
+                                              dump=dict(reader.type_labels))
+            self.state._dump_type_ids = reader.type_ids
 
             # Authoritative species must precede surface detection in both
             # load orders, not merely overwrite labels after deriving geometry.
             if self.state.input_config:
                 self._apply_input_config()
             else:
+                self.state.refresh_species()
                 self._invalidate_metadata()
+
+            previous_transform = frames._store.transform
+
+            def validate_species_frame(frame):
+                """Validate newly consumed identities before kernels receive a frame."""
+                if previous_transform is not None:
+                    frame = previous_transform(frame)
+                s = self.state
+                if s.dump_frames is not frames:
+                    return frame
+                evidence = reader.type_labels
+                if (evidence != s.species_sources.get('dump', {})
+                        or reader.type_ids != s._dump_type_ids):
+                    before = dict(s.atom_types)
+                    # The accessor validates conflicts and updates the raw ledger.
+                    s.species_map
+                    if before != s.atom_types and not s._metadata_transaction:
+                        raise ValueError('Dump species metadata expanded while streaming; '
+                                         'retry analysis with the updated species map')
+                if any(s.species_sources.values()) and not s._metadata_transaction:
+                    known = set(s._combined_species())
+                    if s._species_override is not None:
+                        known.update(s._species_override)
+                    for members in s.species_groups.values():
+                        known.update(members)
+                    present = set(frame['atoms'][:, col_idx['type']].astype(int))
+                    missing = present - known
+                    if missing:
+                        raise ValueError(f'No explicit species labels for dump type IDs '
+                                         f'{sorted(missing)}')
+                return frame
+
+            frames.set_transform(validate_species_frame)
 
             n_atoms = frames[0]['natoms']
             n_frames = len(frames)
@@ -625,10 +684,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Stages: {stages}")
 
         elif ftype == 'data':
+            self.state._species_override = None
             # Static structure mass belongs to this file's counts and Masses;
             # incomplete masses must not leave an old total available.
             progress_msg(f"Loading data file: {fpath} ...")
             atoms, box, masses = parse_data_file(fpath)
+            species = parse_data_species(fpath)
             if len(atoms) == 0:
                 raise ValueError('No atoms found in data file')
 
@@ -636,8 +697,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.data_atoms = atoms
             self.state.data_box = box
             self.state.data_masses = masses
+            self.state.species_sources = dict(self.state.species_sources, data=species)
+            self.state.refresh_species()
             self.state.total_mass_amu = None
-            self.state.clear_cache()
+            self._invalidate_metadata()
 
             # Compute total system mass from type counts and masses
             if masses and len(atoms) > 0:
@@ -655,13 +718,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 mass_str = ', '.join(f"type {k}: {v}" for k, v in masses.items())
                 progress_msg(f"Masses: {mass_str}")
         elif ftype == 'input':
+            self.state._species_override = None
             # Re-seed from the current dump/defaults before overlaying the new
             # input, preventing metadata from an older input from leaking in.
             progress_msg(f"Loading input: {fpath} ...")
             config = parse_input(fpath)
             s = self.state
-            s.ff_info = (detect_forcefield(s.dump_columns, s.dump_col_idx, s.dump_frames)
-                         if s.dump_frames else SessionState().ff_info)
+            s.ff_info = dict(s._dump_ff_info or SessionState().ff_info)
             self.state.input_path = fpath
             self.state.input_config = config
 
@@ -699,8 +762,16 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             # Apply input config to override/enhance ff_info if dump is loaded
             self._apply_input_config()
 
+        elif ftype == 'manifest':
+            manifest = parse_run_manifest(fpath)
+            self.state.run_manifest = manifest
+            self.state.manifest_path = manifest['path']
+            self.state._validate_species(self.state.atom_types, allow_pending=True)
+            self._invalidate_metadata()
+            progress_msg(f"Loaded species manifest: {self.state.manifest_path}")
+
         else:
-            raise ValueError(f"Unknown file type: {ftype}. Use dump|log|data|input.")
+            raise ValueError(f"Unknown file type: {ftype}. Use dump|log|data|input|manifest.")
 
         # ── After first load: suggest output directory ──
         self._suggest_output_dir(fpath)
@@ -708,16 +779,42 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def complete_load(self, text, line, begidx, endidx):
         """Complete source kinds first, then filesystem paths for load arguments."""
         tokens = line.split()
-        if len(tokens) == 2 and not text:
-            return ['dump ', 'log ', 'data ', 'input ']
+        if len(tokens) == 1 or (len(tokens) == 2 and not text):
+            return ['dump ', 'log ', 'data ', 'input ', 'manifest ']
         if len(tokens) == 2:
-            return [t + ' ' for t in ['dump', 'log', 'data', 'input'] if t.startswith(text)]
+            return [t + ' ' for t in ['dump', 'log', 'data', 'input', 'manifest'] if t.startswith(text)]
         if len(tokens) >= 3:
             return self._complete_path(text)
         return []
 
     def do_unload(self, arg):
-        """Unload dump|log|data|input|all and invalidate dependent state.
+        """Unload dump|log|data|input|manifest|all with atomic metadata validation."""
+        if arg.strip().lower() == 'all':
+            for source in ('dump', 'log', 'data', 'input', 'manifest'):
+                self.do_unload(source)
+            return
+        s = self.state
+        original = dict(s.__dict__)
+        s.ff_info = dict(s.ff_info, atom_types=dict(s.atom_types))
+        s.cache = dict(s.cache)
+        s.species_sources = {key: dict(value) for key, value in s.species_sources.items()}
+        s._metadata_transaction = True
+        try:
+            self._unload_source(arg)
+            if original['_species_override'] is not None and s._species_override is None:
+                warnings.warn('Manual species override cleared by typed source unload; '
+                              'restored automatic source metadata', RuntimeWarning, stacklevel=2)
+            if isinstance(s.dump_frames, LazyFrames):
+                s.dump_frames.set_transform(s.dump_frames._store.transform)
+        except Exception:
+            s.__dict__.clear()
+            s.__dict__.update(original)
+            raise
+        finally:
+            s._metadata_transaction = original['_metadata_transaction']
+
+    def _unload_source(self, arg):
+        """Unload dump|log|data|input|manifest|all and invalidate dependent state.
 
         Dump removal resets its geometry and manual surface flag, then restores
         any still-loaded input metadata. Input removal instead re-detects from
@@ -725,17 +822,17 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         plot recipes survive all branches as session preferences.
         """
         ftype = arg.strip().lower()
-        if ftype == 'all':
-            self.do_unload('dump')
-            self.do_unload('log')
-            self.do_unload('data')
-            self.do_unload('input')
-            return
+        if ftype in ('dump', 'data', 'input'):
+            self.state._species_override = None
         if ftype == 'dump':
             self.state.dump_path = None
             self.state.dump_frames = None
             self.state.dump_columns = None
             self.state.dump_col_idx = None
+            self.state._dump_ff_info = None
+            self.state._dump_type_ids = frozenset()
+            self.state.species_sources = {key: value for key, value in
+                                          self.state.species_sources.items() if key != 'dump'}
             self.state.ff_info = {'forcefield': 'unknown', 'unit_system': 'metal',
                                   'dt_fs': 1.0, 'has_charge': False, 'has_velocity': False,
                                   'has_element': False, 'atom_types': {}}
@@ -745,6 +842,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.z_focus = None
             if self.state.input_config:
                 self._apply_input_config()
+            else:
+                self.state.refresh_species()
             progress_msg("Dump data unloaded.")
         elif ftype == 'log':
             self.state.log_path = None
@@ -757,22 +856,32 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.data_box = None
             self.state.data_masses = None
             self.state.total_mass_amu = None
-            self.state.clear_cache()
+            self.state.species_sources = {key: value for key, value in
+                                          self.state.species_sources.items() if key != 'data'}
+            self.state.refresh_species()
+            self._invalidate_metadata()
             progress_msg("Data file unloaded.")
         elif ftype == 'input':
             self.state.input_path = None
             self.state.input_config = None
             s = self.state
-            s.ff_info = (detect_forcefield(s.dump_columns, s.dump_col_idx, s.dump_frames)
-                         if s.dump_frames else SessionState().ff_info)
+            s.species_sources = {key: value for key, value in s.species_sources.items()
+                                 if key != 'input'}
+            s.ff_info = dict(s._dump_ff_info or SessionState().ff_info)
+            s.refresh_species()
             self._invalidate_metadata()
             progress_msg("Input file unloaded.")
+        elif ftype == 'manifest':
+            self.state.run_manifest = None
+            self.state.manifest_path = None
+            self._invalidate_metadata()
+            progress_msg("Species manifest unloaded.")
         else:
-            raise ValueError('Usage: unload dump|log|data|input|all')
+            raise ValueError('Usage: unload dump|log|data|input|manifest|all')
 
     def complete_unload(self, text, line, begidx, endidx):
         """Complete unloadable source kinds, including the all-sources action."""
-        return [t for t in ['dump', 'log', 'data', 'input', 'all'] if t.startswith(text)]
+        return [t for t in ['dump', 'log', 'data', 'input', 'manifest', 'all'] if t.startswith(text)]
 
     # ─── INFO / SHOW ───
 
@@ -822,6 +931,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                     pairs.append(('  Type map', tm))
         else:
             pairs.append(('Input', C.dim('not loaded')))
+
+        pairs.append(('Manifest', s.manifest_path or C.dim('not loaded')))
 
         pairs.append(('Surface z', f"{s.surface_z:.1f} A" if s.surface_z else C.dim('not set')))
         pairs.append(('Normalize', C.ok('ON') if s.normalize else C.dim('OFF')))
@@ -1007,7 +1118,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         elif key == 'forcefield':
             valid = ['reaxff', 'ace', 'hdnnp']
             if val.lower() in valid:
+                previous_ff = s.ff_info['forcefield']
                 s.ff_info['forcefield'] = val.lower()
+                try:
+                    s._validate_species(s.atom_types, allow_pending=True)
+                except Exception:
+                    s.ff_info['forcefield'] = previous_ff
+                    raise
                 self._invalidate_metadata()
                 progress_msg(f"Force field: {val.upper()}")
             else:
@@ -1024,7 +1141,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                     raise ValueError(f'Duplicate type mapping for {type_id}')
                 type_map[type_id] = v
             species_type_sets(type_map, ff=s.ff)  # Validate before changing state.
+            s._validate_species(type_map, allow_pending=True, declared=True)
+            raw = s._combined_species()
+            changed = {tid: (label, type_map.get(tid)) for tid, label in raw.items()
+                       if type_map.get(tid) != label}
+            if changed:
+                warnings.warn(f'Manual analysis species override differs from raw source '
+                              f'metadata: {changed}', RuntimeWarning, stacklevel=2)
             s.ff_info['atom_types'] = type_map
+            s._species_override = dict(type_map)
             self._invalidate_metadata()
             progress_msg(f"Types: {type_map}")
         elif key == 'dpi':
@@ -1454,7 +1579,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _density_species(self):
         """Resolve profile labels to type unions, preserving ACE group semantics."""
-        return species_type_sets(self.state.atom_types, ff=self.state.ff)
+        return self.state.species_map.type_sets()
 
     def _density_one(self, species_type, species_name):
         """Cache one z-density profile for a type set, or all atoms when None.
@@ -1530,8 +1655,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
 
-        at = s.atom_types
-        species_names = sorted(species_type_sets(at, ff=s.ff))
+        species = s.species_map
+        species_names = sorted(species.type_sets())
         choices = ', '.join(species_names)
 
         # Parse before computing; malformed flags must not become pair names or
@@ -1602,10 +1727,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if len(pair_parts) != 2 or not all(pair_parts):
             raise ValueError(f'Invalid RDF pair {pair_str!r}; use species-species. '
                              f'Valid species: {choices}')
-        type_a = resolve_species(pair_parts[0], at, ff=s.ff)
-        type_b = resolve_species(pair_parts[1], at, ff=s.ff)
-        display_a = species_display_name(pair_parts[0], at, ff=s.ff)
-        display_b = species_display_name(pair_parts[1], at, ff=s.ff)
+        type_a = species.resolve(pair_parts[0])
+        type_b = species.resolve(pair_parts[1])
+        display_a = s.species_display_name(pair_parts[0])
+        display_b = s.species_display_name(pair_parts[1])
 
         # Optionally ask for number of frames if not specified (skip in batch mode)
         if not _batch and '--frames' not in ' '.join(opts) and not opts:
@@ -1734,7 +1859,6 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.cache.pop(f'density_{species_name or "all"}', None)
             raise ValueError('Density selection requires --species NAME')
 
-        at = s.atom_types
         inv = self._density_species()
         species_list = list(inv.keys())
 
@@ -1757,7 +1881,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if species_name is not None:
             # Single species requested
             s.cache.pop(f'density_{species_name}', None)
-            species_type = resolve_species(species_name, at, ff=s.ff)
+            species_type = s.species_map.resolve(species_name)
             progress_msg(f"Computing density profile (species: {species_name})...")
             result = compute_density_profile(s.dump_frames, s.dump_col_idx,
                                              species_type=species_type,
@@ -1833,8 +1957,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                      or opts[1].startswith('--')):
             option_error = 'MSD selection requires --species NAME'
 
-        at = s.atom_types
-        species_list = sorted(species_type_sets(at, ff=s.ff))
+        species = s.species_map
+        species_list = sorted(species.type_sets())
         if len(unique_species) > 1:
             raise ValueError(f'Ambiguous MSD species {unique_species!r}; specify one species. '
                              f'Valid species: {", ".join(species_list)}')
@@ -1856,8 +1980,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s.cache.pop(cache_key, None)
         if option_error:
             raise ValueError(f'{option_error}. Valid species: {", ".join(species_list)}')
-        species_type = resolve_species(species_name, at, ff=s.ff)
-        display_name = species_display_name(species_name, at, ff=s.ff)
+        species_type = species.resolve(species_name)
+        display_name = s.species_display_name(species_name)
 
         # Unwrap only the periodic axes: x, y for a p p f slab, all three for
         # a p p p cell, where a z boundary crossing would otherwise add ~Lz.
@@ -3566,7 +3690,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             [--cache-mb N]                  frame cache budget (default 128 MB)
   load log <path>                           Load LAMMPS log file
   load data <path>                          Load LAMMPS data file
-  unload dump|log|data                      Unload a file
+  load input <path>                         Load explicit input metadata
+  load manifest <path>                      Load species groups/provenance JSON
+  unload dump|log|data|input|manifest|all    Unload a source
   info                                      Session summary
 
 {C.bold('INSPECTION')}

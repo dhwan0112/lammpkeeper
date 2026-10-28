@@ -16,6 +16,8 @@ Design philosophy:
 ═══════════════════════════════════════════════════════════════
 """
 
+import warnings
+
 import numpy as np
 
 from lammps_post import Q_OXIDIZED_E, SURFACE_OFFSET_A
@@ -24,11 +26,10 @@ class SessionState:
     """
     Own raw inputs, mutable metadata, display settings and derived results.
 
-    The shell owns load/unload transitions and metadata precedence: dump
-    detection seeds ``ff_info``, explicit input metadata overlays it, and
-    ``set`` commands may override individual values. These fields do not carry
-    a separate provenance ledger, so log-specific units are resolved by the
-    shell rather than assumed to match the trajectory.
+    The shell owns atomic load/unload transitions. Raw typed identities are
+    retained separately for input, data and consumed dump frames; inferred
+    force-field metadata and legacy mutable ``ff_info`` remain compatibility
+    views. Log-specific units stay attached to their own thermo source.
 
     Design philosophy:
     - All loaded data is stored here (not in the shell class)
@@ -56,6 +57,16 @@ class SessionState:
 
         self.input_path = None      # Path to the loaded LAMMPS input (.in) file
         self.input_config = None    # dict from parse_input(): units, boundary, type_map, etc.
+        self.manifest_path = None
+        self.run_manifest = None
+        # Raw identities remain source-owned, before preset display adaptation.
+        self.species_sources = {}
+        self._dump_ff_info = None
+        self._user_species = {}
+        self._species_override = None
+        self._species_list_identity = None
+        self._dump_type_ids = frozenset()
+        self._metadata_transaction = False
 
         # ── Auto-detected force field properties ──
         # Detection supplies initial values, not authoritative run metadata;
@@ -128,6 +139,212 @@ class SessionState:
     def atom_types(self):
         """Expose type-ID labels; repeated labels and spin channels form groups."""
         return self.ff_info['atom_types']
+
+    @property
+    def species_groups(self):
+        """Return manifest-owned unions without turning pending IDs into types."""
+        return (self.run_manifest or {}).get('species_groups', {})
+
+    def _combined_species(self):
+        """Merge raw explicit sources, rejecting disagreements with provenance."""
+        combined = {}
+        identities = {}
+        owners = {}
+        for source in ('input', 'data', 'dump'):
+            raw = self.species_sources.get(source, {})
+            comparable = self._preset_identities(raw)
+            for type_id, label in raw.items():
+                if type_id in identities and identities[type_id] != comparable[type_id]:
+                    message = (f'Conflicting species for type {type_id}: '
+                               f'{owners[type_id]}={combined[type_id]!r}, '
+                               f'{source}={label!r}')
+                    warnings.warn(message, RuntimeWarning, stacklevel=3)
+                    raise ValueError(message)
+                combined.setdefault(type_id, label)
+                identities.setdefault(type_id, comparable[type_id])
+                owners.setdefault(type_id, source)
+        for type_id, label in self._user_species.items():
+            combined.setdefault(type_id, label)
+        return combined
+
+    def _preset_identities(self, raw):
+        """Compare established matching proxy slots without rewriting raw evidence."""
+        from lammpkeeper.common.mapping import FORCE_FIELDS
+        for preset in FORCE_FIELDS.values():
+            proxies = {value for element, label in preset.values() if element != label
+                       for value in (element, label)}
+            if (proxies.intersection(raw.values())
+                    and all(t in preset and value in preset[t] for t, value in raw.items())):
+                return {t: preset[t][0] for t in raw}
+        return dict(raw)
+
+    def _analysis_species(self, raw):
+        """Adapt only established matching preset slots, preserving raw evidence."""
+        from lammpkeeper.common.mapping import element_to_type, type_to_label
+        config = self.input_config or {}
+        ff = config.get('forcefield')
+        if not ff or ff == 'unknown':
+            ff = self.ff
+        try:
+            canonical = {t: element for element, t in element_to_type(ff).items()}
+            labels = type_to_label(ff)
+        except KeyError:
+            return dict(raw)
+        explicit_input = self.species_sources.get('input', {})
+        complete_input = bool(explicit_input) and explicit_input == canonical
+        dump = self.species_sources.get('dump', {})
+        proxy_elements = {element for t, element in canonical.items()
+                          if labels[t] != element}
+        matching_dump = (bool(proxy_elements & set(dump.values()))
+                         and all(canonical.get(t) == value for t, value in dump.items()))
+        if complete_input or matching_dump:
+            return {t: labels[t] if canonical.get(t) == value else value
+                    for t, value in raw.items()}
+        return dict(raw)
+
+    def _known_species_ids(self, atom_types):
+        """Return declared or consumed raw numeric IDs, never inferred preset keys."""
+        known = set(self._combined_species())
+        reader = getattr(self.dump_frames, 'reader', None)
+        if reader is not None:
+            known.update(reader.type_ids)
+        else:
+            known.update(self._dump_type_ids)
+            if self._dump_ff_info is None:
+                # Programmatic legacy maps without a heuristic reader are user
+                # metadata, unlike synthesized element-only trajectory slots.
+                known.update(atom_types)
+        if self.data_masses:
+            known.update(self.data_masses)
+        if self.data_atoms is not None:
+            known.update(self.data_atoms[:, 1].astype(int))
+        if self._species_override is not None:
+            known.update(self._species_override)
+        return frozenset(known)
+
+    def _validate_species(self, atom_types, allow_pending=False, declared=False):
+        """Reject proven group conflicts; retain undetermined references as pending."""
+        from lammpkeeper.core import SpeciesMap
+        from lammpkeeper.common.mapping import make_species_map
+        groups = self.species_groups
+        known = self._known_species_ids(atom_types)
+        if declared:
+            known = known.union(atom_types)
+        pending = {name: sorted(set(ids) - known)
+                   for name, ids in groups.items() if set(ids) - known}
+        baseline = make_species_map(atom_types, ff=self.ff).type_sets()
+        if (declared or self._species_override is not None
+                or (getattr(self.dump_frames, 'reader', None) is None
+                    and self._dump_ff_info is None)):
+            authoritative = baseline
+        else:
+            raw = self._combined_species()
+            authoritative = make_species_map(self._analysis_species(raw), ff=self.ff).type_sets()
+        for name, ids in groups.items():
+            members = frozenset(ids)
+            exact = authoritative.get(name)
+            # Unknown additions alone do not prove a redefinition. A known
+            # excluded member or a differently labelled known extra does.
+            other_labels = set().union(*(selection for label, selection in authoritative.items()
+                                         if label != name)) if authoritative else set()
+            if (exact is not None and
+                    (exact - members or ((members - exact) & other_labels))):
+                raise ValueError(f'Conflicting definition for species {name!r} '
+                                 f'in manifest {self.manifest_path!r}')
+        if pending and not allow_pending:
+            raise ValueError(f'Pending species groups in manifest {self.manifest_path!r}: '
+                             f'unknown atom type IDs {pending}')
+        # The constructor accepts explicit selections whose numeric IDs have
+        # already been validated above. No fake chemical labels are needed for
+        # raw numeric dump IDs whose species identity remains unspecified.
+        baseline.update({name: ids for name, ids in groups.items() if name not in pending})
+        return SpeciesMap(baseline)
+
+    def refresh_species(self):
+        """Rebuild managed labels from surviving raw sources and validate groups."""
+        raw = self._combined_species()
+        labels = (dict(self._species_override) if self._species_override is not None
+                  else self._analysis_species(raw) if raw else dict(
+                      (self._dump_ff_info or {}).get('atom_types', {})))
+        self._validate_species(labels, allow_pending=True)
+        self.ff_info['atom_types'] = labels
+
+    def _invalidate_species_geometry(self):
+        """Drop results and automatic geometry without recursively reading a frame."""
+        self.clear_cache()
+        self.z_focus = None
+        if not self.surface_z_manual:
+            self.surface_z = None
+
+    def species_display_name(self, name):
+        """Keep preset display names while supporting unions of unlabelled raw IDs."""
+        from lammpkeeper.common.mapping import make_species_map, species_display_name
+        members = self.species_map.resolve(name)
+        baseline = make_species_map(self.atom_types, ff=self.ff).type_sets()
+        if baseline.get(name) == members:
+            return species_display_name(name, self.atom_types, ff=self.ff)
+        if len(members) > 1:
+            return f'{name} (types {", ".join(map(str, sorted(members)))})'
+        return name
+
+    @property
+    def species_map(self):
+        """Build a fresh selection snapshot, including mutable legacy metadata."""
+        reader = getattr(self.dump_frames, 'reader', None)
+        evidence = getattr(reader, 'type_labels', None)
+        type_ids = getattr(reader, 'type_ids', frozenset())
+        if evidence is not None and (evidence != self.species_sources.get('dump', {})
+                                     or type_ids != self._dump_type_ids):
+            old_sources = self.species_sources
+            old_ids = self._dump_type_ids
+            self.species_sources = dict(old_sources, dump=dict(evidence))
+            self._dump_type_ids = type_ids
+            try:
+                self.refresh_species()
+            except Exception:
+                self.species_sources = old_sources
+                self._dump_type_ids = old_ids
+                self._invalidate_species_geometry()
+                raise
+            self._invalidate_species_geometry()
+        elif (reader is None and isinstance(self.dump_frames, (list, tuple))
+              and self._species_list_identity != (id(self.dump_frames), len(self.dump_frames),
+                                                  id(self.dump_col_idx))):
+            # List-based legacy callers have no reader ledger. Inspect explicit
+            # numeric evidence only; element-only synthetic types stay inferred.
+            evidence = {}
+            raw_ids = set()
+            ti = (self.dump_col_idx or {}).get('type')
+            if ti is not None:
+                for frame in self.dump_frames:
+                    raw_ids.update(frame['atoms'][:, ti].astype(int))
+                    if frame.get('elements') is None:
+                        continue
+                    for tid, label in zip(frame['atoms'][:, ti], frame['elements']):
+                        if not np.isfinite(tid) or tid != int(tid) or tid <= 0:
+                            raise ValueError(f'Invalid explicit dump atom type ID {tid!r}')
+                        tid, label = int(tid), str(label)
+                        if tid in evidence and evidence[tid] != label:
+                            message = f'Conflicting dump species for type {tid}: '
+                            message += f'{evidence[tid]!r}, {label!r}'
+                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                            self._invalidate_species_geometry()
+                            raise ValueError(message)
+                        evidence[tid] = label
+            if evidence and evidence != self.species_sources.get('dump'):
+                old_sources = self.species_sources
+                self.species_sources = dict(self.species_sources, dump=evidence)
+                try:
+                    self.refresh_species()
+                except Exception:
+                    self.species_sources = old_sources
+                    self._invalidate_species_geometry()
+                    raise
+                self._invalidate_species_geometry()
+            self._dump_type_ids = frozenset(raw_ids)
+            self._species_list_identity = (id(self.dump_frames), len(self.dump_frames),
+                                           id(self.dump_col_idx))
+        return self._validate_species(self.atom_types)
 
     @property
     def has_charge(self):
@@ -245,6 +462,9 @@ class SessionState:
         This is a legacy domain selector, not a generic element resolver. Missing
         surface labels raise so an unrelated system cannot acquire an Fe plane.
         """
+        selections = self.species_map.type_sets()
+        if 'Fe' in selections:
+            return selections['Fe']
         fe_type_nums = frozenset(t for t, n in self.atom_types.items()
                                 if isinstance(t, int) and 'Fe' in str(n))
         if not fe_type_nums:
@@ -257,9 +477,9 @@ class SessionState:
         Explicit labels are authoritative; only a missing map permits a
         visibly reported legacy highest-type guess.
         """
+        selections = self.species_map.type_sets()
         at = self.atom_types
-        matches = frozenset(t for t, n in at.items()
-                            if isinstance(t, int) and n == 'O')
+        matches = selections.get('O', frozenset())
         if matches:
             return next(iter(matches)) if len(matches) == 1 else matches
         if at:

@@ -25,7 +25,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_audit_analysis', 'test_audit_parsers', 'test_audit_workflow',
            'test_audit_prep', 'test_audit_references_plots', 'test_audit_verifier',
            'test_audit_rdf_oracle', 'test_audit_integration', 'test_slab_reference',
-           'test_species_map', 'test_species_metadata']
+           'test_species_map', 'test_species_metadata', 'test_species_session']
 
 
 def main():
