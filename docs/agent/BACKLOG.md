@@ -113,7 +113,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 
 | Item | Priority / source finding | Done when |
 | --- | --- | --- |
-| REV-IO-1 | P1; F-IO-1, malformed thermo rows silently dropped | A short numeric row is diagnosed visibly, source evidence retained and no apparently valid incomplete timeline escapes unnoticed. |
+| REV-IO-1 · verified (publication pending) | P1; F-IO-1, malformed thermo rows silently dropped | Complete: fail → pass; 12 collected regressions; numeric-leading bad rows reject with path/line/header/row before block selection; valid logs/goldens unchanged. Full verifier **405/0/0** native, **399/0/6** forced NumPy, **389/0/16** default. See `docs/agent/REV-IO-1.md`. |
 | REV-REF-1 | P1; F-REF-1, CIF occupancy ignored | Explicit zero/partial/disordered occupancy is rejected visibly unless an independently approved weighting model is implemented; full-occupancy compatibility tested. |
 | REV-PREP-1 | P1; F-PREP-3, successful copyback follows output symlinks | After maintainer approval of generated-script changes, destination-child symlinks cannot overwrite outside the destination; local failure/recovery tests preserve unrelated data. Real HPC remains deferred. |
 | REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |

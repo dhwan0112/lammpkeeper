@@ -12,6 +12,18 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Thermo row integrity (REV-IO-1)
+
+- Reject malformed numeric-leading records in any active Step-headed thermo
+  table instead of silently dropping short/long rows or ending a table on a
+  nonnumeric data cell. Errors identify source path, one-based line, active
+  header/expected width and offending row; no partial history is returned.
+- Check records before stage/terminator keyword matching and before excluding
+  minimization/incompatible blocks. Failed shell/CLI loads preserve prior state
+  and surface failure. Valid logs, result keys, metadata/timelines and Fe-O
+  goldens are unchanged; this is bounded format validation, not finite-value or
+  physical validation and not a repair of other review findings.
+
 ### Whole-source re-review and annotation refresh (REVIEW-20261028)
 
 - Re-review all 78 Python/Rust/Shell/TOML source/build files after GEN-3;

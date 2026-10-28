@@ -41,6 +41,15 @@ report distinguishes parent reproductions, reviewer probes, inferred risks and
 interpretation limits. The historical 63-file/713-definition PR #16 inventory
 below remains its original snapshot, not the current source count.
 
+### Subsequent runtime correction (REV-IO-1)
+
+The separate `REV-IO-1` thermo-integrity fix adds `tests/test_log_integrity.py`
+with English module/helper/test documentation. The measured current Python
+inventory is **74 modules / 992 definitions**, all documented with Python 3.9
+syntax accepted. Its runtime behavior and fail → pass evidence are recorded in
+[`REV-IO-1.md`](REV-IO-1.md), not covered by PR #21's annotation-only AST equality.
+The 78-file/978-definition review counts above remain that review's snapshot.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather
