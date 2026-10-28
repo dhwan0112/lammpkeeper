@@ -181,15 +181,17 @@ class DumpReader:
     parse_boundary_flags; None if the header has none). Header metadata is read
     by the shared Python scanner, independently of the native/NumPy atom-block
     backend. LazyFrames exposes the same metadata through its `reader`.
-    The read-only `type_labels` property snapshots explicit numeric type/element
-    labels observed while consuming frames, even when those columns are omitted
-    from the retained arrays. Indexing headers alone does not populate labels.
+    The read-only `type_ids` property snapshots raw numeric types observed while
+    consuming frames, including unlabelled types. `type_labels` additionally
+    snapshots explicit type/element pairs. Both ignore column projection and
+    legacy synthesized types; indexing headers alone does not populate either.
 
     Args:
         filepath:   str — Path to the dump or lammpstrj file.
         columns:    iterable[str] or None — Keep only these columns (names not
                     in the file are ignored). None keeps every column. Skipped
-                    columns are never converted, which also speeds parsing.
+                    property columns are never converted, which speeds parsing;
+                    raw numeric types are always validated for explicit metadata.
         dtype:      numpy dtype for the 'atoms' array. float32 halves memory;
                     ids/types stay exact below 2**24 (16.7M).
         stride:     int — Yield every Nth frame, starting with the first.
@@ -212,9 +214,11 @@ class DumpReader:
         self.stride = stride
         self.max_frames = max_frames
         self.raw_columns = self._read_layout()
+        self._type_ids = set()
         self._type_labels = {}
         self._type_labels_lock = threading.Lock()
-        self._has_type_labels = 'type' in self.raw_columns and 'element' in self.raw_columns
+        self._has_type_ids = 'type' in self.raw_columns
+        self._has_type_labels = self._has_type_ids and 'element' in self.raw_columns
 
         keep = None if columns is None else set(columns)
         self._usecols = [i for i, c in enumerate(self.raw_columns) if keep is None or c in keep]
@@ -230,17 +234,24 @@ class DumpReader:
         self._native = _native if self.dtype in (np.float64, np.float32) else None
 
     @property
+    def type_ids(self):
+        """Return immutable raw numeric type IDs observed in successfully consumed frames."""
+        with self._type_labels_lock:
+            return frozenset(self._type_ids)
+
+    @property
     def type_labels(self):
         """Return a defensive snapshot of explicit type labels in consumed frames."""
         with self._type_labels_lock:
             return dict(self._type_labels)
 
     def _observe_type_labels(self, fields, timestep):
-        """Atomically validate raw numeric type/element identities after parsing."""
-        if not self._has_type_labels:
+        """Atomically validate raw numeric IDs and optional explicit labels after parsing."""
+        if not self._has_type_ids:
             return
         type_col = self.raw_columns.index('type')
-        element_col = self.raw_columns.index('element')
+        element_col = self.raw_columns.index('element') if self._has_type_labels else None
+        pending_ids = set()
         pending = {}
         with self._type_labels_lock:
             for row in fields:
@@ -251,6 +262,9 @@ class DumpReader:
                                      f"{row[type_col]!r}") from None
                 if tid <= 0:
                     raise ValueError(f"{self.filepath}: explicit type must be positive at step {timestep}: {tid}")
+                pending_ids.add(tid)
+                if not self._has_type_labels:
+                    continue
                 label = row[element_col]
                 previous = pending.get(tid, self._type_labels.get(tid))
                 if previous is not None and previous != label:
@@ -259,6 +273,7 @@ class DumpReader:
                     warnings.warn(message, RuntimeWarning, stacklevel=3)
                     raise ValueError(message)
                 pending[tid] = label
+            self._type_ids.update(pending_ids)
             self._type_labels.update(pending)
 
     # Preflight the first frame without materializing atom rows; empty files have
@@ -455,7 +470,7 @@ class DumpReader:
             raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "
                              f"expected {natoms} (truncated or surplus dump?)")
         fields = None
-        if self._has_type_labels or self.has_elements or any(c in self.col_idx for c in ('id', 'type')):
+        if self._has_type_ids or self.has_elements or 'id' in self.col_idx:
             fields = [row.split() for row in lines]
             if any(len(row) != len(self.raw_columns) for row in fields):
                 raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: wrong column count")
@@ -480,7 +495,8 @@ class DumpReader:
 
         # Selected identity columns must round-trip exactly through the requested
         # homogeneous dtype; float32 therefore cannot represent every large ID.
-        # Unselected columns need not be numeric and are not converted.
+        # Unselected property columns need not be numeric and are not converted;
+        # raw types remain exact integer metadata regardless of numeric projection.
         if self._native is not None:
             try:
                 values, elements, rows = self._native.parse_block(

@@ -169,6 +169,115 @@ def _reader_access(reader, mode):
     return iter(LazyFrames(reader, cache_bytes=10**6 if mode == 'cached' else 0))
 
 
+def test_dump_unlabelled_raw_type_ids_are_lazy_and_projection_independent():
+    """Raw sparse numeric IDs establish known types without force-field label guesses."""
+    require_numpy()
+    from lammps_post.parsers import DumpReader, LazyFrames
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'trajectory.dump'
+        path.write_text(_frame(0, ['1 2 1 2 3'], 'id type x y z')
+                        + _frame(1, ['1 7 2 3 4'], 'id type x y z'))
+        for columns in (None, (), ('x',)):
+            for mode in ('stream', 'index', 'cached', 'uncached'):
+                reader = DumpReader(path, columns=columns)
+                reader._native = None
+                assert reader.type_ids == frozenset()
+                frames = _reader_access(reader, mode)
+                assert reader.type_ids == frozenset()
+                next(frames)
+                snapshot = reader.type_ids
+                assert isinstance(snapshot, frozenset) and snapshot == frozenset({2})
+                next(frames)
+                assert snapshot == frozenset({2})
+                assert reader.type_ids == frozenset({2, 7})
+                assert reader.type_labels == {}
+                _error(lambda: setattr(reader, 'type_ids', frozenset()), 'type_ids', AttributeError)
+        reader = DumpReader(path)
+        frames = LazyFrames(reader)
+        assert len(frames) == 2 and reader.type_ids == frozenset()
+        frames[1]
+        assert reader.type_ids == frozenset({7})
+        assert frames[1] is frames[1]
+        frames[0]
+        assert reader.type_ids == frozenset({2, 7})
+        for limits in ({'stride': 2}, {'max_frames': 1}):
+            reader = DumpReader(path, **limits)
+            list(reader)
+            assert reader.type_ids == frozenset({2})
+
+
+def test_dump_unlabelled_invalid_or_failed_frames_do_not_commit_type_ids():
+    """Projected numeric types are still validated and failed frames commit no partial IDs."""
+    require_numpy()
+    from lammps_post.parsers import DumpReader
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'trajectory.dump'
+        for tid in ('0', '-2', '2.5', 'invalid'):
+            path.write_text(_frame(0, ['1 2 1 2 3', f'2 {tid} 1 2 3'], 'id type x y z'))
+            for columns in (None, (), ('x',)):
+                for mode in ('stream', 'index', 'cached', 'uncached'):
+                    reader = DumpReader(path, columns=columns)
+                    reader._native = None
+                    _error(lambda: list(_reader_access(reader, mode)), 'type')
+                    assert reader.type_ids == frozenset()
+                    assert reader.type_labels == {}
+        path.write_text(_frame(0, ['1 2 1 2 3'], 'id type x y z')
+                        + _frame(1, ['1 7 1 2 3', '2 9 broken 2 3'], 'id type x y z'))
+        for mode in ('stream', 'index', 'cached', 'uncached'):
+            reader = DumpReader(path)
+            reader._native = None
+            frames = _reader_access(reader, mode)
+            next(frames)
+            _error(lambda: next(frames), 'malformed')
+            assert reader.type_ids == frozenset({2})
+
+
+def test_dump_native_raw_type_ids_without_fallback():
+    """Native parsing establishes unlabelled raw IDs even when no columns are retained."""
+    require_numpy()
+    import numpy as np
+    from lammps_post import parsers
+    require(parsers._native is not None, 'native parser not built (run native/build.sh)')
+
+    def native_success(*args):
+        """Require actual successful native parsing, including zero-column projections."""
+        result = parsers._native.parse_block(*args)
+        assert result[2] == args[1], 'native parser requested fallback'
+        return result
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'trajectory.dump'
+        path.write_text(_frame(0, ['1 2 1 2 3'], 'id type x y z')
+                        + _frame(1, ['1 7 2 3 4'], 'id type x y z'))
+        for dtype in (np.float32, np.float64):
+            for columns in (None, (), ('x',)):
+                for mode in ('stream', 'index', 'cached', 'uncached'):
+                    reader = parsers.DumpReader(path, dtype=dtype, columns=columns)
+                    assert reader._native is parsers._native
+                    backend = mock.Mock()
+                    backend.parse_block.side_effect = native_success
+                    reader._native = backend
+                    with mock.patch.object(np, 'loadtxt', side_effect=AssertionError('forbidden native fallback')):
+                        list(_reader_access(reader, mode))
+                    assert backend.parse_block.call_count == 2
+                    assert reader.type_ids == frozenset({2, 7})
+                    assert reader.type_labels == {}
+        for tid in ('0', '-2', '2.5', 'invalid'):
+            path.write_text(_frame(0, ['1 2 1 2 3'], 'id type x y z')
+                            + _frame(1, ['1 7 1 2 3', f'2 {tid} 1 2 3'], 'id type x y z'))
+            for columns in ((), ('x',)):
+                for mode in ('stream', 'index', 'cached', 'uncached'):
+                    reader = parsers.DumpReader(path, columns=columns)
+                    backend = mock.Mock()
+                    backend.parse_block.side_effect = native_success
+                    reader._native = backend
+                    with mock.patch.object(np, 'loadtxt', side_effect=AssertionError('forbidden native fallback')):
+                        _error(lambda: list(_reader_access(reader, mode)), 'type')
+                    assert backend.parse_block.call_count == 2
+                    assert reader.type_ids == frozenset({2})
+                    assert reader.type_labels == {}
+
+
 def test_dump_type_labels_are_lazy_defensive_and_allow_atom_type_changes():
     """Only consumed raw type/element pairs contribute, regardless of numeric projection."""
     require_numpy()
@@ -185,11 +294,13 @@ def test_dump_type_labels_are_lazy_defensive_and_allow_atom_type_changes():
                 assert reader.type_labels == {}
                 next(frames)
                 assert reader.type_labels == {2: 'A'}
+                assert reader.type_ids == frozenset({2})
                 snapshot = reader.type_labels
                 snapshot[2] = 'X'
                 assert reader.type_labels == {2: 'A'}
                 next(frames)
                 assert reader.type_labels == {2: 'A', 7: 'B'}
+                assert reader.type_ids == frozenset({2, 7})
                 _error(lambda: setattr(reader, 'type_labels', {}), 'type_labels', AttributeError)
         reader = DumpReader(path)
         frames = LazyFrames(reader)
@@ -216,6 +327,7 @@ def test_dump_type_label_conflicts_reject_every_access_and_projection():
                     reader._native = None
                     _warn_error(lambda: list(_reader_access(reader, mode)), 'type 2')
                     assert reader.type_labels == ({} if text.count('ITEM: TIMESTEP') == 1 else {2: 'A'})
+                    assert reader.type_ids == (frozenset() if text.count('ITEM: TIMESTEP') == 1 else frozenset({2}))
 
 
 def test_dump_bad_projected_type_and_failed_frame_do_not_assign_labels():
@@ -237,6 +349,7 @@ def test_dump_bad_projected_type_and_failed_frame_do_not_assign_labels():
         reader = DumpReader(path)
         _warn_error(lambda: list(reader), 'type 7')
         assert reader.type_labels == {}
+        assert reader.type_ids == frozenset()
 
 
 def test_dump_skipped_frames_and_element_only_have_no_authoritative_types():
@@ -270,6 +383,7 @@ def test_dump_skipped_frames_and_element_only_have_no_authoritative_types():
         assert frames[0]['atoms'].shape == (1, 5)
         assert frames[0]['atoms'][0, -1] == 2
         assert reader.type_labels == {}
+        assert reader.type_ids == frozenset()
 
 
 def test_dump_native_metadata_parity_without_numpy_fallback():
