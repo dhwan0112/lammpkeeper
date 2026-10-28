@@ -151,8 +151,8 @@ standalone generic validation/resolution is removed only after parity is proved.
 
 ### 3. Manifest and session integration
 
-- Optional, explicitly loaded JSON file; proposed conventional name
-  `lkpr-run.json`. No automatic file discovery or prep writer in GEN-1.
+- Optional, explicitly loaded JSON file; conventional name `lkpr-run.json`.
+  No automatic file discovery or prep writer in GEN-1.
 - Additive shell entry points `load manifest PATH` / `unload manifest`; no existing
   flag, command or import is renamed or removed. A Python file-reading adapter
   lives with current post parsers, not in the generic core.

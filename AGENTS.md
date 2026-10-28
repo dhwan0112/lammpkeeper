@@ -71,9 +71,10 @@ Rules while getting there:
 
 - Indentation: **4 spaces everywhere** (PEP 8). This is what the code uses. The
   3-space note in `MIGRATION.md` is stale (DOC-2).
-- Until GEN-1 lands, type ↔ element ↔ label lives **only** in
-  `lammpkeeper/common/mapping.py`. ACE today: `1 = Fe_up (Fe)`,
-  `2 = Fe_down (Mn slot)`, `3 = O`.
+- Generic species selections use `lammpkeeper.core.SpeciesMap` (ADR-0002).
+  Canonical type ↔ element ↔ label presets and legacy adapters stay in
+  `lammpkeeper/common/mapping.py`; do not put domain literals in core. ACE:
+  `1 = Fe_up (Fe)`, `2 = Fe_down (Mn slot)`, `3 = O`.
 - Legacy entry points keep working: `python -m lammps_pre|lammps_post`,
   `lammps-pre.py`, `lammps-post.py`.
 - Core dependency is NumPy only. Heavy dependencies go in extras.

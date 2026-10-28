@@ -16,8 +16,9 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - The dispatcher and shared `common/display.py` / `common/mapping.py` are in use;
   the full ADR-0001 package layout is a target, not the current module layout.
 - Step C completed deterministic canonical ACE type resolution and explicit dump
-  element labels. Force-field/unit/timestep inference still has warned heuristic
-  paths; system-owned species maps and generic metadata are GEN-1 / GEN-2.
+  element labels. GEN-1 adds the system-owned `core.SpeciesMap` under the approved
+  ADR-0002 contract; its integration/evidence is recorded below. Force-field,
+  units and timestep inference still has warned paths tracked under GEN-2.
 - PHYS-1/2, PHYS-3/5, PHYS-4, the whole-code audit (PR #15) and the synthetic
   slab integration reference (TEST-3, PR #17) are complete. Their documented
   corrections are not value-preserving refactors of the original thesis state.
@@ -56,6 +57,26 @@ runtime output directories; committed fixtures and goldens stay unchanged.
 This establishes synthetic slab-path integration, not material dynamics, a real
 LAMMPS run or the undecided non-Fe GEN-8 reference system. The historical bulk
 fixture and historical verification claims below retain their original scope.
+
+## System-owned species (GEN-1; ADR-0002)
+
+The maintainer approved ADR-0002 on 2026-10-28 before implementation. Generic
+label/type-set storage and resolution move into `lammpkeeper.core.SpeciesMap`;
+`common/mapping.py` keeps canonical presets, display conventions and legacy
+imports. Repeated labels form unions; sparse IDs are preserved, not renumbered.
+
+Explicit type-label sources follow ADR-0001: input → data Masses comments → dump
+→ user fallback. Optional JSON manifests provide groups/provenance rather than
+duplicate LAMMPS physics metadata. Conflicting explicit labels warn and reject
+application, instead of silently selecting one. Pending manifest references
+cannot construct an active map. This reconciles the old contradictory GEN-1
+backlog order; it does not change the accepted ADR-0001.
+
+The migration is additive: existing selection helpers route through the generic
+model, parser contracts remain compatible, and source/group loading uses managed
+cache invalidation. `docs/agent/GEN-1.md` records implementation/verification
+status and the optional manifest interface. FF classification remains GEN-2,
+triclinic support GEN-3, domain extraction GEN-4 and full package moves GEN-9.
 
 ## Stage 1 — dispatcher-only (historical)
 
@@ -306,9 +327,10 @@ observation is retained as a historical question, not a current physics claim.
 
 ### Remaining work (ADR-0001 / backlog, not a new design decision)
 
-- System-owned species maps (GEN-1), explicit force-field metadata (GEN-2) and
-  the force-field registry/general prep work (GEN-7) replace the old standalone
-  `forcefields.py` suggestion. Prep and post still use different FF names.
+- The GEN-1 species-map path above is distinct from explicit force-field
+  metadata (GEN-2) and registry/general prep work (GEN-7), which remain future
+  work. They replace the old standalone `forcefields.py` suggestion; prep and
+  post still use different FF names.
 - Shared data/box/units contracts belong to the accepted `io` direction. The old
   `lammps_data.py` / `units.py` suggestions were not implemented module names.
   Prep `ps_to_steps` and post `dt_fs` derivation remain different operations;
@@ -328,8 +350,8 @@ observation is retained as a historical question, not a current physics claim.
 - **Canonical mapping:** ACE prep now writes explicit `element` labels using
   `mapping.element_order`, and canonical ACE post/spin helpers share the mapping
   convention. ACE type 1 = Fe_up, type 2 = Fe_down (Mn proxy), type 3 = O.
-  Species-group analysis can select both Fe channels (PHYS-4), but the system
-  model still needs GEN-1; a warned FF/count fallback is not explicit metadata.
+  Species-group analysis can select both Fe channels (PHYS-4), now through the
+  GEN-1 generic map; a warned FF/count fallback is still not explicit metadata.
 - **PBC and supported boxes:** shell analyses use dump/input per-axis flags.
   Synthetic MSD/O₂/RDF checks and TEST-3 cover periodic x/y and nonperiodic z;
   slab handling is not an unconditional "z off" assumption. Direct analysis APIs

@@ -12,6 +12,27 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### System-owned species selections (GEN-1; ADR-0002)
+
+- Add immutable `lammpkeeper.core.SpeciesMap` for explicit labels, repeated-label
+  unions and validated type-ID groups, independent of any force-field name.
+  Existing mapping conversion helpers and canonical presets remain compatible;
+  legacy species-selection helpers delegate to the generic model.
+- Add explicit Masses-comment labels, lazy dump type-label consistency and
+  optional schema-1 JSON manifest groups/provenance. Manifest loading is explicit;
+  no prep output or automatic discovery is added.
+- Resolve typed metadata from input, data comments and dump without renumbering
+  sparse IDs. Contradictory explicit labels warn and reject application. Managed
+  source/group changes invalidate cached results; unresolved manifest references
+  remain pending and cannot produce an active species map. Only explicit numeric
+  type evidence, not inferred/synthesized table keys, establishes group members.
+- Preserve `set types` as an explicit warned manual analysis-label override,
+  separately from automatic user fallback. Typed-source load/unload expires it
+  visibly; manifest/log changes retain it and failed transactions roll back.
+- Keep FF classification separate (GEN-2), preserve output keys/filenames and
+  require existing Fe-O goldens to remain unchanged. No fixture or thesis tag
+  modification, new force-field convention or LAMMPS/HPC validation is included.
+
 ### Documentation status cleanup (DOC-2)
 
 - Distinguish current migration status from historical dispatcher, mapping and

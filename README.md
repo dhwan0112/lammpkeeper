@@ -48,12 +48,36 @@ Run `lkpr prep -h` / `lkpr post -h` for the full option list. The legacy entry
 points (`python -m lammps_pre`, `python -m lammps_post`, and the `lammps-pre.py`
 / `lammps-post.py` wrapper scripts) still work unchanged.
 
+## Explicit species and groups
+
+Species selections are system-owned; they need not have a force-field name:
+
+```python
+from lammpkeeper.core import SpeciesMap
+
+species = SpeciesMap.from_atom_types({2: 'A', 7: 'A', 9: 'B'},
+                                     groups={'X': [2, 9]})
+assert species.resolve('A') == frozenset({2, 7})
+assert species.resolve('X') == frozenset({2, 9})
+```
+
+Post uses explicit input/data/dump labels and can load optional JSON groups with
+`load manifest "lkpr-run.json"` in its shell or batch commands. Contradictory
+explicit labels fail visibly; unresolved group references cannot drive analysis.
+Manifests do not override LAMMPS units or force-field settings and are not written
+or discovered automatically. Existing ACE spin presets and legacy mapping APIs
+remain compatible. The existing `set types` command remains a warned manual
+analysis-label override; input/data/dump load/unload expires it visibly, whereas
+manifest/log changes retain it. Dump-only FF classification still has warned
+heuristics (GEN-2), so generic selection is not complete FF generality.
+See [`docs/agent/GEN-1.md`](docs/agent/GEN-1.md) for schema, commands and limits.
+
 ## Tests
 
 ```bash
-pytest                       # if pytest is installed
-python tests/run.py          # dependency-free runner (numpy only)
-LKPR_SLOW=1 python tests/run.py   # include the slower RDF/MSD golden checks
+HOME="$(mktemp -d)" pytest                       # if pytest is installed
+HOME="$(mktemp -d)" python tests/run.py          # no pytest required; NumPy core
+HOME="$(mktemp -d)" LKPR_SLOW=1 python tests/run.py # RDF/MSD goldens and oracle
 ```
 
 The numeric regression uses the ACE example trajectory shipped in
@@ -62,7 +86,7 @@ The numeric regression uses the ACE example trajectory shipped in
 ## Layout
 
 ```
-lammpkeeper/     unified CLI (lkpr) + common/ (shared mapping, display)
+lammpkeeper/     unified CLI + core/ (SpeciesMap) + common/ (presets, display)
 lammps_pre/      structure building & LAMMPS input generation
 lammps_post/     trajectory analysis & plotting
 tests/           regression suite + fixtures
