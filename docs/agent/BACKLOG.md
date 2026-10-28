@@ -119,8 +119,13 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
 | REV-ANALYSIS-2 | P2; F-ANALYSIS-2, missing-z region ignored | An explicit charge/OR region without a z column cannot silently become a global analysis; collected missing-column and valid-region tests pass. |
 | REV-ANALYSIS-3 | P2; F-ANALYSIS-3, invalid density range/bins | Equal/reversed/nonfinite ranges and invalid bin counts fail before histogram normalization; valid analytic profiles/goldens unchanged. |
+| REV-ANALYSIS-4 | P2; prior review, float32 RDF backend disagreement | In-box cutoff-edge pairs agree across SciPy/fallback using an independent exact represented-input oracle; no spurious pair or golden rebaseline. Parent reproduced 0 versus nonzero bin. |
+| REV-ANALYSIS-5 | P2; prior review, nonfinite selected coordinates | OAR/penetration/density reject or visibly diagnose selected NaN/Inf z; no silent denominator dilution or missing density population. Parent reproduced OAR 0.5 and one-count density for `[1, NaN]`. |
 | REV-IO-2 | P2; F-IO-2, active-stream mutation | Changing a source during iteration is detected before publishing changed-frame atoms/species; unchanged stream/index/cache behavior preserved. |
 | REV-IO-3 | P2; F-IO-3, projection hides row corruption | Raw row width is validated before projection on NumPy and real native paths, including layouts without id/type/element. |
+| REV-IO-4 | P2; prior review, dump comment parsing | Retained numeric `3#CORRUPTED` rejects without silent NumPy repair; native/NumPy agree on supported text labels containing `#`. |
+| REV-IO-5 | P2; prior review, extreme thermo-step precision | Signed-64-bit step increments remain exact or reject visibly before a valid elapsed timeline is published; parent measured adjacent 2**53 counters collapsing to zero elapsed steps. |
+| REV-IO-6 | P2; prior review, malformed PBC becomes authoritative | Invalid dump boundary tokens reject visibly; any documented single-letter compatibility maps consistently. Parent measured `p p f` becoming all nonperiodic and half-periodic flags accepted. |
 | REV-REF-2 | P2; F-REF-2, incomplete default reference shells | Unsafe cutoff/replication raises or a justified complete-image policy recovers independent alpha-Fe outer coordination 6, not 3; no wrong-value rebaseline. |
 | REV-REF-3 | P2; F-REF-3, malformed symmetry accepted | Unsupported/malformed operators and component counts reject visibly; valid built-in/P1 geometry independently preserved. |
 | REV-REF-4 | P2; skew-reference MIC / invalid-cell limits | Explicitly validate/reject unsupported skew/cell cases or obtain approval for a bounded exact-geometry extension; never silently clip invalid geometry. |
@@ -129,17 +134,37 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-PLOT-1 | P2; F-SESSION-1, wrong RDF reference pair | Hyphenated/generic cached pairs select matching references per curve; no Fe-O fallback for unrelated pairs; real metadata and mock dispatch regressions. |
 | REV-PLOT-2 | P2; negative-z/generic structure and threshold labels | Define domain-versus-generic plotting constraints, retain all intended z data and show the actual analysis threshold without inventing species. |
 | REV-UI-1 | P2; F-CLI-1, empty fallback table | Header-only and empty tables render or reject deliberately on both Rich/plain paths; no TypeError from scalar max. |
+| REV-UI-3 | P2; prior review, explicit output failures exit zero | Missing cached CSV export and unsupported requested pressure plot return failure in batch/one-shot; require intended artifact, distinguish deliberate plot-all skips. |
+| REV-SESSION-1 | P2; prior review, invalid physical overrides | Reject nonfinite surface and nonfinite/nonpositive timestep before state/cache mutation; retain prior valid state. Parent reproduced successful finite OAR from NaN/Inf surfaces and negative/NaN MSD time. |
+| REV-SESSION-2 | P2; prior review, spin ignores active species override | Respect the approved active spin selections or visibly reject noncanonical maps; preserve canonical FF conventions. Parent measured Fe_up={2} but spin counts type 1. |
+| REV-SESSION-3 | P2; prior review, stale scientific cache publication | Detect/invalidate changed source before cached plot/export, or explicitly identify an immutable provenance-bound snapshot; parent measured stale actual Agg plot despite reader mutation rejection. |
 | REV-VERIFY-1 | P2; F-VERIFY-2, unchecked temp creation | Fault-injected mktemp failures stop before empty-HOME/unisolated work; retained evidence and safe cleanup remain tested. |
 | REV-UI-2 | P3; F-SESSION-2, recipe alias mismatch | Saved charge/spin/etc recipes are found by advertised redo/edit command names without breaking existing names. |
-| REV-OPS-1 | P3; F-CLI-2, history loading/standalone ownership | Startup reads are bounded and independent standalone exit callbacks cannot cross-contaminate history; hosted navigation/opt-out preserved. |
+| REV-OPS-1 | P2/P3; F-CLI-2 plus prior-review hosted-inline loss | Bound startup reads and isolate standalone callbacks; first hosted inline child construction/dispatch must preserve outer unsaved/persisted history, including exceptions. Parent measured menu history replaced by post history on `post info`. |
 | REV-VERIFY-2 | P3; F-VERIFY-1, evidence collisions | Concurrent same-second/SHA/mode runs retain independent logs/summaries; no cleanup of retained evidence. |
+| REV-VERIFY-3 | P2; R-VERIFY-1, failed evidence retention still PASS | Fault-injected required evidence copy/write failures produce a nonzero verifier result; no PASS with missing retained `post-summary.txt`. Parent measured exit 0 after denied evidence copy during prior-work review; see `PRIOR-WORK-REVIEW-20261029.md`. |
 | REV-GEOM-1 | P3; F-CORE-1, near-face wrapping | Decide/document a floating-point face convention and test strict range/idempotence where promised without changing physical image selection silently. |
 | REV-TEST-1 | P3; F-CORE-2, finite oracle bounds | Independently justify finite image ranges; interiority alone is not a completeness argument; production geometry is not used as its own oracle. |
 | REV-PREP-4 | P3; F-PREP-4, Masses inspection | Prep's metadata inspector reads conventional blank-separated Masses sections without changing structures/presets. |
 | REV-REF-5 | P3; CIF case/seam behavior | Decide supported case-insensitive loop parsing and metric/seam deduplication limits with independent tiny-CIF tests and visible rejection outside scope. |
-| REV-PREP-5 | P2 candidate; source-inferred during REV-PREP-1 review, early logging symlink | After separate generated-script approval, reproduce and prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Not fixed by copyback-only checks. |
+| REV-PREP-5 | P2; parent-reproduced in prior review, early logging symlink | After separate generated-script approval, prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Parent measured target append with exit 0 and scratch removed. Not a copyback-preflight bypass. |
+| REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
 ## Suggested order
+
+**Independent prior-work review (2026-10-29, maintainer requested):** pause GEN-2
+implementation and independently inspect prior Sol-authored work. Model authorship
+is not established by Git, so current main source is reviewed as a conservative
+superset, without assigning authorship. Track inventory, repros and known/new
+findings in `docs/agent/PRIOR-WORK-REVIEW-20261029.md`. GEN-2 proposed ADR remains
+on `gen/gen-2-explicit-metadata` (`e019dd7`), awaiting approval; this review does not
+accept it or authorize unrelated fixes.
+Review completed with **11 new reproduced items**, an additional hosted-inline
+case under REV-OPS-1 and several reconfirmed known issues: **33 open review items**
+in total. Parent reran all priority probe groups; full baseline remains **444/0/0**.
+Silent scientific/input defects and stale-result publication should be addressed
+before generalization resumes. Detailed measured values and limitations are in
+the review report; no runtime fix or golden change is part of this review.
 
 **Scheduling update (maintainer, 2026-10-26):** defer actual HPC submissions,
 site-dependent validation and HPC site-profile work (GEN-6) until early-to-mid
