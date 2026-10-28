@@ -35,8 +35,9 @@ docstrings remain present. Executable AST/noncomment code/TOML settings match
 merged-main baseline `75f5e66`.
 
 The new review also found pre-existing defects, including silent thermo-row loss,
-unsupported CIF occupancy and unsafe destination-symlink copyback. They are open
-follow-ups, not fixed or certified by annotation/regression passes. The current
+unsupported CIF occupancy and unsafe destination-symlink copyback. They were
+recorded as open follow-ups at that snapshot; separate corrections are logged
+below, not fixed or certified by the annotation pass itself. The current
 report distinguishes parent reproductions, reviewer probes, inferred risks and
 interpretation limits. The historical 63-file/713-definition PR #16 inventory
 below remains its original snapshot, not the current source count.
@@ -58,6 +59,15 @@ helpers and `tests/test_cif_occupancy.py`. Parent grammar/coverage checks measur
 changes and 20 collected regressions are recorded in [`REV-REF-1.md`](REV-REF-1.md),
 not part of either historical annotation-only AST comparison. Existing test,
 fixture and golden expectations remain unchanged.
+
+### Subsequent copyback correction (REV-PREP-1)
+
+The separately approved generated-job copyback guard and new
+`tests/test_copyback_safety.py` maintain English documentation. Parent checks
+measure **76 Python modules / 1052 definitions**, all documented and accepted by
+Python 3.9 grammar; the new Bash predicate has explicit safety/lifecycle comments.
+Runtime tests, trusted-path limits and the separate early logging hazard are
+recorded in [`REV-PREP-1.md`](REV-PREP-1.md), not an annotation-only change.
 
 ## Agreed scope
 
