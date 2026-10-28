@@ -1,7 +1,8 @@
 # GEN-3 — Box metadata and restricted-triclinic geometry
 
-Status: implementation and integration verified on `gen/gen-3-box-pbc`.
+Status: complete; [PR #20](https://github.com/dhwan0112/lammpkeeper/pull/20).
 Baseline: merged main `5189289` (GEN-1).
+Implementation branch: `gen/gen-3-box-pbc`; no package release is implied.
 
 ## Approved scope
 
@@ -146,7 +147,10 @@ plots do not claim arbitrary tilted-cell visualization.
 The following parent-run results are **measured**, not inferred. Full verification
 uses isolated HOME and the unchanged slow RDF/MSD goldens. Runs recorded HEAD
 `83b6a77` with the final session/runner/documentation changes present in the working
-tree; subsequent source commits preserve those tested bytes.
+tree; subsequent source commits preserve those tested bytes. A separate repeat
+on committed `a0c201c` also measured **393 passed, 0 failed, 0 skipped**, with post
+analyses/real plots and prep artifacts/script syntax all passing. Only the
+pre-existing untracked user directory was present when that repeat started.
 
 | Environment / path | Tests | Post smoke | Prep smoke |
 | --- | --- | --- | --- |
@@ -175,6 +179,7 @@ Local evidence directories (not repository artifacts):
 - `/tmp/opencode/gen3-final-numpy/20261028T102013-83b6a77-full`
 - `/tmp/opencode/gen3-final-default/20261028T102013-83b6a77-full`
 - `/tmp/opencode/gen3-wheel-dggubkne/wheel.log`
+- `/tmp/opencode/gen3-committed/20261028T102513-a0c201c-full`
 
 The wheel was built from a separate source copy without `.so` files, installed
 with `--no-deps --target` outside the checkout, and exercised from that install.

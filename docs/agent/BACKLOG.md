@@ -592,7 +592,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.
 
-### GEN-3 · Box model with triclinic + PBC — `verified (gen/gen-3-box-pbc; shipping pending; ADR-0003 accepted)` (builds on PARSE-1)
+### GEN-3 · Box model with triclinic + PBC — `done (PR #20; ADR-0003 accepted)` (builds on PARSE-1)
 - **Target:** `io.Box(lo, hi, tilt, pbc)`. Fractional transforms plus exact periodic
   lattice MIC/unwrap; fractional component rounding is not an exact skew-cell MIC.
   Until analyses support tilt, they raise an error on triclinic input instead of
