@@ -20,7 +20,11 @@ def _frame(rows, step=0, dtype='float64', box=BOX):
 
 
 def _assert_msd(result, expected, times=None):
-    """Compare analytic curves and reject the legacy frame-skipping result schema."""
+    """Compare analytic curves and reject the legacy frame-skipping result schema.
+
+    Tolerances accommodate input coordinates already quantized to float32,
+    especially cancellation near box boundaries; they are not sampling errors.
+    """
     import numpy as np
     assert result is not None
     assert 'n_skipped' not in result, result

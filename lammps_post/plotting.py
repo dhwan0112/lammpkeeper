@@ -23,6 +23,10 @@ does not recompute analyses. The penetration-profile plot additionally uses
 that chosen z range for its display histograms. Times are already in ps in
 analysis dictionaries; thermo plots reconstruct them through _thermo_time.
 Plot labels and heuristic guides are not independent physical validation.
+Except for snapshot frames and explicit pressure-slab metadata, these functions
+receive reduced arrays, not cells: geometry eligibility must be established by
+the caller before reduction. In particular, accepting a curve dictionary does
+not imply support for a tilted slab or a correct slab-coordinate conversion.
 
 Dependencies:
   Required : numpy; matplotlib is optional at import but required for plotting
@@ -209,8 +213,10 @@ def _save_fig(fig, outpath, dpi=150, save_format=None):
 def _require_matplotlib():
     """Fail explicitly when a requested plot cannot use the optional backend.
 
-    Plot entry points call this before missing-data checks, so lack of plotting
-    support is not silently disguised as an empty analysis result.
+    Most plot entry points call this before missing-data checks, so lack of
+    plotting support is not silently disguised as an empty analysis result.
+    Snapshot plotting instead returns for an empty frame collection and checks
+    selected-frame geometry before reaching the backend requirement.
     """
     if not HAS_MPL:
         raise RuntimeError('matplotlib is required for requested plotting; install the post extra')
@@ -273,6 +279,8 @@ def _slab_volume_scale(log_data, slab_z_range, n_frames):
     instead warns and returns None so a caller can label uncorrected box P.
     A valid ratio verifies geometry only, not the physical assumption that all
     box stress belongs to the selected slab.
+    This helper has no tilt check of its own; plot_pressure checks retained tilt
+    metadata, and the shell checks loaded cells before calling that entry point.
     """
     bounds = np.asarray(slab_z_range, dtype=float)
     if bounds.shape != (2,) or not np.all(np.isfinite(bounds)) or bounds[1] <= bounds[0]:
@@ -563,6 +571,8 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
     absent, a scalar trace cannot establish the in-plane pressure and is left
     uncorrected with a warning. A missing scalar pressure may be added to the
     input dictionary from its diagonal components.
+    The direct-call guard can reject only retained cell/tilt metadata; lengths
+    alone cannot establish orthogonality. Callers must not strip that evidence.
 
     Args:
         log_data:      dict  — Parsed log data from parse_log()
@@ -840,7 +850,8 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
 
     if ref_rdfs:
         # ── Stacked overlay style (like EELS comparison figures) ──
-        # Each curve is normalized to [0, 1] and offset vertically.
+        # Finite nonnegative curves are peak-scaled to [0, 1] and offset.
+        # This display path does not validate/repair negative or NaN input RDFs.
         # MD on top, references below in order.
         n_curves = 1 + len(ref_rdfs)
         fig, ax = plt.subplots(figsize=figsize or (8, 2 + 1.5 * n_curves))
@@ -856,7 +867,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
             r = curve['r']
             g = curve['g'].copy()
 
-            # Normalize each curve to [0, 1] for consistent offset stacking
+            # Divide by a positive maximum; an all-zero curve stays at its offset.
             g_max = np.max(g) if np.max(g) > 0 else 1.0
             g_norm = g / g_max
 
@@ -982,6 +993,8 @@ def plot_penetration(data, output_dir, dpi=150, normalize=False, figsize=None):
     gaps. In (b), normalized fractions use all selected oxygen; in (c), only
     atoms in the two analysis bands enter the denominator. The deeper band
     uses the analysis offset, not simply z < surface_z.
+    An empty band denominator displays zero (not an observed zero-probability
+    event); NumPy evaluates the unused division too and may warn for 0/0.
     Output: penetration.png
     """
     _require_matplotlib()
@@ -1206,7 +1219,10 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
     type ID); it is not a generic species or surface detector. Negative-z
     atoms do not enter the left histogram. z_fixed/z_surface are optional
     left-panel guides; the right guide instead uses the highest non-O z.
-    No periodic wrapping or volume normalization is applied.
+    Overlaid type bars are not stacked totals. A guide at exactly z=0 is omitted
+    by the legacy truth-value checks. No periodic wrapping or volume
+    normalization is applied. No cell accompanies this array-only API: the
+    shell guards tilted source geometry, but direct callers must do so themselves.
     Output: structure.png
     """
     _require_matplotlib()
@@ -1270,10 +1286,13 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     Fe atoms are shown in blue, O atoms in red. Default: 5 evenly-spaced
     frames across the trajectory. z_focus crops the vertical axis.
     The x-z projection uses stored positions without unwrapping or depth
-    filtering. String-key element maps assume the parser's sorted-element
-    synthesized type ordering; absent recognizable labels retain the legacy
-    type-1/type-2 fallbacks. These display heuristics must not be used as a
-    scientific species assignment. Explicit indices are used as supplied.
+    filtering. Selected frames are checked for orthogonal geometry before any
+    figure is created; this is rejection, not tilted-cell rendering support.
+    String-key element maps assume a legacy sorted-element synthesized type
+    ordering, not the current parser's canonical ACE slots; absent recognizable
+    labels retain the legacy type-1/type-2 fallbacks. These display heuristics
+    must not be used as a scientific species assignment. Explicit indices are
+    used as supplied.
     Output: snapshots.png (N panels side by side)
     """
     if not frames:
@@ -1363,7 +1382,12 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     The cumulative timeline and t50 refer to the initial population when its
     size is supplied; later-arriving IDs do not inflate that cohort's kinetics.
     First-below observations include initially absorbed atoms and do not
-    interpolate missing crossings. The optional square-root curve is a visual
+    interpolate missing crossings. The per-frame surface can itself move across
+    an atom; a first-below observation need not be a physical trajectory crossing
+    or lasting adsorption. Initial IDs remain eligible after absence/type exit
+    and return. Without n_initial_o, the legacy path trusts cross_times/n_o and
+    cannot recover initial-cohort membership from those values alone.
+    The optional square-root curve is a visual
     heuristic, not a diffusion coefficient, uncertainty estimate or mechanism
     identification. None produces no files.
 
@@ -1593,6 +1617,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     ax.legend()
 
     # (d) Penetration depth (surface - deepest O) + rate
+    # Unlike plot_penetration's signed depth, this display clips above-surface
+    # samples to zero. Missing minima/surfaces stay NaN, not zero-depth evidence.
     depth = np.maximum(surface - min_z, 0)
     sm_depth, t_sm4 = _smooth(depth)
 
@@ -1635,6 +1661,9 @@ def plot_penetration_trend(data, output_dir, dpi=150, figsize=None):
     ±sigma band is instantaneous population spread, not a confidence interval;
     NaNs remain gaps. Surface_z is the fixed reference supplied to the trend
     analysis, unlike the per-frame percentile surface in profile plots.
+    The displayed maximum depth is the analysis's zero-clipped depth, unlike
+    the signed depth in plot_penetration. The adsorption denominator is the
+    instantaneous selected population, not the initial-ID timeline cohort.
     Output: penetration_trend.png
     """
     _require_matplotlib()

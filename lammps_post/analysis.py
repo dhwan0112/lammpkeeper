@@ -13,6 +13,9 @@ MSD and the ID-resolved penetration profile instead start at the first frame.
 Spatial analyses assume Angstrom coordinates. Position-based slab metrics
 use the supplied z coordinates without unwrapping or following a moving
 surface unless explicitly stated. Empty-selection behavior is metric-specific.
+These routines do not infer or convert units; caller/reader metadata must supply
+literal Cartesian columns, valid types and the intended timestep convention.
+Validation is local to each metric, not a general certification of input data.
 
 Dependencies:
   Required : numpy
@@ -110,7 +113,13 @@ def _typed_cell(frame, analysis):
 
 
 def _cell_periodic(cell, explicit, fallback, analysis):
-    """Resolve typed PBC without guessing unknown triclinic boundary flags."""
+    """Resolve typed PBC without guessing unknown triclinic boundary flags.
+
+    ``fallback`` is caller-owned legacy policy, used only for absent cells or
+    orthogonal cells with unresolved flags. An explicit mask cannot resolve an
+    unknown tilted cell here: the authoritative Box must first be updated.
+    Orthogonal RDF's historical z-only override is handled by its caller.
+    """
     if cell is None:
         return fallback
     if cell.pbc is None:
@@ -123,7 +132,11 @@ def _cell_periodic(cell, explicit, fallback, analysis):
 
 
 def _guard_slab_frame(frame, analysis):
-    """Reject unsupported typed or retained tilted slab geometry visibly."""
+    """Reject unsupported typed or retained tilted slab geometry visibly.
+
+    Bare legacy frames without tilt retain their old coordinate-only path;
+    this helper does not validate every such frame's bounds or z values.
+    """
     if ('cell' in frame or frame.get('triclinic', False)
             or any(key in frame for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))):
         _orthogonal_box(frame, analysis)
@@ -154,7 +167,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
                              fe_type=1):
     """
     Track the evolution of Fe atomic partial charges over time.
-    ReaxFF-only analysis — requires the 'q' column in dump data.
+    Intended for ReaxFF partial charges; mechanically requires only a 'q' column.
 
     In ReaxFF simulations, Fe atoms gain positive charge upon oxidation.
     This function tracks:
@@ -167,6 +180,8 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     Selection is repeated per frame, so type changes and slab entry/exit alter
     the population. Empty selections produce zero statistics and fractions.
     A requested z restriction is applied only when a z column is available.
+    Slab endpoints are inclusive; charges equal to q_thr are not oxidized.
+    Without a z restriction neither a Box nor orthogonality is required.
 
     Args:
         frames:  list[dict] — Parsed trajectory frames from parse_dump
@@ -187,13 +202,13 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
         Returns None if no charge column is found.
     """
     zi = col_idx.get('z')    # z-coordinate column index
-    qi = col_idx.get('q')    # Charge column index (None if not ReaxFF)
+    qi = col_idx.get('q')    # Column presence, not force-field identification
     ti = col_idx['type']     # Atom type column index
     if qi is None:
         if z_range is not None:
             for fr in frames:
                 _guard_slab_frame(fr, 'Charge z restriction')
-        return None  # No charge data available — not a ReaxFF dump
+        return None  # No charge data; absence alone does not identify a force field
 
     fe_types = _type_ids(fe_type, 'fe_type')
     time, avg, mx, n_ox, n_fe = [], [], [], [], []
@@ -232,7 +247,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
 def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     """
     Compute the z-direction charge distribution for a single frame.
-    ReaxFF-only analysis — requires the 'q' column.
+    Intended for ReaxFF partial charges; requires the 'q' column.
 
     Divides the simulation box along the z-axis into bins and computes:
     - Average Fe charge in each bin (shows where oxidation is occurring)
@@ -300,13 +315,16 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
 def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pbc=None):
     """
     (ia, ib, weight) for every (a, b) pair whose minimum-image distance may be
-    below r_max, found with a periodic cKDTree; None without scipy.
+    below r_max, found with an orthogonal periodic cKDTree. Return None without
+    scipy or for a tilted Box; callers must then enumerate pairs themselves.
 
     The search radius carries a small margin, so the result is a superset of
     the pairs the brute-force loop would bin. Explicit pbc overrides the legacy
     x/y-periodic, optional-z convention. Each nonperiodic axis gets a padded
     box larger than its coordinate span, so no wrapped image enters the cutoff.
     Legacy RDF callers omitting pbc retain their original behavior.
+    Callers supply finite, nonempty position arrays and validated bounds/cutoff;
+    this private helper does not perform the public analyses' full validation.
 
     For same_species, each unordered pair is returned once with weight 2: the
     brute-force loop sees (i, j) and (j, i), whose minimum-image distances are
@@ -345,8 +363,8 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
         pairs = tree_a.query_pairs(radius, output_type='ndarray')
         return pairs[:, 0], pairs[:, 1], 2
     tree_b = cKDTree(wb, boxsize=boxsize)
-    # Zero-distance entries are dropped from the sparse result; the binning
-    # excludes r == 0 anyway.
+    # Sparse records can include zero-distance pairs; public RDF binning rejects
+    # r == 0 explicitly rather than relying on sparse storage conventions.
     near = tree_a.sparse_distance_matrix(tree_b, radius, output_type='ndarray')
     return near['i'].astype(np.intp), near['j'].astype(np.intp), 1
 
@@ -407,9 +425,10 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         z_pbc:      bool       — Apply PBC in z-direction (default: False).
                                  Set to False for slab geometries (boundary p p f).
         pbc:        three bools or None — Explicit lattice-vector flags must
-                    agree with known Box metadata. None uses resolved Box flags
-                    or the legacy (True, True, z_pbc) convention for bare bounds.
-                    Triclinic Box flags must already be resolved.
+                    agree with known Box metadata. None uses resolved flags for
+                    a tilted Box, but preserves (True, True, z_pbc) for ALL
+                    orthogonal inputs, including typed ones. Triclinic Box
+                    flags must already be resolved.
 
     Returns:
         dict with keys:
@@ -563,14 +582,15 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
 def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
                fe_type=1):
     """
-    Compute the Oxidation Rate (OR) over time. ReaxFF-only.
+    Compute the Oxidation Rate (OR) partial-charge proxy, intended for ReaxFF.
 
     OR is the fraction of Fe atoms whose partial charge exceeds q_thr.
     Unlike OAR (which counts O positions), OR uses a partial-charge threshold.
     It is a force-field-dependent oxidation proxy, not proof of a formal charge,
     chemical bond or oxide phase, and is not a time derivative. Selection and
     its denominator are recomputed per frame; empty selections return zero.
-    As in charge evolution, a z restriction requires an available z column.
+    As in charge evolution, a requested z restriction is applied only if a z
+    column exists. Slab endpoints are inclusive; the charge threshold is strict.
     Without that restriction this is a pure scalar-charge population fraction,
     independent of box shape; only the z-restricted variant requires a slab.
 
@@ -631,6 +651,8 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     An empty selection gives NaN for that position but zero counts/fractions.
     The adsorbed and near-surface bands are disjoint, with all other atoms
     remaining in the total-population denominator.
+    The shared lower band edge belongs to near-surface, while its upper edge
+    is excluded. A minimum z above the surface is retained, not clipped.
 
     Args:
         frames:    list[dict] — Trajectory frames
@@ -697,7 +719,7 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
 
     Provides the same fundamental metrics as analyze_penetration() but adds
     running-average smoothing for cleaner trend visualization. Designed for
-    single-panel line graphs that clearly show oxidation progress.
+    single-panel line graphs of the selected coordinate-based observables.
 
     Here adsorption means strictly below surface_z, unlike the deeper offset
     band in analyze_penetration(). Depth is clipped at zero when all selected
@@ -820,7 +842,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     cross-sectional area before arithmetic averaging: this is a mean of
     instantaneous densities, not total counts divided by a mean volume.
     Empty selected populations still contribute a zero-density frame. Coordinates
-    outside the range are excluded; no wrapping, comoving rescaling or boundary
+    outside the range are excluded; the last histogram bin includes its upper
+    endpoint, unlike analyze_charge_z. No wrapping, comoving rescaling or boundary
     correction is performed. Only orthogonal boxes are accepted. Callers must
     supply a usable range for an empty trajectory and a positive bin count.
 
@@ -919,6 +942,9 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
     Invalid settings, selected positions or selected
     IDs fail visibly. Empty selections retain a time point with zero counts.
     IDs, when present, determine tie order; counts do not follow a fixed cohort.
+    Distinct IDs at coincident positions are eligible under this distance-only
+    rule (unlike RDF, which drops zero distances); pairing does not certify a
+    physically plausible bond length.
 
     Returns:
         dict with keys:
@@ -1073,8 +1099,8 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
     8:16 antiparallel site population gives 1/3 OR 2/3 under reversed spin
     encoding. Counts alone do not establish magnetic order or an oxide phase.
 
-    MC atom/swap moves dynamically adjust spin states during the simulation,
-    so this function tracks how the magnetic structure equilibrates.
+    MC atom/swap moves may change these labels during a simulation; population
+    histories alone cannot establish equilibration of the magnetic structure.
 
     This counts instantaneous labels, not persistent spin histories or spatial
     correlations. total_atoms here is the sum of the three recognized ACE
@@ -1141,6 +1167,10 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
     arbitrary aliasing. Neither image flags nor unwrapped-coordinate columns are
     interpreted, and affine cell motion is not subtracted. Bare retained tilt
     without a Box remains unsupported.
+    The result averages squared Cartesian displacements over that one initial
+    cohort/reference time; it is not a multiple-time-origin estimator. All
+    components, including nonperiodic ones, enter the squared norm, and neither
+    center-of-mass drift nor a diffusion-coefficient fit is removed/provided.
 
     Args:
         frames: list-like trajectory with at least two frames.
@@ -1237,7 +1267,11 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         return atoms[order], ids
 
     def box_lengths(frame):
-        """Reuse the orthogonal-geometry guard for each unwrapping increment."""
+        """Return fixed triclinic lengths or validate each legacy orthogonal cell.
+
+        Triclinic lengths are not used for componentwise MIC: that branch calls
+        the exact lattice solver after the whole series passes fixed-cell checks.
+        """
         if reference_cell is not None:
             return reference_cell.lengths
         _box, lengths = _orthogonal_box(frame, 'MSD')
@@ -1336,6 +1370,8 @@ def analyze_structure(atoms_array, z_fixed=None, z_surface=None):
     Coordinates are used as stored, without periodic wrapping or species unions.
     z_fixed and z_surface are compatibility parameters and do not change these
     statistics; corresponding annotations are handled by plotting code.
+    This array-only API has no geometry metadata to validate: tilted-slab
+    rejection, when needed, belongs to the caller before extracting this array.
 
     Args:
         atoms_array: np.array shape (N, 5) — [id, type, x, y, z]
@@ -1384,6 +1420,8 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
     are not unwrapped, so this slab metric requires a consistent z convention.
     initial_cross_times separates initial-population observations from later
     arrivals; n_o is the union size, not a suitable initial-cohort denominator.
+    A moving percentile may pass a stationary atom; therefore a first-below
+    observation is not necessarily transport through a stationary material plane.
 
     This provides the raw data for four visualization modes:
       1. Individual O atom z-trajectories (spaghetti plot)

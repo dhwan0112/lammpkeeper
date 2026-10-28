@@ -78,8 +78,8 @@ def main(argv=None):
         from lammps_post.cli import main as post_main
         return post_main(rest)
 
-        # Top-level --version / -h / --help, or an unknown command: hand back to
-        # argparse for standard usage formatting and exit codes (invalid choice -> 2).
+    # Top-level --version / -h / --help, or an unknown command: hand back to
+    # argparse for standard usage formatting and exit codes (invalid choice -> 2).
     return _build_parser().parse_args(argv)
 
 

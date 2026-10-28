@@ -7,9 +7,10 @@ Three parsers for the main LAMMPS output file types:
   2. parse_log()       — Log files (thermodynamic data)
   3. parse_data_file() — Data files (final structure snapshots)
 
-All parsers are format-agnostic: they auto-detect column layouts
-and handle any combination of atom properties (id, type, x, y, z,
-q, vx, vy, vz, element, etc.) without hardcoded column positions.
+Dump columns are header-driven; only 'element' is split out as text.
+Data-file atom layouts use a supported atom-style table, and logs use
+Step-headed numeric thermo tables. These are bounded format readers,
+not interpreters for every LAMMPS output mode or input command.
 
 Also includes detect_forcefield() for auto-detecting the force field
 type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
@@ -64,10 +65,11 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
         ITEM: ATOMS <col1> <col2> ...
         <atom data lines x N>
 
-    This parser supports ALL dump column layouts. It auto-detects the
-    column names from the 'ITEM: ATOMS' header line on the first frame,
-    then maps each numeric column to a sequential index. The 'element'
-    column (string type, used by ACE potential) is stored separately.
+    Column names come from the first 'ITEM: ATOMS' header and must stay
+    unchanged in later frames. Retained columns other than 'element' must
+    be numeric; arbitrary labels in 'element' are stored separately, not
+    interpreted as chemical identities. Coordinates are returned as stored,
+    without scaled/unwrapped conversion or image-flag reconstruction.
 
     Both .dump and .lammpstrj files use this identical format — file
     extension does not matter.
@@ -82,6 +84,7 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
         columns:    iterable[str] or None — Keep only these columns
                     (e.g. ANALYSIS_COLUMNS). None keeps every column.
         dtype:      numpy dtype of the 'atoms' arrays (float32 halves memory).
+                    Retained id/type values must round-trip exactly in it.
         box_model:  bool — Opt into per-frame Box metadata and restricted tilt.
                     Tilted frames require literal Cartesian x, y, z columns.
 
@@ -92,7 +95,9 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
         frames:  list[dict] — One dict per frame with keys:
                    'timestep' (int)     — MD step number
                    'natoms'   (int)     — Number of atoms in this frame
-                   'box'      (ndarray) — Shape (3, 2): [[xlo,xhi], [ylo,yhi], [zlo,zhi]]
+                    'box'      (ndarray) — Physical bounds, shape (3, 2); in
+                                          Box-aware mode, 'cell' and 'tilt'
+                                          retain the complete restricted cell
                    'atoms'    (ndarray) — Shape (N, n_cols): all numeric atom data
                    'elements' (ndarray[str] or None) — Element symbols if 'element' column exists
         columns: list[str]  — Names of numeric columns in order (e.g., ['id','type','x','y','z','q'])
@@ -195,7 +200,8 @@ class DumpReader:
                     property columns are never converted, which speeds parsing;
                     raw numeric types are always validated for explicit metadata.
         dtype:      numpy dtype for the 'atoms' array. float32 halves memory;
-                    ids/types stay exact below 2**24 (16.7M).
+                    retained id/type values are checked individually for exact
+                    representation (all positive integers through 2**24 fit).
         stride:     int — Yield every Nth frame, starting with the first.
         max_frames: int or None — Stop after yielding this many frames
                     (None or 0 = no limit).
@@ -495,7 +501,9 @@ class DumpReader:
     # the requested number of yielded frames. None/0 means unlimited, not empty.
     # Skipped atom rows are advanced without numeric conversion or payload checks.
     def __iter__(self):
-        """Stream selected frames from the unchanged source, reopening for each pass."""
+        """Reopen and source-check at entry, then stream selected frames in file order."""
+        # Unlike indexed reads, this pass has no post-read stat check. The source
+        # must remain unchanged while the iterator is active; it is not a tailer.
         self._check_source()
         n_seen = 0
         n_yielded = 0
@@ -535,7 +543,7 @@ class DumpReader:
                     return
 
     def _parse_block(self, block, natoms, timestep):
-        """Parse the first natoms lines of the atom block `block` (bytes)."""
+        """Validate an exactly natoms-line byte payload, then parse retained fields."""
         # Validate the complete supplied block before either backend: blank,
         # missing or surplus rows are errors, not silently skipped observations.
         n_numeric = len(self._numeric_pos)
@@ -587,7 +595,8 @@ class DumpReader:
                 self._observe_type_labels(fields, timestep)
                 return atoms, elements
 
-        # Reference path; the native parser defers here for every error case.
+        # Reference path after native ValueError or a mismatched native row count.
+        # Other backend exceptions are not swallowed as successful fallback.
         try:
             if not self._usecols:
                 atoms = np.empty((natoms, 0), dtype=self.dtype)
@@ -674,9 +683,10 @@ class _FrameStore:
     """
     Parsed-frame cache shared by a LazyFrames and all of its slices.
 
-    All or nothing: LazyFrames turns caching off (`keep`) when its frames do
-    not all fit. A partial cache would hold a full budget of memory to save
-    re-parsing only some frames, and analyze-all already shares one pass.
+    LazyFrames disables caching (`keep`) when its estimated frame storage
+    exceeds the budget. The estimate assumes two-character labels; longer
+    labels can exceed it, in which case insertion's actual-size check can
+    leave only part of the view cached. Object/geometry overhead is excluded.
     """
 
     # Own the reader/index/cache once; slices reuse this same store and transform.
@@ -724,9 +734,9 @@ class LazyFrames(Sequence):
 
     Drop-in for parse_dump's frame list: supports len(), integer (incl.
     negative) indexing, slicing (returns another LazyFrames), iteration and
-    truthiness. A trajectory whose parsed frames fit in `cache_bytes` is
-    parsed once and then served from memory; a larger one streams from disk
-    one frame at a time and keeps no frames.
+    truthiness. A view estimated to exceed `cache_bytes` streams without a
+    cache; otherwise loaded frames are retained while their actual array
+    sizes fit. Concurrent misses may parse the same frame independently.
 
     Frame dicts are shared with the cache and must be treated as read-only;
     use set_transform() to derive per-frame data (e.g. a synthesized type
@@ -799,12 +809,14 @@ class LazyFrames(Sequence):
     def shared_pass(self, depth=4):
         """
         While active, every iteration over this view (from any thread) is fed
-        by one producer that parses each frame once and hands it to all
-        iterators, so N concurrent analyses cost one read of the trajectory.
+        by one producer that loads each shared position and hands the same
+        frame object to all subscribers registered for that position.
 
         An iterator opened after the producer has moved on reads the frames it
-        missed on its own, then joins; each iterator still sees every frame in
-        order. `depth` frames may queue per iterator, so memory stays bounded.
+        missed on its own, then joins; each completed iterator still sees every
+        frame in order. Replays can therefore add reads beyond the producer's
+        count. At most `depth` deliveries queue per iterator, in addition to
+        the cache and frames currently held by producers/consumers.
         Random access and slices are unaffected.
         """
         # Context exit disables new subscriptions and requests producer shutdown.
@@ -845,7 +857,7 @@ class LazyFrames(Sequence):
 
     @property
     def estimated_bytes(self):
-        """Memory needed to hold every frame in this view in the cache."""
+        """Estimate array bytes for this view, assuming two-character element labels."""
         natoms = self._store.index.natoms[list(self._positions)]
         return int(self._store.reader.frame_nbytes(int(natoms.sum())))
 
@@ -1315,7 +1327,8 @@ def parse_data_file(filepath):
                 Returns empty array (0, 5) if no atoms found.
         box:    np.array shape (3, 2) — [[xlo, xhi], [ylo, yhi], [zlo, zhi]].
                 Returns empty array if no box bounds found.
-        masses: dict[int, float] — Atom type ID -> mass in atomic mass units.
+        masses: dict[int, float] — Atom type ID -> mass as stored; this reader
+                                  does not establish the run's unit style.
     """
     atoms, box, masses, _ = _parse_data_file(filepath)
     return atoms, box, masses
@@ -1586,7 +1599,8 @@ def parse_input(filepath):
     dump/output files, thermo settings, temperature, and z-region variables.
 
     Handles line continuations (&) and include directives (resolved
-    relative to the input file directory).
+    relative to the input file directory). This is static extraction, not
+    control-flow execution; returned configuration is not a run history.
 
     Args:
         filepath: str — Path to the LAMMPS input script.
@@ -1970,24 +1984,23 @@ def detect_forcefield(columns, col_idx, frames):
 
     Detection logic (applied in order of priority):
 
-    1. If the dump has a 'q' (charge) column → ReaxFF
-       ReaxFF uses QEq charge equilibration, so dump files written with
-       'dump_modify ... element ...' include per-atom charges. This is the
-       most reliable indicator. ReaxFF uses 'real' units (kcal/mol, Angstrom, fs)
-       with a typical timestep of 0.25 fs.
+    1. If the dump has a 'q' (charge) column → assume ReaxFF
+       Charge is not unique to that force field and does not establish units.
+       The compatibility guess supplies real units and dt_fs=0.25.
 
-    2. If the dump has an 'element' column containing 'Mn' → ACE
-       ACE potentials for magnetic iron oxides use 'Mn' as a proxy for
-       spin-down Fe atoms. The element column presence with 'Mn' uniquely
-       identifies ACE simulations with spin tracking.
+    2. If explicit labels fit a registry proxy-element set → assume its FF
+       The canonical ACE preset uses Mn as a spin-down Fe proxy, but Mn alone
+       is not physical proof of ACE. Numeric slots must match for species
+       display aliases to replace raw labels; FF classification is still guessed.
 
-    3. If there are ≥ 3 atom types (no charge column) → ACE
-       Even without element labels, having 3+ types (Fe_up, Fe_down, O)
-       indicates an ACE simulation with spin-resolved atom types.
+    3. If the first frame's maximum numeric type is ≥ 3 → assume ACE
+       This tests the maximum ID, not the number of observed types. Exactly
+       three observed types select the canonical preset; other populations
+       use the legacy count heuristic. Sparse IDs do not establish spin.
 
     4. Otherwise → HDNNP (default)
-       Two-type systems without charge data default to 4G-HDNNP, which
-       handles charges internally via the n2p2 interface.
+       This fallback also covers absent/empty type data; it is not evidence
+       that n2p2 or any particular potential produced the trajectory.
 
     Args:
         columns: list[str]       — Dump file column names (from parse_dump)
@@ -2089,7 +2102,7 @@ def detect_forcefield(columns, col_idx, frames):
                 'atom_types': type_to_label(ff),
             })
 
-    # --- Detection Rule 3: ≥ 3 atom types → ACE (spin-resolved) ---
+    # --- Detection Rule 3: maximum numeric type >= 3 -> assume ACE ---
     if frames and 'type' in col_idx:
         types = frames[0]['atoms'][:, col_idx['type']].astype(int)
         max_type = int(types.max()) if len(types) else 0
@@ -2102,10 +2115,9 @@ def detect_forcefield(columns, col_idx, frames):
                 #   pair_coeff * * ACE_Fe-O.yace Fe Mn O  ->  1=Fe_up, 2=Fe_down, 3=O
                 # so read it from the shared convention rather than guessing.
                 #
-                # Assumes the three types ARE 1/2/3 — true for every ACE dump,
-                # since the pair_coeff line fixes the order. A second 3-type
-                # chargeless force field with a different order would land here
-                # and be mislabelled; give it its own branch when one appears.
+                # Assumes observed types are the canonical 1/2/3 slots. Sparse
+                # IDs or another chargeless force field can reach this branch;
+                # only explicit labels in _metadata can override this guessed map.
                 #
                 # This used to guess O as "the rarest type, if it has < 20% of the
                 # most common". That premise ("O is far fewer than Fe") holds for a
@@ -2115,12 +2127,12 @@ def detect_forcefield(columns, col_idx, frames):
                 # semi-grand with mu=0, so the minority spin population can get
                 # small), the rarest type becomes the minority Fe rather than O, and
                 # the guess silently relabelled Fe_up as O — corrupting every
-                # O-based analysis. Newly generated trajectories carry an element
-                # column and never reach this branch at all.
+                # O-based analysis. Explicit labels, when present, are reconciled
+                # by _metadata even when this classification branch is reached.
                 type_map = type_to_label('ace')
             else:
-                # 4+ spin-resolved types: no fixed convention to fall back on, so
-                # keep the original count heuristic.
+                # A non-three-type population with max ID >= 3 also gets here
+                # (including one/two sparse types); retain the count heuristic.
                 type_counts = {int(t): int(np.sum(types == t)) for t in unique_types}
                 # The key callback ranks populations, not type IDs; ties retain
                 # sorted type order. This remains a guess, not species evidence.

@@ -216,6 +216,7 @@ class PreState:
         self.o2_bond = O2_BOND_LENGTH
         self.o2_separation = 3.0
         self.vacuum = 35.0
+        # Structure RNG only: velocity creation and ACE spin/MC use separate seeds.
         self.seed = 42
 
         # ── Regions ──
@@ -228,6 +229,7 @@ class PreState:
 
         # ── Simulation ──
         self.temperature = 300
+        # Rendered as SEED for thermal equilibration, not for initial ACE spin EQ.
         self.velocity_seed = 12345
         self.boundary = 'p p f'
         self.eq_ps = None       # None = use FF default

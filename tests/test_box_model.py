@@ -1,4 +1,8 @@
-"""GEN-3 cell metadata tests independent of domain labels and geometry kernels."""
+"""GEN-3 cell metadata tests independent of domain labels and geometry kernels.
+
+Literal corner extrema check dump-bound inversion independently of its min/max
+formula. Determinant checks concern cell volume, not minimum-image correctness.
+"""
 
 from dataclasses import FrozenInstanceError
 import itertools

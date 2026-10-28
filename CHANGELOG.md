@@ -12,6 +12,20 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Whole-source re-review and annotation refresh (REVIEW-20261028)
+
+- Re-review all 78 Python/Rust/Shell/TOML source/build files after GEN-3;
+  preserve English documentation for all 73 Python modules and 978 definitions.
+  Strengthen annotations in 56 files and retain adequate documentation in 22.
+- Clarify units/PBC, provenance/transactions, cache/reader lifetime, supported
+  formats, reference/plot interpretation, seed ownership and test-oracle limits.
+  Executable AST/noncomment code, settings, generated strings, fixtures, mappings
+  and goldens are unchanged; this is not a runtime bug-fix or physics certification.
+- Record pre-existing reproduced defects and separate follow-ups, notably silent
+  thermo-row loss, unsupported CIF occupancy and destination-symlink copyback.
+  See `docs/agent/REVIEW-20261028.md` and the open backlog; regression passes do
+  not imply these newly identified gaps have been fixed.
+
 ### Restricted-triclinic geometry (GEN-3; ADR-0003)
 
 - Add immutable `lammpkeeper.io.Box` with physical bounds, restricted tilts and

@@ -10,8 +10,8 @@ Central data store for the interactive session. Holds:
 
 Design philosophy:
   - All loaded data is stored here (not in the shell class)
-  - Analysis functions are pure: they read from state but don't modify it
-  - Cache is invalidated (cleared) when input data changes
+  - Numerical kernels receive source data and parameters; the shell stores results
+  - Managed source/metadata edits invalidate caches; direct legacy mutation may not
   - Settings have sensible defaults that can be overridden via 'set' commands
 ═══════════════════════════════════════════════════════════════
 """
@@ -33,8 +33,8 @@ class SessionState:
 
     Design philosophy:
     - All loaded data is stored here (not in the shell class)
-    - Analysis functions are pure: they read from state but don't modify it
-    - Cache is invalidated (cleared) when input data changes
+    - Numerical kernels do not own session transitions or result publication
+    - Managed source/metadata edits clear caches; arbitrary legacy edits may not
     - Settings have sensible defaults that can be overridden via 'set' commands
     """
 
@@ -147,7 +147,12 @@ class SessionState:
         return (self.run_manifest or {}).get('species_groups', {})
 
     def _combined_species(self):
-        """Merge raw explicit sources, rejecting disagreements with provenance."""
+        """Merge input/data/dump identities, rejecting disagreements with provenance.
+
+        Earlier sources fill each slot first, but priority is not permission to
+        ignore a contradictory explicit label. User fallback fills only holes;
+        the temporary manual analysis override is applied separately.
+        """
         combined = {}
         identities = {}
         owners = {}
@@ -291,7 +296,13 @@ class SessionState:
 
     @property
     def species_map(self):
-        """Build a fresh selection snapshot, including mutable legacy metadata."""
+        """Build a fresh selection snapshot, including mutable legacy metadata.
+
+        Access can publish newly consumed reader evidence and clear dependent
+        results/focus. This is not a side-effect-free property. List-backed
+        compatibility states are rescanned only when their recorded container
+        identity, length or column-map identity changes.
+        """
         reader = getattr(self.dump_frames, 'reader', None)
         evidence = getattr(reader, 'type_labels', None)
         type_ids = getattr(reader, 'type_ids', frozenset())
@@ -452,9 +463,9 @@ class SessionState:
         """
         Auto-detect the Fe surface z-coordinate from the dump data.
         Uses the maximum Fe z minus SURFACE_OFFSET_A (about half a BCC
-        lattice constant, 1.4 Å) as the surface plane. This places the
-        surface between the topmost Fe layer and the gas phase, so O atoms
-        that enter the top Fe layer are correctly counted as adsorbed.
+        lattice constant, 1.4 Å) as the surface plane. This domain convention
+        counts O below that plane as absorbed; it is not an independent chemical
+        adsorption criterion or a fitted instantaneous interface.
 
         Previous: 95th percentile — too conservative, misses O atoms
         interstitially absorbed between the top 2-3 Fe layers.
@@ -550,9 +561,10 @@ class SessionState:
         - The current surface plane, or the 95th percentile of Fe z-coordinates
 
         Adds a margin (default 10 A) on both sides for context.
-        Uses the last frame and clamps to its simulation box boundaries. An
-        explicit z_focus is returned unchanged; this method otherwise computes
-        a suggestion without storing it or altering the surface plane.
+        Uses the last frame and clamps to its simulation box boundaries. After
+        the orthogonal-geometry guard, explicit z_focus is returned unchanged;
+        otherwise this computes a suggestion without storing it or altering
+        the surface plane.
 
         This is used by the 'set z_focus auto' command and by plotting
         functions to automatically crop plots to the interesting region,

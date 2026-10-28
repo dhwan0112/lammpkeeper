@@ -16,6 +16,8 @@ def _validate_build(build, state):
     Legacy build objects without a signature remain accepted. A signed build
     must match geometry settings even when a caller retained it after state
     invalidation; force-field changes alone deliberately remain compatible.
+    This compares provenance settings, not array contents: mutable BuildResult
+    coordinates are not hashed or revalidated here.
     """
     signature = getattr(build, 'geometry_signature', None)
     if signature is not None and signature != state.geometry_signature():

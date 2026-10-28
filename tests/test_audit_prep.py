@@ -87,6 +87,8 @@ def test_even_width_surfaces_preserve_written_periodic_nearest_distance():
             rows = path.read_text().split('Atoms # charge\n\n')[1]
             xyz = np.loadtxt(io.StringIO(rows))[:len(b.fe_positions), 3:6]
         # Independent explicit lateral-image enumeration, not the builder MIC.
+        # This global minimum checks one BCC distance; it does not certify every
+        # atom's neighbor count, surface termination, or the entire pair spectrum.
         delta = xyz[:, None, :] - xyz[None, :, :]
         minimum = np.full(delta.shape[:2], np.inf)
         for ix in range(-1, 2):
@@ -215,6 +217,8 @@ def test_ace_dense_stage_is_configured_clamped_and_exact_in_steps():
         assert float(variables['DENSE_PS']) == dense
         # Evaluate only the numeric duration variables, including short OX_PS
         # supplied at runtime, independently of the generation-time duration.
+        # Python evaluates this narrow arithmetic subset, not LAMMPS syntax or
+        # its full expression/rounding semantics; no solver is launched here.
         for runtime_ox in (ox, .00075, 0):
             env = {'OX_PS': runtime_ox, 'DENSE_PS': dense, 'dt': s.ff['dt']}
             for key in ('ox_steps', 'ox_dense', 'ox_remain'):

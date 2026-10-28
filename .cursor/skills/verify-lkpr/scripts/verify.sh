@@ -15,6 +15,8 @@ FIXTURE="$ROOT/tests/fixtures/ace_examples/regular_MD/traj.dump"
 
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 EVID="${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/$(date +%Y%m%dT%H%M%S)-$SHA-$MODE"
+# Timestamp resolution is one second: simultaneous identical-mode runs should
+# use distinct LKPR_VERIFY_DIR roots to avoid sharing an evidence directory.
 mkdir -p "$EVID" || { echo "cannot create evidence dir $EVID" >&2; exit 2; }
 TMPHOME="$(mktemp -d)"; WORK="$(mktemp -d)"
 # Own only these disposable paths. Evidence is outside them and must survive
@@ -87,6 +89,7 @@ if [ -f "$FIXTURE" ]; then
     grep -qF -- "--- ${required}_" "$WORK/post_out/summary.txt" 2>/dev/null || post_bad=1
   done
   if [ ${#PLOT[@]} -gt 0 ]; then
+    # Presence/size is a smoke gate, not image decoding or numerical validation.
     for required in density_profile msd_Fe o2_dissociation oar penetration penetration_trend rdf_Fe_O snapshots spin_evolution structure; do
       [ -s "$WORK/post_out/$required.png" ] || { echo "Missing/empty plot: $required.png" >> "$EVID/post.log"; post_bad=1; }
     done
@@ -98,6 +101,8 @@ if [ -f "$FIXTURE" ]; then
   fi
   [ ! -f "$WORK/post_out/summary.txt" ] || cp "$WORK/post_out/summary.txt" "$EVID/post-summary.txt"
   find "$WORK/post_out" -type f 2>/dev/null | sed "s|$WORK/||" | sort > "$EVID/outputs.txt"
+  # outputs.txt inventories disposable artifacts; only logs and the copied
+  # analysis summary survive cleanup, not the plots or generated preparation.
 else
   record SKIP post "fixture missing"
 fi

@@ -25,6 +25,11 @@ stdlib Fraction arithmetic on the represented float64 inputs. Exact equal
 objectives choose the lexicographically smallest periodic image coefficient
 tuple (basis-row order).
 Orthogonal cells retain NumPy round-to-even ties and the legacy axis arithmetic.
+
+Coordinates and cell parameters use the same caller-supplied length unit;
+fractional coordinates are dimensionless. Exact image selection refers to the
+represented float64 inputs, not unknown pre-rounding coordinates, and the
+returned residual is still floating-point arithmetic.
 """
 
 from fractions import Fraction
@@ -69,7 +74,7 @@ def _cell(cell, periodic=False):
 
 
 def _condition(matrix):
-    """Reject numerically unsupported bases before any inverse/search."""
+    """Check singular values of a full cell or selected periodic row basis."""
     try:
         singular = np.linalg.svd(matrix, compute_uv=False)
     except np.linalg.LinAlgError as exc:
@@ -90,7 +95,11 @@ def _finite_result(result):
 
 
 def to_fractional(positions, cell):
-    """Return ``s`` for ``positions = cell.lo + s @ cell.matrix``; PBC optional."""
+    """Return dimensionless s in ``positions = cell.lo + s @ cell.matrix``.
+
+    PBC is unnecessary: this is an affine coordinate conversion, not wrapping.
+    The full cell must satisfy the numerical conditioning/scale limits.
+    """
     _cell(cell)
     points = _array(positions, 'positions')
     matrix = cell.matrix
@@ -117,7 +126,13 @@ def to_cartesian(fractional, cell):
 
 
 def wrap_positions(positions, cell):
-    """Wrap periodic fractional components into [0, 1); leave other components."""
+    """Target [0, 1) in periodic fractions, leaving other fractions unwrapped.
+
+    A periodic skew vector may change several Cartesian components. Floating
+    subtraction/reconstruction can round a value onto a cell face; this is not
+    an exact-arithmetic guarantee of strict half-open fractional coordinates
+    after converting the returned Cartesian points back to fractions.
+    """
     _cell(cell, periodic=True)
     points = _array(positions, 'positions')
     if not any(cell.pbc):
@@ -200,7 +215,11 @@ def _image_comparator(displacement, basis):
 
 
 def _nearest_image(displacement, basis, q, r, condition):
-    """Search the complete QR sphere for one displacement, or fail visibly."""
+    """Search one QR sphere using periodic rows and their reduced factorization.
+
+    Base coefficients translate the search near zero without changing the
+    original-input objective used to decide the winning integer image.
+    """
     k = len(basis)
     coefficients = np.linalg.solve(r, q.T @ displacement)
     if not np.all(np.isfinite(coefficients)) or np.any(np.abs(coefficients) > _MAX_IMAGE):
@@ -251,7 +270,7 @@ def _nearest_image(displacement, basis, q, r, condition):
     nodes = 0
 
     def visit(level, partial):
-        """Enumerate lower triangular sphere slices from the last QR row up."""
+        """Back-substitute upper-triangular R, fixing high-index coefficients first."""
         nonlocal nodes, best_image, best_parallel
         radius = np.sqrt(best_parallel) + padding
         available = radius * radius - partial
@@ -294,6 +313,8 @@ def minimum_image(displacements, cell):
     Skew images use the complete finite sphere described in this module's docs;
     resource or conditioning limits raise instead of returning an approximation.
     Input arrays are never modified. Unknown PBC is an error even for empty input.
+    Conditioning is checked on periodic rows only; with no periodic rows the
+    operation is an identity copy and does not need a numerically usable basis.
     """
     _cell(cell, periodic=True)
     result = _array(displacements, 'displacements')
@@ -325,6 +346,8 @@ def unwrap_step(previous_wrapped, current_wrapped, previous_unwrapped, cell):
     All three arrays must have identical shapes. Correct reconstruction requires
     that each physical step lie strictly inside the periodic Voronoi cell; wrapped
     samples alone cannot diagnose aliasing. Atom-ID alignment is the caller's job.
+    Only one cell is supplied, so detecting origin/matrix/PBC changes between
+    frames is also the caller's job; no affine cell-motion correction is inferred.
     """
     _cell(cell, periodic=True)
     previous = _array(previous_wrapped, 'previous_wrapped')

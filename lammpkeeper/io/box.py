@@ -4,6 +4,8 @@ The bounds are physical restricted-cell parameters, not an enclosing Cartesian
 box. Basis vectors are rows: ``r = lo + fractional @ matrix``. Periodic flags
 refer to those lattice vectors; None means unresolved, never all-periodic.
 Geometry algorithms and file parsing live outside this model.
+All bounds and tilts must already share one length unit; this model neither
+stores nor converts a LAMMPS units style. Volume uses that length unit cubed.
 """
 
 from dataclasses import dataclass
@@ -81,6 +83,9 @@ class Box:
     an affine-motion convention. Inputs are copied to immutable tuples; property
     arrays are fresh snapshots so even resetting their write flag cannot mutate
     the cell. ``tilt`` has the exact order ``(xy, xz, yz)``.
+
+    Finite metadata and a representable positive volume do not guarantee that a
+    numerical geometry operation supports the cell's scale or conditioning.
     """
 
     lo: Tuple[float, float, float]
@@ -111,7 +116,7 @@ class Box:
 
     @property
     def bounds(self):
-        """Return physical lo/hi as a fresh (3,2) compatibility snapshot."""
+        """Return physical lo/hi as (3,2), not extrema or a complete skew-cell model."""
         return _readonly(np.column_stack((self.lo, self.hi)))
 
     @property
@@ -142,6 +147,8 @@ class Box:
         Rows carry outer x/y/z limits; tilt is supplied separately in xy/xz/yz
         order. Correcting only by individual tilts misses the xy+xz corner.
         Corrected lengths are validated by the ordinary constructor.
+        This method accepts numeric limits only; header/coordinate-family
+        validation and the interpretation of file boundary tokens belong to I/O.
         """
         try:
             rows = tuple(tuple(row) for row in bounds)

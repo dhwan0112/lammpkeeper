@@ -1,4 +1,9 @@
-"""GEN-1 session integration using serialized generic species and explicit unions."""
+"""GEN-1 session integration using serialized generic species and explicit unions.
+
+Synthetic metadata/load-order checks do not identify a real material or validate
+force-field classification. Kernel comparisons check dispatch parity; analytic
+displacements separately check the selected ID cohort's MSD.
+"""
 
 import contextlib
 import hashlib
@@ -14,7 +19,7 @@ import _util
 
 
 def _quiet(call):
-    """Capture shell presentation without suppressing exceptions or diagnostics."""
+    """Discard stdout presentation while allowing exceptions and warnings to escape."""
     with contextlib.redirect_stdout(io.StringIO()):
         return call()
 
@@ -207,6 +212,8 @@ def test_species_session_groups_reach_actual_rdf_msd_and_density():
         np.testing.assert_allclose(shell.state.cache['msd_X']['msd'], [0, 5])
         assert shell.state.cache['msd_X']['label'] == 'X'
         _quiet(lambda: shell._analyze_rdf(['X-B'], _batch=True))
+        # Reusing the same kernel isolates selection/dispatch parity; this is
+        # not an independent oracle for RDF pair counts or normalization.
         expected = compute_rdf(shell.state.dump_frames, shell.state.dump_col_idx,
                                type_a={2, 7}, type_b={9}, pbc=(True, True, True), z_pbc=True)
         np.testing.assert_array_equal(shell.state.cache['rdf_X-B']['g'], expected['g'])

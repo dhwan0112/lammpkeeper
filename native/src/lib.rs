@@ -3,6 +3,8 @@
 //! The Python side keeps np.loadtxt as the reference implementation and falls
 //! back to it whenever this parser reports an error, so error messages and
 //! edge-case behaviour are defined there.
+// Header/source/cell validation and transactional type-label publication stay in
+// Python. Native atom conversion alone cannot certify a complete frame or run.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -123,11 +125,15 @@ fn parse_block<'py>(
 ) -> PyResult<(Bound<'py, PyByteArray>, Option<Bound<'py, PyList>>, usize)> {
     // Map parser messages to ValueError so DumpReader can retry np.loadtxt for
     // reference diagnostics; constructing Python containers requires the GIL.
+    // Detaching does not transfer ownership of buf: the caller must keep its
+    // input alive for this call. Only Parsed's owned values leave the closure.
     let parsed = py
         .detach(|| parse(buf, natoms, &usecols, element_col, single))
         .map_err(PyValueError::new_err)?;
     let ncols = usecols.len() - usize::from(element_col.is_some());
     let itemsize = if single { 4 } else { 8 };
+    // This Rust-to-Python copy is intentional; only the later bytearray-to-NumPy
+    // view is zero-copy. No Rust Vec allocation is borrowed by the returned array.
     let values = PyByteArray::new(py, &parsed.values[..parsed.rows * ncols * itemsize]);
     let elements = match element_col {
         Some(_) => Some(PyList::new(py, parsed.elements)?),

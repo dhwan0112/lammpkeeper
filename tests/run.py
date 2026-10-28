@@ -4,7 +4,10 @@ Runs every callable `test_*` name in the explicitly registered modules below,
 without requiring pytest. New modules must be added to MODULES; this runner
 intentionally does not claim automatic filesystem discovery. Pytest can discover
 the same files independently when installed. Set LKPR_SLOW=1 to include slower
-RDF/MSD regressions and the independent fixture RDF oracle.
+RDF/MSD regressions and the independent fixture RDF oracle. Tests are ordinary
+zero-argument callables: this runner does not implement pytest fixtures, plugins
+or parameterization. A passing count certifies only the registered checks that
+actually ran, not every optional integration or physical model.
 """
 import os
 import sys

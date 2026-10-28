@@ -1,4 +1,8 @@
-"""GEN-3 serialized session, PBC ownership and unsupported-consumer regressions."""
+"""GEN-3 serialized session, PBC ownership and unsupported-consumer regressions.
+
+Analytic toy RDF/MSD checks, mocked dispatch and actual curve-file rendering
+provide distinct evidence; none is a tilted-slab renderer or a LAMMPS/HPC run.
+"""
 
 import contextlib
 import io
@@ -51,7 +55,11 @@ def _error(call, *needles):
 
 
 def _dump(path, flags='pp pp pp', synthetic=False, labels=('A', 'B'), tilt=4):
-    """Write a fixed physical 10-cube with wrapped steps of 0.4 Angstrom."""
+    """Write fixed physical lengths of ten with x-image steps of 0.4 Angstrom.
+
+    Nonzero xy tilt makes this a skew cell, not a Cartesian cube. The prescribed
+    motion crosses only the a-vector image, so its unwrapped x walk is analytic.
+    """
     text = ''
     for step in range(3):
         x = (9.8 + .4 * step) % 10

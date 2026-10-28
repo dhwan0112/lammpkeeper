@@ -1,6 +1,9 @@
 """AUDIT-20261027: independent crystal geometry and real Agg artist checks.
 
 No pytest/ASE dependency; plotting checks skip visibly without matplotlib.
+Geometry oracles check the stated ideal cells, not material stability, dynamics
+or phase identification. Real Agg draws exercise artists/layout, while patched
+saves do not test image encoding, filenames on disk or visual readability.
 """
 from collections import Counter
 from contextlib import contextmanager
@@ -15,7 +18,11 @@ import _util
 
 
 def test_magnetite_stoichiometry_and_periodic_coordination():
-    """Validate the spinel cell by stoichiometry, coordination and analytic bond lengths."""
+    """Check ideal spinel motif geometry, not its energetics or magnetic ordering.
+
+    Image enumeration is independent of production MIC/symmetry; analytic bond
+    lengths still share the declared lattice constant and oxygen parameter.
+    """
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import CRYSTAL_DB
@@ -61,7 +68,10 @@ Fe1 Fe 0 0 0
 
 
 def test_cif_missing_symmetry_requires_established_p1():
-    """Absent symmetry operators are safe only with unambiguous P1 metadata."""
+    """Test rejection of unspecified symmetry and acceptance of declared P1.
+
+    These minimal CIFs do not cover disorder, general syntax or operator validity.
+    """
     _util.require_numpy()
     from lammps_post.references import parse_cif
     with tempfile.TemporaryDirectory() as tmp:
@@ -104,7 +114,12 @@ _space_group_symop_operation_xyz
 
 @contextmanager
 def _capture_plots():
-    """Capture real rendered figures without image writes, closing every captured artist."""
+    """Draw real Agg artists but replace file saving, then close captured figures.
+
+    Capture is keyed by basename, so a later save replaces an earlier entry;
+    callers close repeated figures explicitly. Failed-before-save figures are
+    not recorded here, so this is not a general exception-path leak check.
+    """
     _util.require_numpy()
     from lammps_post import plotting as p
     _util.require(p.HAS_MPL, 'matplotlib not installed (real Agg artist checks)')
@@ -160,7 +175,11 @@ def test_real_and_metal_pressure_artists_have_correct_units():
 
 
 def test_slab_pressure_uses_per_frame_lz_over_thickness():
-    """Vacuum correction scales each frame by box height over occupied slab height."""
+    """Check conditional Lz/thickness artist scaling, not local material pressure.
+
+    Constant geometry isolates the volume ratio; the final case varies Lz per
+    sample. Neither synthetic case establishes that all box stress is in a slab.
+    """
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):
@@ -224,7 +243,12 @@ def _profile_data(n_o, crossing_times, o_z=None):
 
 
 def test_t50_requires_half_initial_population_and_correct_event_index():
-    """Population half-time is the ceil(N/2)-th crossing, only after enough events."""
+    """Legacy supplied-event half-time requires the ceil(N/2)-th crossing.
+
+    This helper omits n_initial_o: its synthetic events need not agree with the
+    trajectory, and it isolates event indexing rather than event detection.
+    The separate later-arrival test exercises initial-cohort reconstruction.
+    """
     _util.require_numpy()
     import numpy as np
     with _capture_plots() as (p, captured):

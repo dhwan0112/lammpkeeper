@@ -167,7 +167,7 @@ def _frames_equal(a, b):
 
 
 def test_lazy_frames_match_parse_dump_at_any_cache_size():
-    """Streaming, eviction and full caching retain eager-reader access semantics."""
+    """Cached and budget-disabled lazy access retain eager-reader semantics."""
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np
@@ -176,7 +176,8 @@ def test_lazy_frames_match_parse_dump_at_any_cache_size():
     try:
         for kw in ({}, {'stride': 2}, {'max_frames': 4}, {'stride': 3, 'max_frames': 2}):
             ref, _, _ = parse_dump(path, **kw)
-            for cache_bytes in (0, 200, 10 ** 9):   # stream / evicting / fully cached
+            # The small budget disables caching by estimate; no LRU eviction is tested.
+            for cache_bytes in (0, 200, 10 ** 9):   # stream / budget-disabled / cached
                 lf = LazyFrames(DumpReader(path), cache_bytes=cache_bytes, **kw)
                 assert len(lf) == len(ref) and bool(lf)
                 for a, b in zip(ref, lf):
@@ -191,7 +192,10 @@ def test_lazy_frames_match_parse_dump_at_any_cache_size():
 
 
 def test_lazy_frames_transform_survives_eviction():
-    """Re-read uncached frames must receive the transform just like iteration."""
+    """Re-read uncached frames must receive the transform just like iteration.
+
+    Cache size zero forces reloads; this does not exercise an eviction algorithm.
+    """
     if not have_numpy():
         skip('numpy not installed')
     from lammps_post.parsers import DumpReader, LazyFrames
@@ -243,7 +247,11 @@ def test_shell_streaming_load_matches_golden():
 
 
 def test_native_parser_matches_loadtxt():
-    """The Rust parser must return what the np.loadtxt path returns, bit for bit."""
+    """The native-permitted reader must match NumPy for these selected examples.
+
+    This test checks availability but permits fallback. Strict native-success
+    coverage is supplied by species-metadata and Box-aware tests instead.
+    """
     if not have_numpy():
         skip('numpy not installed')
     import numpy as np

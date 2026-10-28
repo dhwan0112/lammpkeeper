@@ -469,6 +469,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
         original = dict(s.__dict__)
+        # Stage mutable publication dictionaries separately from the old state.
+        # This is not a deep copy of readers, frame stores or callback closures.
         s.ff_info = dict(s.ff_info, atom_types=dict(s.atom_types))
         s.cache = dict(s.cache)
         s.species_sources = {key: dict(value) for key, value in s.species_sources.items()}
@@ -579,7 +581,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 frames = LazyFrames(reader, cache_bytes=int(cache_mb * 1024 ** 2),
                                     stride=stride, max_frames=max_frames)
                 def resolve_cell_pbc(frame):
-                    """Resolve unknown source flags dynamically without mutating the index."""
+                    """Resolve unknown flags from the shell's current input on each read.
+
+                    The raw index retains source-owned PBC. Shared frame-store
+                    invalidation makes existing slices reapply this callback
+                    after managed input changes instead of caching its old mask.
+                    """
                     cell = frame['cell']
                     if cell.pbc is None:
                         flags = self.state.input_pbc
@@ -673,7 +680,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             previous_transform = frames._store.transform
 
             def validate_species_frame(frame):
-                """Validate newly consumed identities before kernels receive a frame."""
+                """Validate consumed identities while this reader owns the active dump.
+
+                A retained old view can still transform frames after replacement,
+                but must not publish its evidence into the replacement session.
+                During a load transaction, identities may expand before commit;
+                ordinary streaming expansion instead asks analysis to retry.
+                """
                 if previous_transform is not None:
                     frame = previous_transform(frame)
                 s = self.state
@@ -857,7 +870,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         return []
 
     def do_unload(self, arg):
-        """Unload dump|log|data|input|manifest|all with atomic metadata validation."""
+        """Unload dump|log|data|input|manifest|all with per-source validation.
+
+        Like comma-separated loads, all is a sequence of source transactions,
+        not a single rollback boundary around every requested removal.
+        """
         if arg.strip().lower() == 'all':
             for source in ('dump', 'log', 'data', 'input', 'manifest'):
                 self.do_unload(source)
@@ -2084,8 +2101,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         species_type = species.resolve(species_name)
         display_name = s.species_display_name(species_name)
 
-        # Unwrap only the periodic axes: x, y for a p p f slab, all three for
-        # a p p p cell, where a z boundary crossing would otherwise add ~Lz.
+        # Orthogonal masks unwrap Cartesian axes; triclinic masks select lattice
+        # vectors, whose image translations can couple Cartesian components.
+        # In either case the kernel measures all three displacement components.
         pbc, pbc_src = self._periodicity()
         axes = ''.join(a for a, p in zip('xyz', pbc) if p) or 'none'
         progress_msg(f"Computing MSD for {display_name} (unwrap {axes} from {pbc_src})...")
@@ -2448,7 +2466,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def _iplot_common_opts(self, plot_name, edit_mode=False, *, spatial=True):
         """
         Ask common plot options shared by most plot types.
-        Returns dict with: normalize, z_focus, linewidth, figsize.
+        Returns dict with: normalize, z_focus, lw, figsize.
         Returns None if user cancels.
 
         If a previous recipe exists for this plot_name, uses those values

@@ -54,6 +54,11 @@ def build_fe_slab(state):
     writers preserve diagonal box lengths, not triclinic tilt. Without ASE only
     the alternating half-lattice (100) stacking is available.
 
+    The manual path is not an atom-ID/coordinate-identical ASE replacement:
+    lateral origin, atom ordering, and the unused slab-cell z length can differ.
+    Reproducible starting structures therefore also require recording the builder
+    dependency path, not only the structure seed.
+
     Invalid dimensions or unsupported geometry print an error and return None.
     Returns dict with 'positions', 'cell', 'n_atoms', 'unique_z'.
     """
@@ -242,6 +247,8 @@ def place_o2(slab_data, regions, state):
     if not np.isfinite(bond) or bond <= 0 or not np.isfinite(min_sep) or min_sep <= 0:
         raise ValueError('O2 bond length and separation must be finite and positive')
 
+    # This is a center-to-center exclusion, not an O-atom pair cutoff. Sample
+    # all centers before axes so orientation draws cannot alter center acceptance.
     centers = []
     max_trials = n_mol * 1000
     for _ in range(max_trials):

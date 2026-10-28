@@ -42,6 +42,8 @@ def _image_pairs(frame, col_idx, pbc=(True, True, False)):
     Slab periodicity permits nine x/y translations and exactly zero z shift.
     Taking the minimum first avoids counting repeated images as separate atoms.
     This small oracle intentionally trades speed for transparent geometry.
+    One neighboring image per direction suffices for these wrapped orthogonal
+    coordinates; this is not a general triclinic or unwrapped-coordinate oracle.
     """
     rows = frame['atoms']
     oxygen = rows[rows[:, col_idx['type']] == 2]
@@ -293,7 +295,11 @@ def test_slab_native_and_numpy_match_every_reader_access_path():
 
 
 def test_slab_one_shot_batch_exports_current_time_and_results():
-    """Real CLI dispatch handles spaced paths and persists the analytic case."""
+    """Real CLI dispatch persists section names and metadata for the analytic case.
+
+    Numerical values are checked in the API and shell tests above; this smoke
+    check does not independently validate the exported numeric serialization.
+    """
     with tempfile.TemporaryDirectory(prefix='lkpr slab cli ') as tmp:
         root = Path(tmp)
         dump, metadata = slab.generate(root / 'source')

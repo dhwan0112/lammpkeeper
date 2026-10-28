@@ -1,4 +1,10 @@
-"""GEN-3 opt-in restricted-triclinic dump/data IO compatibility checks."""
+"""GEN-3 opt-in restricted-triclinic dump/data IO compatibility checks.
+
+Independent enclosing-bound arithmetic below checks serialization/metadata, not
+MIC or dynamics. Cartesian values and image fields remain as stored. Geometry
+analysis correctness belongs to separate tests; general rotated cells and
+coordinate-family reconstruction are intentionally unsupported here.
+"""
 
 from pathlib import Path
 import tempfile

@@ -101,6 +101,8 @@ def main(argv=None):
 
     # ── Pre-load files if specified ──
     max_arg = f' --max {args.max_frames}' if args.max_frames is not None else ''
+    # The shell tokenizes command strings again: preserve each filename as one
+    # token, including spaces and quotes, rather than interpolating raw paths.
     if args.dump:
         shell.onecmd(f'load dump {shlex.quote(args.dump)}{max_arg}')
     if args.log:

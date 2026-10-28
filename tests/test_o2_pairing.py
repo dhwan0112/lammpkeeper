@@ -52,6 +52,9 @@ def _reference(frame, pbc, cutoff, types=(4, 7), with_ids=True):
     Canonical coordinates make adjacent images sufficient, even when the input
     positions have been translated by several boxes. No production MIC or tree
     helper participates in this expected-answer calculation.
+    This independently constructs distances/candidates, but intentionally adopts
+    the same greedy policy: agreement validates that policy, not chemical bonds
+    or a maximum matching. Binary-exact chain tests separately pin tie behavior.
     """
     import numpy as np
     rows = frame['atoms'][np.isin(frame['atoms'][:, 1], list(types))]
@@ -192,6 +195,8 @@ def test_o2_random_frames_match_independent_image_greedy_reference():
                                     rng.choice((4, 7), n), pos))
             frame = _frame(rows, box)
             expected, total = _reference(frame, pbc, 1.8)
+            # These calls intentionally exercise the current public default
+            # cutoff (1.8 A), while the oracle specifies that value explicitly.
             regular = analysis.detect_o2_dissociation(
                 [frame], COL, o_type={4, 7}, pbc=pbc)
             with patch.object(analysis, '_rdf_candidate_pairs', return_value=None) as helper:

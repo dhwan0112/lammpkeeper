@@ -97,7 +97,10 @@ HOME="$(mktemp -d)" LKPR_SLOW=1 python tests/run.py # RDF/MSD goldens and oracle
 ```
 
 The numeric regression uses the ACE example trajectory shipped in
-`tests/fixtures/ace_examples/`.
+`tests/fixtures/ace_examples/`. The latest whole-source review, English annotation
+inventory, known open findings and verification limits are recorded in
+[`docs/agent/REVIEW-20261028.md`](docs/agent/REVIEW-20261028.md); passing regressions
+are not a claim that every scientific input or optional path is validated.
 
 ## Layout
 

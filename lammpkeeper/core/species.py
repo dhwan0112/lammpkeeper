@@ -4,6 +4,8 @@ A species label is a selection, not necessarily a chemical element: several
 labels may overlap, and repeated type labels form a union. File parsing, source
 precedence, domain aliases and display translations belong to adapters outside
 this module. Numeric type IDs are never compacted or inferred from a label.
+Selections contain type IDs, not atom IDs: tracking a fixed cohort through type
+changes remains the responsibility of a time-series consumer.
 """
 
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ from typing import Mapping
 
 
 def _valid_name(name):
-    """Require a nonblank exact string, without normalizing user vocabulary."""
+    """Require a nonblank string; preserve case and any surrounding whitespace."""
     if not isinstance(name, str) or not name.strip():
         raise ValueError(f'Invalid species name {name!r}; expected a nonblank string')
     return name
@@ -27,7 +29,7 @@ def _type_id(value):
 
 
 def _members(name, values):
-    """Snapshot a nonempty iterable of explicit positive type IDs."""
+    """Consume a nonempty iterable once and deduplicate positive type IDs."""
     try:
         items = list(values)
     except TypeError:
@@ -63,6 +65,8 @@ class SpeciesMap:
 
         Exact labels cannot be redefined with different membership. Overlapping
         distinct groups are valid; aliases inferred from spelling are not added.
+        Group references must already exist in atom_types; pending metadata is
+        an adapter/session concern, not a partially resolved SpeciesMap state.
         """
         if not isinstance(atom_types, Mapping):
             raise ValueError('Atom types must be a type-ID-to-label mapping')
@@ -83,6 +87,7 @@ class SpeciesMap:
                 raise ValueError(f'Group {name!r} refers to unknown atom type IDs {sorted(missing)}')
             if name in resolved and resolved[name] != members:
                 raise ValueError(f'Conflicting definition for species {name!r}')
+            # Equal membership is an idempotent declaration, not a label override.
             resolved[name] = members
         return cls(resolved)
 

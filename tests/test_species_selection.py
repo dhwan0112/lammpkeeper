@@ -318,6 +318,8 @@ def test_rdf_same_group_preserves_legacy_same_species_normalization():
     from lammps_post.analysis import compute_rdf
     frames = _rdf_frames()
     kwargs = dict(r_max=4.5, n_bins=30, z_pbc=True)
+    # The historical test name denotes scalar/group parity, not permission to
+    # restore a former normalization bug; both calls use the current algorithm.
     expected = compute_rdf(_flatten(frames, {1: 4, 2: 4}), COL,
                            type_a=4, type_b=4, **kwargs)
     actual = compute_rdf(frames, COL, type_a={1, 2}, type_b={2, 1}, **kwargs)
