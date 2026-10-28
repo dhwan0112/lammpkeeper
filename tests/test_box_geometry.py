@@ -1,4 +1,9 @@
-"""GEN-3 independent Cartesian probes of explicit lattice-vector geometry."""
+"""GEN-3 Cartesian probes of explicit lattice-vector geometry.
+
+Ordinary skew cases use finite Cartesian enumeration; cancellation-sensitive
+cases additionally use exact rational objectives on the represented inputs.
+These are bounded synthetic checks, not a proof for all float64 cells.
+"""
 
 import ast
 from fractions import Fraction
@@ -34,6 +39,8 @@ def _cartesian_oracle(displacements, rows, flags, reach):
     Probe coordinates and the deliberately generous integer range are explicit
     in each test; no transform, QR, singular-value bound or production helper is
     used here. The test verifies the optimum is not on an artificial cube edge.
+    That interior check is a guard for these chosen probes, not a general proof
+    that an arbitrary unreduced basis needs no images beyond the supplied cube.
     """
     import numpy as np
     images = list(itertools.product(*(range(-reach, reach + 1) if flag else (0,)
@@ -217,7 +224,7 @@ def test_geometry_oblique_three_component_rank_one_exact_ties_and_neighbors():
 
 
 def test_geometry_uncertain_signs_are_exact_when_longdouble_is_only_float64():
-    """Emulate platforms without an extended mantissa; exact fallback is required."""
+    """Force float64 comparison filtering; this does not emulate another BLAS/OS."""
     np, _, _ = _api()
     with patch.object(np, 'longdouble', np.float64):
         test_geometry_oblique_large_perpendicular_rank_one_exact_image_regression()
@@ -230,6 +237,8 @@ def test_geometry_rank_two_large_perpendicular_matches_exact_cartesian_oracle():
     cell = Box((0, 0, 0), (1, 1, 1), tilt=(0.4, 0.2, 0.3),
                pbc=(False, True, True))
     rows = np.array([[0.4, 1, 0], [0.2, 0.3, 1]])
+    # Unlike QR projections, exact Cartesian objectives retain the tiny difference
+    # between images beside the large image-independent perpendicular component.
     exact_rows = [[Fraction.from_float(float(x)) for x in row] for row in rows]
     images = tuple(itertools.product(range(-4, 5), repeat=2))
     for sign in (-1, 1):

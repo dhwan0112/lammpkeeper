@@ -1,4 +1,10 @@
-"""GEN-1 explicit metadata adapters and lazy dump identity regressions."""
+"""GEN-1 explicit metadata adapters and lazy dump identity regressions.
+
+Reader assertions concern publication of one successfully consumed frame, not
+whole-trajectory validation or shell transaction rollback. Session tests own
+managed load/unload and pending-group integration; sparse raw IDs here need no
+force-field inference. Strict native tests forbid NumPy fallback explicitly.
+"""
 
 import hashlib
 import json

@@ -2,6 +2,9 @@
 
 The final fixture frames include minimization. This checks the RDF calculation,
 not equilibrium sampling, a phase assignment or the physical time axis.
+The full pair matrix bypasses production candidate search and accumulation,
+but uses the same orthogonal nearest-image formula and radial-bin convention;
+it is not an independent test of a skew-cell MIC or finite-boundary correction.
 """
 import os
 import numpy as np

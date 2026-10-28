@@ -1,7 +1,8 @@
 """Numeric regression: golden fingerprints on the ACE example trajectory.
 
-Guards that refactors do not change analysis output. Golden hashes were
-captured on the committed baseline (see MIGRATION.md, Stage 2 step B).
+Guards that refactors do not change analysis output. The original baseline
+and approved later corrections are recorded next to their individual hashes
+and in MIGRATION.md; the current values are not all from the original capture.
 Fast checks run by default; RDF/MSD are slower and opt-in via LKPR_SLOW=1.
 Skips cleanly when numpy or the fixture is unavailable.
 """
@@ -82,6 +83,8 @@ def test_numeric_regression_rdf_msd_slow():
     from lammps_post.parsers import pbc_from_boundary
     pbc = pbc_from_boundary(f.reader.boundary)
     assert pbc == (True, True, True), 'the ACE reference trajectory is bulk, not a slab'
+    # section_hash rounds array values to eight decimals before hashing. These
+    # fingerprints catch drift at that serialization precision, not bitwise drift.
     assert section_hash(A.compute_rdf(f, ci, type_a=1, type_b=3, z_pbc=True)) == GOLDEN_SLOW['rdf_FeUp_O']
     assert section_hash(A.analyze_msd(f, ci, species_type=3, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_O']
     assert section_hash(A.analyze_msd(f, ci, species_type=1, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_FeUp']

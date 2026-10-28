@@ -40,7 +40,11 @@ class HostedShellMixin:
     _next = None            # what the host should do after cmdloop returns
 
     def _setup_history(self, histfile):
-        """Load this shell's history; standalone shells save it at exit."""
+        """Replace the process-global history; standalone shells save it at exit.
+
+        The configured length bounds file writes, not the number of entries read
+        into memory. A host takes over buffer swapping after setting ``_host``.
+        """
         self.histfile = os.path.expanduser(histfile)
         if readline is None or not history_enabled():
             return
@@ -59,10 +63,11 @@ class HostedShellMixin:
         atexit.register(self._save_history_if_standalone)
 
     def _save_history_if_standalone(self):
-        """Persist only the history this standalone shell owns, honoring opt-out.
+        """Persist the current buffer for a standalone shell, honoring opt-out.
 
         Hosted sessions swap the process-global readline buffer themselves;
         writing it from an atexit child callback would mix the shells' commands.
+        Multiple standalone instances do not have independent in-memory buffers.
         """
         # Hosted shells share readline with lkpr, which swaps history per shell.
         if self._host is None and readline is not None and history_enabled():

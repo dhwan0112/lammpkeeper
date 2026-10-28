@@ -1,9 +1,12 @@
 """Guard: the single-read analysis engine and the cKDTree RDF path.
 
-- LazyFrames.shared_pass: concurrent iterators (joining early, late, or
-  stopping early) each see every frame in order, and frames are parsed once.
+- LazyFrames.shared_pass: completed concurrent iterators see every frame in
+  order; an intentionally stopped iterator sees its prefix. The producer count
+  excludes independent prefix replays by late joiners, not all disk reads.
 - 'analyze all' over a shared read gives the same results as sequential.
 - compute_rdf's cKDTree path bins exactly like the brute-force fallback.
+  Both paths share production binning/normalization: parity is not an independent
+  proof of physical RDF normalization or restricted-triclinic support.
 
 Skips cleanly without numpy, scipy (RDF) or the fixture.
 """

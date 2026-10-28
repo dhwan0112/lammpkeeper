@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build the optional native dump parser and drop it next to parsers.py.
-# Without it, lammps_post falls back to np.loadtxt (same results, slower).
+# Without it, lammps_post uses the portable np.loadtxt reference path.
+# Build/copy success is not parity evidence: native-success tests must forbid
+# fallback, or they can accidentally compare the reference path with itself.
 # Requires an existing Rust/Cargo toolchain and configured Python/PyO3 build
 # environment; this helper does not bootstrap or install either toolchain.
 # Fail immediately on build/copy errors or unset variables, rather than claiming

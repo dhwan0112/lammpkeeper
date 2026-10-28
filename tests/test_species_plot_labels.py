@@ -1,4 +1,9 @@
-"""Plot label/filename plumbing with a fake backend, not visual verification."""
+"""Plot label/filename plumbing with a fake backend, not visual verification.
+
+Only title properties and requested save paths are observed. The permissive
+fake ignores line data, guide markers, geometry and unexpected rendering calls;
+these checks cannot substitute for real Agg artist/unit tests or disk saves.
+"""
 import contextlib
 import os
 from unittest.mock import patch

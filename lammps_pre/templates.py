@@ -2,7 +2,8 @@
 LAMMPS input script and PBS run script templates.
 
 Renders force-field-specific input scripts from PreState parameters.
-Templates reproduce the exact structure of the production atlas scripts.
+Protocols retain the Fe/O production workflow with documented safety repairs;
+rendering alone does not validate a potential or the target site's runtime.
 
 The multiline bodies are generated artifacts: Python-side documentation stays
 outside them so maintenance notes do not change submitted LAMMPS/Bash inputs.
@@ -27,6 +28,8 @@ def render_input_script(build, state):
     non-ACE preset; ACE clamps the dense interval to total oxidation duration
     inside LAMMPS. Unknown force fields raise instead of guessing a template.
     Geometry freshness is checked by writer callers, not this renderer.
+    Boundary text is emitted verbatim; the reflecting z walls require a compatible
+    nonperiodic z boundary, and placement still assumes periodic x/y.
     """
     for name, value in (('equilibration time', state.get_eq_ps()),
                         ('oxidation time', state.get_ox_ps()),
@@ -51,6 +54,10 @@ def _render_ace(build, state):
     mass. Fixed Fe is set down, mobile Fe starts approximately half up, and
     semi-grand atom swaps operate only on mobile Fe. A compatible lateral MPI
     grid is resolved before rendering, with one processor layer along z.
+
+    Structure placement uses state.seed elsewhere. Here velocity_seed controls
+    thermal EQ only: spin initialization, MC swaps, and the stage-0 velocity
+    creation retain independent fixed seeds in the unchanged protocol body.
 
     Region includes provide Angstrom heights. Initial static groups partition
     frozen Fe, lower NVT Fe, middle NVE Fe, and upper NVT gas; the lower oxygen

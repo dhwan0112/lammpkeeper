@@ -5,6 +5,8 @@ production layout is MINIMIZATION, not another MD segment. The historical
 assertion requiring more than 201 selected rows locked in optimizer iterations
 as physical time. Retain all four raw blocks, but exclude optimizer rows from
 MD arrays. A separate analytic test still requires genuine MD blocks to merge.
+The fixture expectation checks classification and selection against source rows;
+it does not establish elapsed physical time without confirmed units/timestep.
 """
 import os
 

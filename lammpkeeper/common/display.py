@@ -30,10 +30,14 @@ _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|[\x01\x02]')
 
 
 def visible_width(text):
-    """Terminal columns `text` occupies: ANSI codes count 0, CJK/fullwidth 2."""
+    """Estimate terminal columns: supported ANSI codes count 0, wide glyphs 2.
+
+    This code-point sum is not a grapheme-cluster or terminal cursor emulator;
+    joined emoji, tabs and arbitrary control sequences need not match it.
+    """
     width = 0
-    # Measure rendered cells, not code points: a combining mark decorates the
-    # preceding character, while a wide/fullwidth glyph occupies two cells.
+    # Approximate cell widths from code points: a combining mark decorates the
+    # preceding character, while a wide/fullwidth glyph contributes two cells.
     for ch in _ANSI_RE.sub('', str(text)):
         if unicodedata.combining(ch) or unicodedata.category(ch) in ('Mn', 'Me', 'Cf'):
             continue

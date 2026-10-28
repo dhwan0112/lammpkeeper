@@ -1,17 +1,20 @@
 """The fair-comparison invariant: every force field starts from the SAME structure.
 
 The whole point of the study is to compare force fields on one system, so the
-only thing that may differ between their inputs is the file format — atom style,
-type count, charge column. Coordinates, box, and regions must be identical.
+initial structure may differ only in representation — atom style, type count,
+charge column. Coordinates, box, and regions must be identical. Runtime protocols
+and force-field parameters legitimately differ; these tests do not compare them.
 
 This used to fail. `compute_regions` anchored the reflective O2 wall to the
 force field's own interaction cutoff (`state.rc`: ACE 7.0 A, ReaxFF 5.0 A), and
 the wall in turn anchors both the O2 placement band and the box height. The Fe
 slab matched across force fields; the O2 layer sat 2.0 A higher and the box was
 2.0 A taller for ACE. Fixed by placing the wall at the LARGEST cutoff for every
-force field (state.WALL_CUTOFF), which satisfies all of them and depends on none.
+force field (state.WALL_CUTOFF), independent of which preset is selected.
 
 Needs ASE (prep's slab builder); skips cleanly without it.
+This is a cross-preset equality guard, not an independent geometry oracle or a
+comparison between ASE and the manual fallback.
 """
 import _util  # noqa: F401  (path bootstrap)
 

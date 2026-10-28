@@ -2,6 +2,8 @@
 
 RDF uses an equal-weight arithmetic mean of instantaneous density-normalized
 RDFs, rho_b=N_b/V. Same-species histograms count both ordered directions.
+Exact few-atom calculations and finite-sample ideal-gas checks serve different
+purposes: the latter's statistical band is not a numerical error tolerance.
 """
 from contextlib import nullcontext
 from unittest.mock import patch
@@ -87,8 +89,8 @@ def test_rdf_seeded_ideal_gas_constant_and_variable_volume():
                              for fr in frames[3:]]
     for fr in variable[3:]:
         fr['atoms'][:, 2:] *= 2
-    # Shell volume grows as the difference of cubed edges. Volume weighting
-    # aggregates counts fairly; the outer bins avoid sparse near-origin noise.
+    # Radial shell-volume weighting defines this plateau summary, not a change
+    # to the equal-per-frame estimator. Outer bins avoid sparse near-origin noise.
     # With N/V same-species normalization, the ideal finite-N level is (N-1)/N,
     # well inside the statistical band around one used here.
     weights = np.diff(np.linspace(0, 6, 31) ** 3)
@@ -302,8 +304,8 @@ def test_domain_type_union_filters_match_flattened_species():
     for fr in flat:
         fr['atoms'][np.isin(fr['atoms'][:, 1], [4, 7]), 1] = 1
         fr['atoms'][np.isin(fr['atoms'][:, 1], [9, 12]), 1] = 2
-    # Preserve coordinates and charges while collapsing labels only, so each
-    # comparison isolates union membership rather than changing the physics.
+    # Preserve coordinates and the later-assigned charges while collapsing
+    # labels only, isolating union membership rather than changing the physics.
     for func, kwargs in ((a.compute_oar, dict(z_surf=6)),
                          (a.analyze_penetration, dict(surface_z=6)),
                          (a.analyze_penetration_trend, dict(surface_z=6)),

@@ -31,7 +31,12 @@ def _frame(positions, types=None, step=0, lo=(2, -3, 4),
 
 
 def _image(delta, h, pbc):
-    """Find an image by exhaustive Cartesian enumeration for these tiny cells."""
+    """Find an image by exhaustive Cartesian enumeration for these tiny cells.
+
+    The finite [-8, 8] coefficient range is specific to the literal positions
+    and tilts below, not a general MIC guarantee. Norm comparisons are ordinary
+    float64; core geometry tests, not this oracle, cover exact near-tie ordering.
+    """
     import numpy as np
     shifts = itertools.product(*(range(-8, 9) if flag else (0,) for flag in pbc))
     candidates = np.asarray(delta) - np.asarray(list(shifts)) @ h
@@ -94,6 +99,8 @@ def test_triclinic_rdf_directed_species_unions_and_dynamic_cells():
     frames_h = [_frame(positions, [4, 4, 9, 9, 9]),
                 _frame(positions, [4, 4, 9, 9, 9], step=1,
                        lengths=(4, 5, 6), tilt=(-1.2, .6, -1.3))]
+    # Some bins exceed the periodic inscribed radius. This tests the documented
+    # nearest-image/global-density estimator, not complete spherical sampling.
     for a, b in (({4}, {4}), ({4}, {9}), ({4, 9}, {9})):
         expected = sum(_rdf_oracle(fr, h, a, b, 2.7, 9) for fr, h in frames_h) / 2
         for ordered in (frames_h, frames_h[::-1]):
@@ -184,7 +191,12 @@ def test_triclinic_msd_prescribed_walk_all_periodic_subsets():
 
 
 def test_triclinic_msd_uses_voronoi_not_fractional_rounding():
-    """The accumulated increment is the exact nearest Cartesian lattice image."""
+    """The accumulated increment is the exact nearest Cartesian lattice image.
+
+    Interpreting the result as physical motion assumes the shorter enumerated
+    increment; wrapped endpoints alone cannot prove whether a real trajectory
+    instead took a longer aliased path. This asserts reconstruction convention.
+    """
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import analyze_msd

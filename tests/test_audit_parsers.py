@@ -1,4 +1,9 @@
-"""AUDIT-20261027 synthetic parser integrity regressions (NumPy only)."""
+"""AUDIT-20261027 synthetic parser integrity regressions.
+
+Backend-permitted loops may use an installed extension or its NumPy fallback;
+native success is established separately by tests that forbid that fallback.
+These examples are not an exhaustive oracle for LAMMPS file grammars.
+"""
 from pathlib import Path
 import tempfile
 import threading

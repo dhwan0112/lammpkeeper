@@ -16,6 +16,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3 targets the supported Python 3.9 floor without binding each build to one
 # newer CPython minor version; NumPy arrays are assembled on the Python side.
+# ABI compatibility is not a geometry/units guarantee: Python owns cell metadata,
+# and parity tests must exercise a real native call rather than NumPy fallback.
 pyo3 = { version = "0.26", features = ["extension-module", "abi3-py39"] }
 
 [profile.release]

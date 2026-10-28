@@ -105,6 +105,8 @@ def _apply_symop(symop_str, frac):
     expressions used by the built-ins, but is not an arbitrary expression
     parser or syntax validator. Wrapping and duplicate handling belong to
     _expand_symmetry, so the result here may lie outside the unit cell.
+    Unrecognized characters/terms are not rejected, and exactly three comma
+    components are assumed rather than checked: input needs external validation.
     """
     result = np.zeros(3)
     parts = [s.strip() for s in symop_str.split(',')]
@@ -169,6 +171,9 @@ def _expand_symmetry(asym_atoms, symops):
     Keep elements in the key so coincident sites of different species are not
     merged. Preserve the first generated representative in traversal order;
     site occupancies and disorder alternatives are not resolved here.
+    Rounding occurs after modulo wrapping: values close to 1 and 0 can still
+    have distinct keys across the periodic seam, while nearby interior sites
+    may collapse into one key. Neither behavior measures site separation in Å.
     """
     all_atoms = []
     seen = set()
@@ -303,6 +308,10 @@ def parse_cif(source):
     multiple data blocks and sophisticated multiline/quoted CIF constructs
     are not interpreted. The caller must judge the suitability of such input
     as a fully occupied ideal reference before drawing structural conclusions.
+    Scalar tags are case-insensitive, but loop/header matching is not. Explicit
+    operators take precedence without checking the declared space group or
+    validating every operator's syntax. Invalid finite/nonfinite cell numbers
+    and coordinates are not comprehensively rejected by this reader.
     """
     # ── Fetch CIF content ──
     if source.lower().startswith('cod:'):
@@ -514,6 +523,9 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
     shells are represented without missing repeated images. No finite-boundary
     shell correction, automatic replication-size choice or input validation
     of these geometric assumptions is performed.
+    Even the default fourfold alpha-Fe supercell has half-side 5.733 Å, below
+    the default 6 Å cutoff; its outer shells therefore lack a complete image
+    population. All pairs use N_B/V, not (N_B-1)/V for identical elements.
 
     Args:
         phase_or_crystal: str (key in CRYSTAL_DB) or dict (from parse_cif)

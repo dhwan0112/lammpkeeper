@@ -36,7 +36,7 @@ FORCE_FIELDS = {
 
 
 def type_to_label(ff):
-    """{type_number: label}  e.g. 'ace' -> {1: 'Fe_up', 2: 'Fe_down', 3: 'O'}."""
+    """Copy the preset type-to-label table; an unknown preset raises KeyError."""
     return {t: label for t, (_el, label) in FORCE_FIELDS[ff].items()}
 
 
@@ -80,11 +80,15 @@ def make_species_map(atom_types, ff=None, groups=None):
     ``SpeciesMap``. This adapter alone knows domain aliases: choosing a force
     field never overwrites user-supplied labels or injects prefix-based guesses.
     Existing scalar tables/conversion helpers remain unchanged.
+    Unknown/omitted presets are harmless here: only the explicit labels/groups
+    apply, unlike the strict legacy scalar table lookups above.
     """
     exact = SpeciesMap.from_atom_types(atom_types).type_sets()
     resolved = SpeciesMap.from_atom_types(atom_types, groups=groups).type_sets()
     canonical = FORCE_FIELDS.get(ff, {})
     for name, members in _SPECIES_GROUPS.get(ff, {}).items():
+        # An exact user label suppresses this alias. Otherwise every alias member
+        # must retain its canonical slot label; an explicit unequal group errors.
         if (name not in exact
                 and all(t in atom_types and atom_types[t] == canonical[t][1] for t in members)):
             if name in resolved and resolved[name] != members:
@@ -104,7 +108,11 @@ def resolve_species(name, atom_types, ff=None, groups=None):
 
 
 def species_display_name(name, atom_types, ff=None, groups=None):
-    """Human-readable selection name, separate from cache/file identifiers."""
+    """Format a resolved selection without changing its cache/file identifier.
+
+    Preset display semantics require matching membership and matching slot
+    labels; reusing a familiar group name alone is insufficient evidence.
+    """
     members = resolve_species(name, atom_types, ff=ff, groups=groups)
     canonical = FORCE_FIELDS.get(ff, {})
     canonical_members = _SPECIES_GROUPS.get(ff, {}).get(name)

@@ -1,4 +1,8 @@
-"""GEN-1 generic model tests, independent of force-field/chemical vocabulary."""
+"""GEN-1 generic model tests, independent of force-field/chemical vocabulary.
+
+Tests separate direct selections from factories with a known type universe;
+session source precedence and pending manifests are covered outside this module.
+"""
 
 import ast
 from dataclasses import FrozenInstanceError

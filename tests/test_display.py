@@ -8,7 +8,7 @@ import lammpkeeper.common.display as common_d
 
 def test_single_source_identity():
     """Legacy import paths must share objects, not divergent display copies."""
-# All three modules must expose the *same* objects (one implementation).
+    # All three modules must expose the *same* objects (one implementation).
     assert pre_d.C is post_d.C is common_d.C
     assert pre_d.progress_msg is common_d.progress_msg
     assert post_d.print_table is common_d.print_table

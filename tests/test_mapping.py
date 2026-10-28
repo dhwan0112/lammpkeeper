@@ -4,6 +4,9 @@ The convention is fixed by the ACE potential itself
 (`pair_coeff * * ACE_Fe-O.yace Fe Mn O` -> 1=Fe_up, 2=Fe_down, 3=O, with 'Mn'
 standing in for spin-down Fe; Bienvenu et al., npj Comput. Mater. 2025, 11:81).
 Everything below asserts that both sides of the pipeline agree on it.
+Population and element-only cases exercise compatibility inference, not proof
+that an arbitrary three-type system is this force field. Explicit identity and
+conflict handling have separate GEN-1 tests.
 """
 import _util  # noqa: F401  (path bootstrap)
 

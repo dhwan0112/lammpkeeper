@@ -14,6 +14,9 @@ def _run_verifier(case, mode='full'):
     The embedded interpreter is a fault-injection fixture, not a solver or
     renderer: each case changes artifact presence or reported success while
     the verifier's own evidence checks remain real.
+    Nonempty placeholder images and input files test artifact gates, not file
+    validity or physics. The returned summary survives temporary cleanup; the
+    fake checkout and its generated evidence files do not.
     """
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='lkpr-verifier-') as tmp:

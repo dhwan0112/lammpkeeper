@@ -230,6 +230,8 @@ def test_audit_shared_failures_do_not_claim_complete():
         shell = _shell(root)
         _load(shell, 'dump', root / 'traj.dump', ' --cache-mb 0')
         out = io.StringIO()
+        # Fault injection exercises orchestration/error propagation, not a real
+        # RDF numerical failure or an exhaustive shared-reader scheduling proof.
         with patch.object(shell, '_analyze_rdf', side_effect=RuntimeError('synthetic failure')), \
                 patch.object(shell, '_dump_jobs_after_rdf', return_value=[]), \
                 contextlib.redirect_stdout(out):

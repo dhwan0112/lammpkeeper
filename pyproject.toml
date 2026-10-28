@@ -16,8 +16,9 @@ dependencies = [
     "numpy",
 ]
 
-# prep (lammps-pre) and post (lammps-post) have disjoint heavy dependencies,
-# so they are split into extras. Install only what a given task needs:
+# prep (lammps-pre) and post (lammps-post) expose separate optional dependency
+# bundles; installing an extra makes its libraries available, not every geometry,
+# force field or external engine supported. Install only what a task needs:
 #   pip install -e .[prep]   # structure/input generation (ASE)
 #   pip install -e .[post]   # analysis/plotting (MDAnalysis, scipy, pandas, matplotlib)
 #   pip install -e .[all]    # everything
@@ -44,6 +45,8 @@ testpaths = ["tests"]
 version = {attr = "lammpkeeper.VERSION"}
 
 # Explicit inclusion keeps both historical import paths in the distribution;
-# moving files requires a separate migration/deprecation decision.
+# moving files requires a separate migration/deprecation decision. Box and core
+# geometry must ship even in a NumPy-only install; the optional locally built
+# native extension is not implied by this explicit pure-Python package list.
 [tool.setuptools]
 packages = ["lammpkeeper", "lammpkeeper.common", "lammpkeeper.core", "lammpkeeper.io", "lammps_pre", "lammps_post"]

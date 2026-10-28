@@ -1,4 +1,9 @@
-"""Cross-module audit contracts: parser timeline and CLI plotting failures."""
+"""Cross-module audit contracts: parser timeline and CLI plotting failures.
+
+Synthetic log/dump text isolates metadata routing, not a real LAMMPS run.
+Captured Agg artists check values; mocked pressure dispatch checks arguments
+only, and simulated renderer absence checks failure routing, not installation.
+"""
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -62,7 +67,11 @@ def test_optimizer_only_thermo_cannot_be_labeled_elapsed_md_time():
 
 
 def test_duplicate_step_counters_do_not_infer_ambiguous_slab_heights():
-    """Repeated step labels cannot safely join log samples to run-specific boxes."""
+    """Repeated step labels cannot safely join log samples to run-specific boxes.
+
+    The renderer is mocked: this asserts that ambiguous Lz is not synthesized,
+    not what a subsequent pressure figure or warning actually looks like.
+    """
     import numpy as np
     from lammps_post import shell as sm
     from test_audit_workflow import _dump, _shell, _load, _quiet
@@ -116,7 +125,11 @@ def test_log_only_and_mixed_source_plots_use_explicit_log_units_and_timestep():
 
 
 def test_unknown_or_conflicting_log_metadata_is_not_silently_interpreted():
-    """Unconfirmed or conflicting units/timesteps must not become one false timeline."""
+    """Reject unconfirmed/conflicting metadata before assigning a thermo timeline.
+
+    Helper/parser rejection is tested directly; this case does not render an
+    artist or establish behavior for variable-timestep integration histories.
+    """
     import numpy as np
     from lammps_post.shell import LammpsPostShell
     from lammps_post.parsers import parse_log

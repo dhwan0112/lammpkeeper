@@ -108,5 +108,5 @@ def canon(o):
 
 
 def section_hash(obj):
-    """Short sha256 of the canonical JSON of obj (matches the /tmp harness)."""
+    """Fingerprint canonical JSON for change detection, not a correctness oracle."""
     return hashlib.sha256(json.dumps(canon(obj), sort_keys=True).encode()).hexdigest()[:16]

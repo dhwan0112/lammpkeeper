@@ -28,6 +28,8 @@ def _run_job(failure='', lammps_status=0):
 
     Local PATH stubs exercise real shell branching without an HPC allocation;
     payload files and event logs independently reveal copy and cleanup order.
+    The substituted launcher never calls lmp, so these are filesystem lifecycle
+    checks rather than validation of MPI, modules, potentials, or site resources.
     """
     with tempfile.TemporaryDirectory(prefix='lkpr_hpc1_') as tmp:
         root = Path(tmp)
