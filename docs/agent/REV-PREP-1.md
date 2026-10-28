@@ -1,6 +1,6 @@
 # REV-PREP-1 — refuse unsafe copyback destination symlinks
 
-Status: implementation and full verification complete; publication in progress.
+Status: complete; [PR #24](https://github.com/dhwan0112/lammpkeeper/pull/24).
 Baseline: merged main `2ad45edb5bb93cd53e15bf5b588f96dfe2184bd7` (PR #23).
 Branch: `fix/rev-prep-1-copyback-symlinks`.
 
@@ -126,8 +126,9 @@ Forced NumPy skips (all six pass in expanded/native):
 
 All 19 new copyback regressions ran in every environment. Missing MDAnalysis and
 pytest execution are not included in this passing count; these are named limits,
-not silently counted successful integrations. Merged-main verification and PR
-links will be recorded when available.
+not silently counted successful integrations. Published as
+[PR #24](https://github.com/dhwan0112/lammpkeeper/pull/24). Merged-main execution
+evidence will be recorded in the PR after merge.
 
 ## Preservation evidence (parent measured)
 
