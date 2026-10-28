@@ -16,6 +16,12 @@ function and nested-helper docstrings; their behavior/coverage is recorded in
 `docs/agent/TEST-3.md`. The original annotation-only AST comparison still applies
 to its original 63-file baseline, not newly added test logic.
 
+GEN-1 subsequently adds two core modules and three collected test modules, also
+with English module/function/class/helper documentation. Its measured inventory
+is 65 Python modules / 831 definitions on runtime sources `5ebcfed`; its new
+runtime behavior and verification are recorded in `docs/agent/GEN-1.md`. This
+extends maintained coverage without changing the original annotation-only claim.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather

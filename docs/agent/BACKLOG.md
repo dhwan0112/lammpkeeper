@@ -550,14 +550,39 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 Every GEN item must be **value-preserving on Fe-O** (same goldens) unless it
 says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 
-### GEN-1 · SpeciesMap: the system owns the type map — `open`
-- **Now:** `common/mapping.FORCE_FIELDS` ties FF name → fixed Fe/O types.
+### GEN-1 · SpeciesMap: the system owns the type map — `done (PR #19; source 5ebcfed; ADR-0002 accepted)`
+- **Starting point:** `common/mapping.FORCE_FIELDS` tied FF name → fixed Fe/O
+  types; generic selections now live in `SpeciesMap`, with presets kept separate.
 - **Target:** `core.SpeciesMap` with label → set of types, built from explicit
-  sources in priority order: run manifest → data-file `Masses` comments → dump
-  `element` column → input `pair_coeff` element list → user. ACE spin channels become
-  groups (`Fe` = {Fe_up, Fe_down}). `mapping.py` becomes a preset provider.
+  sources in the ADR-0001/0002 order: manifest groups/provenance; type labels from
+  input `pair_coeff` → data-file `Masses` comments → dump `element` → user fallback.
+  Contradictory explicit labels warn and reject metadata application. ACE spin
+  channels remain groups (`Fe` = {Fe_up, Fe_down}); `mapping.py` provides presets
+  and legacy compatibility, not generic selection storage.
 - **Done when:** PHYS-4 tests pass through `SpeciesMap`, and an `A`/`B` system
   resolves without any FF name.
+- **Architecture approval (2026-10-28):** manual `/architect` equivalent and two
+  independent read-only reviews exposed the former backlog/ADR precedence
+  conflict. The maintainer approved the recommended contract in
+  `docs/adr/0002-species-map-contract.md`: additive immutable API, ADR-0001 source
+  order, explicit-conflict rejection, optional manifest groups/provenance and
+  managed session lifetime. The target above now follows that approval; no
+  numerical change, fixture edit or golden rebaseline was approved. A subsequent
+  explicit approval preserves `set types` as a warned temporary manual analysis
+  override, expiring on typed-source load/unload, not automatic user fallback.
+- **Implemented:** immutable generic `SpeciesMap`; compatibility/preset adapters;
+  Masses comments, lazy raw dump IDs/labels and schema-1 manifest groups/hash
+  checks; source-owned transactional loading/unloading and active selection
+  routing. A/B/X resolve without any FF argument. Explicit conflicts reject;
+  unknown group references block analysis; source changes invalidate results.
+- **Measured verification on committed sources `5ebcfed`:** rich/native
+  **311 passed, 0 failed, 0 skipped**; forced NumPy **306/0/5** (native-only);
+  default Python **296/0/15** (four ASE and eleven Matplotlib checks). Required
+  rich/NumPy CLI plots, prep artifacts and script syntax pass. All existing
+  tests/fixtures/goldens and numerical kernels stay unchanged. Pure-wheel core,
+  legacy help and manifest group MSD pass; 65 modules / 831 definitions pass
+  Python 3.9/docstrings. Full evidence, review findings and limits:
+  `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
 ### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.

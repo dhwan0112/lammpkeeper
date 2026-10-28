@@ -17,6 +17,8 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 """
 
 import ast
+import hashlib
+import json
 import mmap
 import operator
 import os
@@ -27,6 +29,7 @@ import threading
 import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 
@@ -178,12 +181,17 @@ class DumpReader:
     parse_boundary_flags; None if the header has none). Header metadata is read
     by the shared Python scanner, independently of the native/NumPy atom-block
     backend. LazyFrames exposes the same metadata through its `reader`.
+    The read-only `type_ids` property snapshots raw numeric types observed while
+    consuming frames, including unlabelled types. `type_labels` additionally
+    snapshots explicit type/element pairs. Both ignore column projection and
+    legacy synthesized types; indexing headers alone does not populate either.
 
     Args:
         filepath:   str — Path to the dump or lammpstrj file.
         columns:    iterable[str] or None — Keep only these columns (names not
                     in the file are ignored). None keeps every column. Skipped
-                    columns are never converted, which also speeds parsing.
+                    property columns are never converted, which speeds parsing;
+                    raw numeric types are always validated for explicit metadata.
         dtype:      numpy dtype for the 'atoms' array. float32 halves memory;
                     ids/types stay exact below 2**24 (16.7M).
         stride:     int — Yield every Nth frame, starting with the first.
@@ -206,6 +214,11 @@ class DumpReader:
         self.stride = stride
         self.max_frames = max_frames
         self.raw_columns = self._read_layout()
+        self._type_ids = set()
+        self._type_labels = {}
+        self._type_labels_lock = threading.Lock()
+        self._has_type_ids = 'type' in self.raw_columns
+        self._has_type_labels = self._has_type_ids and 'element' in self.raw_columns
 
         keep = None if columns is None else set(columns)
         self._usecols = [i for i, c in enumerate(self.raw_columns) if keep is None or c in keep]
@@ -219,6 +232,49 @@ class DumpReader:
         self._element_pos = kept.index('element') if self.has_elements else None
         self._element_col = self._usecols[self._element_pos] if self.has_elements else None
         self._native = _native if self.dtype in (np.float64, np.float32) else None
+
+    @property
+    def type_ids(self):
+        """Return immutable raw numeric type IDs observed in successfully consumed frames."""
+        with self._type_labels_lock:
+            return frozenset(self._type_ids)
+
+    @property
+    def type_labels(self):
+        """Return a defensive snapshot of explicit type labels in consumed frames."""
+        with self._type_labels_lock:
+            return dict(self._type_labels)
+
+    def _observe_type_labels(self, fields, timestep):
+        """Atomically validate raw numeric IDs and optional explicit labels after parsing."""
+        if not self._has_type_ids:
+            return
+        type_col = self.raw_columns.index('type')
+        element_col = self.raw_columns.index('element') if self._has_type_labels else None
+        pending_ids = set()
+        pending = {}
+        with self._type_labels_lock:
+            for row in fields:
+                try:
+                    tid = int(row[type_col])
+                except ValueError:
+                    raise ValueError(f"{self.filepath}: invalid explicit type at step {timestep}: "
+                                     f"{row[type_col]!r}") from None
+                if tid <= 0:
+                    raise ValueError(f"{self.filepath}: explicit type must be positive at step {timestep}: {tid}")
+                pending_ids.add(tid)
+                if not self._has_type_labels:
+                    continue
+                label = row[element_col]
+                previous = pending.get(tid, self._type_labels.get(tid))
+                if previous is not None and previous != label:
+                    message = (f"{self.filepath}: inconsistent explicit label for type {tid} at step "
+                               f"{timestep}: {previous!r} != {label!r}")
+                    warnings.warn(message, RuntimeWarning, stacklevel=3)
+                    raise ValueError(message)
+                pending[tid] = label
+            self._type_ids.update(pending_ids)
+            self._type_labels.update(pending)
 
     # Preflight the first frame without materializing atom rows; empty files have
     # no layout. Later headers must match this layout and the boundary metadata.
@@ -414,7 +470,7 @@ class DumpReader:
             raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "
                              f"expected {natoms} (truncated or surplus dump?)")
         fields = None
-        if self.has_elements or any(c in self.col_idx for c in ('id', 'type')):
+        if self._has_type_ids or self.has_elements or 'id' in self.col_idx:
             fields = [row.split() for row in lines]
             if any(len(row) != len(self.raw_columns) for row in fields):
                 raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: wrong column count")
@@ -439,7 +495,8 @@ class DumpReader:
 
         # Selected identity columns must round-trip exactly through the requested
         # homogeneous dtype; float32 therefore cannot represent every large ID.
-        # Unselected columns need not be numeric and are not converted.
+        # Unselected property columns need not be numeric and are not converted;
+        # raw types remain exact integer metadata regardless of numeric projection.
         if self._native is not None:
             try:
                 values, elements, rows = self._native.parse_block(
@@ -453,6 +510,7 @@ class DumpReader:
                 atoms = np.frombuffer(values, dtype=self.dtype).reshape(natoms, n_numeric)
                 if elements is not None:
                     elements = np.array(elements)
+                self._observe_type_labels(fields, timestep)
                 return atoms, elements
 
         # Reference path; the native parser defers here for every error case.
@@ -485,6 +543,7 @@ class DumpReader:
             raise ValueError(
                 f"{self.filepath}: frame at step {timestep} has {len(atoms)} atom lines, "
                 f"expected {natoms} (truncated dump?)")
+        self._observe_type_labels(fields, timestep)
         return atoms, elements
 
 
@@ -1282,6 +1341,119 @@ def parse_data_file(filepath):
     box = [bounds[axis] for axis in 'xyz'] if bounds else []
     return (np.array(atoms, dtype=float).reshape(-1, 5),
             np.array(box, dtype=float).reshape(-1, 2), masses)
+
+
+def parse_data_species(filepath):
+    """Extract exact Masses comment labels after validating the data structure.
+
+    Only ``# A`` and ``# species=A`` assign labels. Missing comments are
+    unresolved; ambiguous comments warn rather than guessing from chemical mass.
+    Sparse numeric IDs and the existing ``parse_data_file`` return stay intact.
+    """
+    parse_data_file(filepath)
+    labels = {}
+    section = None
+    with open(filepath, 'r') as stream:
+        next(stream, None)
+        for lineno, line in enumerate(stream, 2):
+            body, _, comment = line.partition('#')
+            body = body.strip()
+            if not body:
+                continue
+            if re.fullmatch(r'[A-Za-z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*)*', body):
+                section = body
+                continue
+            if section != 'Masses' or not comment.strip():
+                continue
+            tokens = comment.split()
+            label = None
+            if len(tokens) == 1:
+                token = tokens[0]
+                if token.startswith('species='):
+                    label = token[len('species='):] or None
+                else:
+                    label = token
+            if label is None:
+                warnings.warn(f"{filepath}:{lineno}: ambiguous Masses species comment "
+                              f"{comment.strip()!r}; ignoring label", RuntimeWarning, stacklevel=2)
+                continue
+            labels[int(body.split()[0])] = label
+    return labels
+
+
+def parse_run_manifest(filepath):
+    """Read schema-1 groups/provenance and verify explicitly referenced SHA-256s.
+
+    No manifest is discovered or written automatically. LAMMPS identity/physics
+    fields are not allowed top-level metadata. Relative hash paths resolve from
+    the manifest directory, including explicit parent-directory references.
+    """
+    path = Path(filepath).resolve()
+
+    def unique_object(pairs):
+        """Reject duplicate JSON keys at any nesting depth instead of overwriting."""
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{path}: manifest duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        """Reject non-JSON NaN/infinity constants accepted by Python's decoder."""
+        raise ValueError(f"{path}: manifest invalid JSON constant {value!r}")
+
+    with path.open('r', encoding='utf-8') as stream:
+        try:
+            payload = json.load(stream, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: malformed manifest JSON: {exc}") from None
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: manifest must be a JSON object")
+    allowed = {'schema_version', 'species_groups', 'domain', 'system', 'provenance'}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"{path}: manifest unknown/duplicated LAMMPS fields: {sorted(unknown)}")
+    version = payload.get('schema_version')
+    if type(version) is not int or version != 1:
+        raise ValueError(f"{path}: manifest schema_version must be integer 1")
+    groups = payload.setdefault('species_groups', {})
+    if not isinstance(groups, dict):
+        raise ValueError(f"{path}: manifest species_groups must be an object")
+    for name, members in groups.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{path}: manifest group names must be nonblank strings")
+        if (not isinstance(members, list) or not members or
+                any(type(tid) is not int or tid <= 0 for tid in members)):
+            raise ValueError(f"{path}: manifest group {name!r} requires a nonempty list of positive integer IDs")
+    if 'domain' in payload and not isinstance(payload['domain'], str):
+        raise ValueError(f"{path}: manifest domain must be a string")
+    for field in ('system', 'provenance'):
+        if field in payload and not isinstance(payload[field], dict):
+            raise ValueError(f"{path}: manifest {field} must be an object")
+    provenance = payload.get('provenance', {})
+    if 'file_hashes' in provenance:
+        hashes = provenance['file_hashes']
+        if not isinstance(hashes, dict):
+            raise ValueError(f"{path}: manifest provenance.file_hashes must be an object")
+        for reference, expected in hashes.items():
+            if (not isinstance(reference, str) or not reference.strip() or
+                    Path(reference).is_absolute()):
+                raise ValueError(f"{path}: manifest hash paths must be nonempty relative paths")
+            if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', expected):
+                raise ValueError(f"{path}: manifest SHA-256 digest for {reference!r} must be 64 hex characters")
+            source = (path.parent / reference).resolve()
+            digest = hashlib.sha256()
+            with source.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            if digest.hexdigest() != expected.lower():
+                message = f"{path}: manifest hash mismatch for {reference!r} ({source})"
+                warnings.warn(message, RuntimeWarning, stacklevel=2)
+                raise ValueError(message)
+    payload['path'] = str(path)
+    return payload
 
 
 def parse_input(filepath):
