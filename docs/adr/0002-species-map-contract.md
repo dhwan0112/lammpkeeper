@@ -166,12 +166,21 @@ standalone generic validation/resolution is removed only after parity is proved.
   evidence that its referenced type IDs exist. Re-evaluate references after each
   managed load/unload/replacement. While any manifest group has unresolved IDs,
   constructing the active `SessionState.species_map` raises a clear error naming
-  the group, IDs and source; analyses using that map cannot proceed. Do not
-  silently omit pending groups or substitute a preset. Loading another typed
+  the group, IDs and source; analyses using that map cannot proceed. Numeric ID
+  existence must come from explicit typed sources (including a raw numeric dump
+  type column), not inferred FF table keys or element-only synthesized IDs. A
+  group does not require a guessed chemical identity for an explicit numeric ID.
+  Do not silently omit pending groups or substitute a preset. Loading another typed
   source may resolve them without reloading the manifest. After source unload,
   previously resolved groups can become pending again, and prior numerical
-  caches must be invalidated. Invalid group syntax or a conflicting definition
-  is an immediate error, not pending metadata.
+  caches must be invalidated. Invalid syntax and **provably conflicting**
+  definitions error immediately. For example, known `A={2,7}` cannot be
+  redefined as `{2,99}` because known member 7 was dropped. In contrast,
+  `A={2}` and group `{2,99}` are underdetermined while type 99 is unknown: it
+  might later also be A, so both load orders stay pending and cannot analyze.
+  This distinction prevents load-order-dependent rejection while never using
+  an unvalidated membership. Once the references are known, unequal exact-label
+  or applicable-preset definitions are errors.
 - Optional `provenance.file_hashes` is a mapping of manifest-relative file paths
   to SHA-256 hex digests. Retain the manifest path as the resolution base, reject
   malformed digests and missing explicitly referenced files, and check the actual
@@ -187,6 +196,16 @@ standalone generic validation/resolution is removed only after parity is proved.
   avoiding a long-lived map cache. Managed metadata changes validate first, then
   invalidate numerical/structure caches and automatic geometry through the
   existing path; preserve a manually selected surface.
+- **Maintainer-approved compatibility clarification (2026-10-28):** the existing
+  `set types` command is a deliberate temporary **manual analysis-label
+  override**, not the automatic resolver's lowest-priority user fallback. Keep
+  its immediate effect and warn when it differs from source labels, without
+  rewriting raw source evidence. Loading/unloading input, data or dump expires
+  this override with a visible message and restores automatic resolution;
+  manifest/log load/unload does not expire it. Failed transactions retain the
+  previous valid override, and `unload all` clears it. Explicit source-to-source
+  conflicts still reject; this is not a force flag for contradictory files.
+  Existing numeric tests and golden expectations remain unchanged.
 - Direct mutation of legacy `ff_info` still exists for compatibility. A fresh map
   avoids stale selections, but does not promise automatic invalidation of prior
   numerical results after arbitrary dictionary mutation. Such mutation must not
