@@ -1,6 +1,6 @@
 # REV-IO-1 — reject malformed thermo records visibly
 
-Status: implementation and full verification complete; publication in progress.
+Status: complete; [PR #22](https://github.com/dhwan0112/lammpkeeper/pull/22).
 Baseline: merged main `6bfc87b05f23b9e6fe019636aed15edbbd30a646` (review PR #21).
 Branch: `fix/rev-io-1-thermo-row-integrity`.
 
