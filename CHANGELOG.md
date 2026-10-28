@@ -12,6 +12,21 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### CIF site occupancy integrity (REV-REF-1)
+
+- Reject explicit non-unit/unknown/invalid CIF occupancy and unsupported coded
+  disorder before site filtering or symmetry expansion. Use exact decimal
+  nominal-one checks, not float rounding or tolerance; no partial-site weighting,
+  uncertainty propagation or disorder-alternative selection is added.
+- Guard mixed-case/reordered site headers, duplicate or ambiguous declarations,
+  scalar/orphan constraints, malformed guarded row shapes and quoted/commented
+  fields. Guarded labels beginning with `loop` cannot silently bypass validation.
+- Preserve absent-occupancy unit-site compatibility, unweighted return schema,
+  ordinary full-occupancy CIFs, built-in reference calculations and existing
+  goldens. Disorder fields support only the unquoted not-applicable `.` marker;
+  other codes are unsupported, not declared physically invalid. Other CIF/reference
+  geometry, symmetry and shell-completeness findings remain separate.
+
 ### Thermo row integrity (REV-IO-1)
 
 - Reject malformed numeric-leading records in any active Step-headed thermo

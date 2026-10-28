@@ -50,6 +50,15 @@ syntax accepted. Its runtime behavior and fail → pass evidence are recorded in
 [`REV-IO-1.md`](REV-IO-1.md), not covered by PR #21's annotation-only AST equality.
 The 78-file/978-definition review counts above remain that review's snapshot.
 
+### Subsequent CIF correction (REV-REF-1)
+
+The separate `REV-REF-1` occupancy/disorder guard adds four documented private
+helpers and `tests/test_cif_occupancy.py`. Parent grammar/coverage checks measure
+**75 Python modules / 1019 definitions**, all documented in English. Its runtime
+changes and 20 collected regressions are recorded in [`REV-REF-1.md`](REV-REF-1.md),
+not part of either historical annotation-only AST comparison. Existing test,
+fixture and golden expectations remain unchanged.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather
