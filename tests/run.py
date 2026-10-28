@@ -31,7 +31,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_species_map', 'test_species_metadata', 'test_species_session',
            'test_box_model', 'test_box_geometry', 'test_triclinic_io',
            'test_triclinic_analysis', 'test_triclinic_session', 'test_log_integrity',
-           'test_cif_occupancy']
+           'test_cif_occupancy', 'test_copyback_safety']
 
 
 def main():

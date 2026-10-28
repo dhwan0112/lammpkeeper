@@ -12,6 +12,19 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Job result copyback safety (REV-PREP-1)
+
+- Preflight every matching result path before any `cp -a` copyback; refuse
+  colliding destination symlinks, including hidden/nested and dangling links,
+  without removing links or writing their targets through copyback.
+- Reject the named destination-root symlink even with trailing `/` or `/.`;
+  preserve source symlinks as artifacts, normal overwrites/merges, destination
+  root modes and exclusive failure archives. Failure keeps complete scratch,
+  reports the unsafe path and preserves a nonzero solver status.
+- This is copyback-only protection on trusted, stable path ancestors, not atomic
+  copying, a sandbox or protection against races, hardlinks/mount aliases, or the
+  existing earlier `run.log` logging symlink hazard. No actual HPC run is implied.
+
 ### CIF site occupancy integrity (REV-REF-1)
 
 - Reject explicit non-unit/unknown/invalid CIF occupancy and unsupported coded

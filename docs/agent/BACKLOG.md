@@ -115,7 +115,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | --- | --- | --- |
 | REV-IO-1 · done (PR #22) | P1; F-IO-1, malformed thermo rows silently dropped | Complete: fail → pass; 12 collected regressions; numeric-leading bad rows reject with path/line/header/row before block selection; valid logs/goldens unchanged. Full verifier **405/0/0** native, **399/0/6** forced NumPy, **389/0/16** default. See `docs/agent/REV-IO-1.md`. |
 | REV-REF-1 · done (PR #23) | P1; F-REF-1, CIF occupancy ignored | Complete: fail → pass; 20 new regressions; exact nominal-one occupancy and conservative disorder guards reject unsupported/ambiguous site metadata before filtering/expansion. Supported unit-site compatibility preserved, no weighting model. Full verifier **425/0/0** native, **419/0/6** forced NumPy, **408/0/17** default. See `docs/agent/REV-REF-1.md`. |
-| REV-PREP-1 | P1; F-PREP-3, successful copyback follows output symlinks | After maintainer approval of generated-script changes, destination-child symlinks cannot overwrite outside the destination; local failure/recovery tests preserve unrelated data. Real HPC remains deferred. |
+| REV-PREP-1 · done (PR #24) | P1; F-PREP-3, successful copyback follows output symlinks | Approved copy-behavior safety fix; no real HPC. Fail → pass; 19 new regressions; parent targeted **51/0/0**. Full verifier **444/0/0** native, **438/0/6** forced NumPy, **427/0/17** default. Full preflight preserves colliding links/targets through copyback, scratch, modes and solver status. Copyback-only limits and separate early logging risk: `docs/agent/REV-PREP-1.md`. |
 | REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
 | REV-ANALYSIS-2 | P2; F-ANALYSIS-2, missing-z region ignored | An explicit charge/OR region without a z column cannot silently become a global analysis; collected missing-column and valid-region tests pass. |
 | REV-ANALYSIS-3 | P2; F-ANALYSIS-3, invalid density range/bins | Equal/reversed/nonfinite ranges and invalid bin counts fail before histogram normalization; valid analytic profiles/goldens unchanged. |
@@ -137,6 +137,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-TEST-1 | P3; F-CORE-2, finite oracle bounds | Independently justify finite image ranges; interiority alone is not a completeness argument; production geometry is not used as its own oracle. |
 | REV-PREP-4 | P3; F-PREP-4, Masses inspection | Prep's metadata inspector reads conventional blank-separated Masses sections without changing structures/presets. |
 | REV-REF-5 | P3; CIF case/seam behavior | Decide supported case-insensitive loop parsing and metric/seam deduplication limits with independent tiny-CIF tests and visible rejection outside scope. |
+| REV-PREP-5 | P2 candidate; source-inferred during REV-PREP-1 review, early logging symlink | After separate generated-script approval, reproduce and prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Not fixed by copyback-only checks. |
 
 ## Suggested order
 
@@ -153,6 +154,14 @@ should be completed through push, PR creation and merge, not left at a local
 branch. Keep separate logical changes in separate PRs. Physics golden changes,
 ADR decisions and other human gates still require their specific approvals;
 failed verification or non-mechanical conflicts must be resolved before shipping.
+
+**Review checkpoint (2026-10-28):** original P1 findings REV-IO-1 and REV-REF-1
+are merged; REV-PREP-1 is fully verified and published as PR #24. After this item,
+21 original follow-ups plus the separately recorded early-logging risk remain
+open. Resume GEN-2 through the existing architecture gate in a separate session;
+P2 scientific-ingestion/reference/display risks are not certified by resolving
+P1. Continue recording per-item decisions, exact verification/skips and PR links.
+Actual HPC/site work remains deferred as above.
 
 **Phase 0, reproducibility:** REL-0
 **Phase 1, trustworthy tests and correct physics:** TEST-1 → OPS-1 → HPC-1 → PARSE-1 → **MSD (PHYS-2 + PHYS-1, one PR)** → PHYS-4 → PHYS-3 → PHYS-5 → TEST-3 → DOC-1 → DOC-2

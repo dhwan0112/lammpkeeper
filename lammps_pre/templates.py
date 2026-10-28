@@ -424,6 +424,11 @@ def render_run_script(build, state):
     failed runs require exclusive creation of a failed_JOBID archive, preventing
     accidental mixing with an older failure. Hidden outputs are copied as child
     entries so source-root permissions do not replace destination permissions.
+    Before any result copy, reject colliding destination symlinks, including
+    nested/hidden entries and the named root (after trailing slash/dot removal).
+    Source symlinks remain artifacts, not traversed trees. This copyback-only
+    preflight assumes trusted, stable path ancestors: it is not atomic, a sandbox
+    or protection for the earlier run.log tee, hardlinks or mount aliases.
 
     Scratch is deleted only after copyback succeeds and the script leaves it.
     Copy/cleanup failures are visible and nonzero; solver failures retain their
@@ -539,13 +544,58 @@ else
     # Exclusive creation rejects existing directories and even dangling symlinks.
     if mkdir -- "$DEST"; then DEST_READY=1; fi
 fi
+# Preflight protects copyback on a stable, trusted filesystem, not against
+# concurrent mutation, hardlinks or mount aliases. Never remove user symlinks.
+copyback_path_safe() {{
+    local source_path="$1" destination_path="$2" child
+    local children=()
+    # Check links before -d/-e: both directory links and dangling links reject.
+    if [ -L "$destination_path" ]; then
+        echo "Error: unsafe copyback destination symlink: $destination_path"
+        return 1
+    fi
+    # cp -a preserves source links as artifacts; do not traverse their targets.
+    # Only existing real directory merges can contain deeper destination links.
+    if [ -d "$source_path" ] && [ ! -L "$source_path" ] && [ -d "$destination_path" ]; then
+        children=("$source_path"/*)
+        for child in "${{children[@]}}"; do
+            copyback_path_safe "$child" "$destination_path/${{child##*/}}" || return 1
+        done
+    fi
+    return 0
+}}
 COPY_OK=0
 if [ $DEST_READY -eq 1 ]; then
+    # Trailing slashes and '/.' must not hide the named destination root link.
+    # Earlier path components remain trusted; this is not pathname isolation.
+    while [[ "$DEST" != / ]]; do
+        case "$DEST" in
+            */) DEST="${{DEST%/}}" ;;
+            */.) DEST="${{DEST%/.}}"; [ -n "$DEST" ] || DEST=/ ;;
+            *) break ;;
+        esac
+    done
     # Copy children, including hidden outputs, NOT the scratch root's attributes:
     # cp -a scratch/. DEST/ changes DEST's mode and may relax access permissions.
     shopt -s dotglob nullglob
     outputs=("$tdir"/*)
-    if [ ${{#outputs[@]}} -eq 0 ] || cp -a -- "${{outputs[@]}}" "$DEST"/; then COPY_OK=1; fi
+    PREFLIGHT_OK=1
+    if [ -L "$DEST" ] || [ ! -d "$DEST" ]; then
+        echo "Error: unsafe copyback destination root (symlink or non-directory): $DEST"
+        PREFLIGHT_OK=0
+    else
+        # Finish the entire walk before the single result-copy command. A late
+        # collision must not allow earlier outputs to overwrite ordinary files.
+        for output in "${{outputs[@]}}"; do
+            if ! copyback_path_safe "$output" "$DEST/${{output##*/}}"; then
+                PREFLIGHT_OK=0
+                break
+            fi
+        done
+    fi
+    if [ $PREFLIGHT_OK -eq 1 ]; then
+        if [ ${{#outputs[@]}} -eq 0 ] || cp -a -- "${{outputs[@]}}" "$DEST"/; then COPY_OK=1; fi
+    fi
     shopt -u dotglob nullglob
 fi
 if [ $COPY_OK -ne 1 ]; then
