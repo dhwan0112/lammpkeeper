@@ -653,6 +653,26 @@ def test_species_session_numeric_data_ids_resolve_groups_without_species_guesses
             assert shell.state.species_sources['data'] == {}
 
 
+def test_species_session_known_unlabelled_extra_cannot_redefine_exact_species():
+    """Known numeric IDs stop being pending but cannot silently widen exact A."""
+    _util.require_numpy()
+    with tempfile.TemporaryDirectory(prefix='lk-species-') as tmp:
+        root = Path(tmp)
+        _input(root / 'run.in', {2: 'A'})
+        _dump(root / 'run.dump', {2: 'A', 99: 'B'})
+        text = (root / 'run.dump').read_text().replace('type element x', 'type x')
+        text = text.replace(' A ', ' ').replace(' B ', ' ')
+        (root / 'run.dump').write_text(text)
+        _manifest(root / 'run.json', {'A': [2, 99]})
+        paths = {'input': root / 'run.in', 'dump': root / 'run.dump',
+                 'manifest': root / 'run.json'}
+        for order in itertools.permutations(paths):
+            shell = _shell()
+            for kind in order[:-1]:
+                _load(shell, kind, paths[kind])
+            _error(lambda: _load(shell, order[-1], paths[order[-1]]), 'Conflicting', 'A')
+
+
 if __name__ == '__main__':
     passed = failed = skipped = 0
     for name, test in sorted(list(globals().items())):

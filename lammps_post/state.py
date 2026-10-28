@@ -248,7 +248,8 @@ class SessionState:
             other_labels = set().union(*(selection for label, selection in authoritative.items()
                                          if label != name)) if authoritative else set()
             if (exact is not None and
-                    (exact - members or ((members - exact) & other_labels))):
+                    ((name not in pending and members != exact)
+                     or exact - members or ((members - exact) & other_labels))):
                 raise ValueError(f'Conflicting definition for species {name!r} '
                                  f'in manifest {self.manifest_path!r}')
         if pending and not allow_pending:
