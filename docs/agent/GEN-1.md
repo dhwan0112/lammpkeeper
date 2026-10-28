@@ -1,6 +1,7 @@
 # GEN-1 — system-owned species selections
 
 Status: implementation, independent review and full verification complete.
+Published as [PR #19](https://github.com/dhwan0112/lammpkeeper/pull/19).
 Work branch: `gen/gen-1-species-map`; committed runtime sources `5ebcfed`.
 Baseline: merged main `3f28be9` (DOC-2).
 

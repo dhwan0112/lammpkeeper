@@ -550,7 +550,7 @@ first (`64a6084`), then explicitly tests bulk PBC and rebaselines the golden
 Every GEN item must be **value-preserving on Fe-O** (same goldens) unless it
 says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 
-### GEN-1 · SpeciesMap: the system owns the type map — `done (source 5ebcfed; ADR-0002 accepted)`
+### GEN-1 · SpeciesMap: the system owns the type map — `done (PR #19; source 5ebcfed; ADR-0002 accepted)`
 - **Starting point:** `common/mapping.FORCE_FIELDS` tied FF name → fixed Fe/O
   types; generic selections now live in `SpeciesMap`, with presets kept separate.
 - **Target:** `core.SpeciesMap` with label → set of types, built from explicit
