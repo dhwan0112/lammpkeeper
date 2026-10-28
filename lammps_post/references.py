@@ -9,7 +9,7 @@ positions alone do not establish an oxide phase, magnetic order or purity.
 
 Two sources of crystal data:
   A. Built-in database — hardcoded from experimental refinements
-  B. CIF file import  — parse any .cif file (COD, ICSD, etc.)
+  B. CIF file import  — bounded ordered/unit-site subset from local files or COD
 
 Built-in phases:
   - alpha-Fe   (BCC, Im-3m, a = 2.87 Å)
@@ -25,12 +25,14 @@ CIF import supports:
 No external dependencies beyond numpy — CIF parsing and symmetry
 expansion are implemented from scratch.
 This is a lightweight CIF reader, not a complete crystallographic parser:
-occupancies/disorder, arbitrary CIF syntax and general symmetry algebra are
-not modeled. Built-in cells describe ideal periodic positions without thermal
-motion, defects, spin assignments or force-field-dependent relaxation.
+explicit unsupported occupancy/disorder is rejected, not weighted or resolved.
+Arbitrary CIF syntax and general symmetry algebra are not modeled. Built-in
+cells describe ideal periodic positions without thermal motion, defects, spin
+assignments or force-field-dependent relaxation.
 ═══════════════════════════════════════════════════════════════
 """
 
+from decimal import Decimal, InvalidOperation
 import os
 import re
 import numpy as np
@@ -284,6 +286,141 @@ CRYSTAL_DB['Fe3O4'] = {
 # CIF File Parser
 # ═══════════════════════════════════════════════════════════════
 
+_CIF_SITE_CONSTRAINTS = ('_atom_site_occupancy', '_atom_site_disorder_assembly',
+                         '_atom_site_disorder_group')
+# One digit uncertainty may follow the mantissa or the exponent. The fullmatch
+# and exact Decimal comparison reject malformed suffixes and values rounded to 1.
+_CIF_OCCUPANCY_NUMBER = re.compile(
+    r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)'
+    r'(?:(?:\([0-9]+\))?(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+\([0-9]+\))')
+
+
+def _cif_site_declarations(text, source):
+    """Locate unquoted site constraints anywhere in the bounded CIF token stream.
+
+    Tags may share a physical line with other scalar items. Quoted values,
+    comments and column-one semicolon text are not declarations. This lexical
+    association guard does not interpret other CIF categories or validate them.
+    """
+    tags = set(_CIF_SITE_CONSTRAINTS)
+    tags.update(tag.replace('_atom_site_', '_atom_site.') for tag in _CIF_SITE_CONSTRAINTS)
+    declarations = []
+    pos = 0
+    while pos < len(text):
+        if text[pos].isspace():
+            pos += 1
+            continue
+        start = pos
+        if text[pos] == '#':
+            end = text.find('\n', pos)
+            pos = len(text) if end < 0 else end + 1
+            continue
+        if text[pos] == ';' and (pos == 0 or text[pos - 1] == '\n'):
+            end = text.find('\n;', pos + 1)
+            if end >= 0:
+                pos = end + 2
+                continue
+            kind = 'unterminated semicolon text'
+        elif text[pos] in ('\"', "'"):
+            quote = text[pos]
+            pos += 1
+            closed = False
+            while pos < len(text) and text[pos] not in '\r\n':
+                if text[pos] == quote and (pos + 1 == len(text) or text[pos + 1].isspace()):
+                    pos += 1
+                    closed = True
+                    break
+                pos += 1
+            if closed:
+                continue
+            kind = 'unterminated quoted value'
+        else:
+            while pos < len(text) and not text[pos].isspace():
+                pos += 1
+            token = text[start:pos]
+            if token.lower() in tags:
+                declarations.append((token, start))
+            continue
+        lineno = text.count('\n', 0, start) + 1
+        tags_seen = ', '.join(dict.fromkeys(tag for tag, _ in declarations)) or 'occupancy/disorder'
+        row = text.splitlines()[lineno - 1]
+        raise ValueError(f'{source}:{lineno}: unsupported CIF site metadata syntax '
+                         f'({tags_seen}): {kind}; row={row!r}')
+    return declarations
+
+
+def _cif_site_fields(line, context):
+    """Tokenize one guarded site row, retaining quotes and ignoring inline comments.
+
+    Quoted fields end only at a matching quote followed by whitespace or EOF;
+    backslashes are literal, not shell escapes. This handles simple line-based
+    CIF fields, not semicolon text or values split over multiple source lines.
+    Retained quotes distinguish an unquoted '.' marker from a literal code.
+    """
+    if line.startswith(';'):
+        raise ValueError(f'{context}: unsupported multiline CIF site field; row={line!r}')
+    fields = []
+    pos = 0
+    while pos < len(line):
+        while pos < len(line) and line[pos].isspace():
+            pos += 1
+        if pos == len(line) or line[pos] == '#':
+            break
+        start = pos
+        if line[pos] in ('\"', "'"):
+            quote = line[pos]
+            pos += 1
+            while pos < len(line):
+                if line[pos] == quote and (pos + 1 == len(line) or line[pos + 1].isspace()):
+                    pos += 1
+                    break
+                pos += 1
+            else:
+                raise ValueError(f'{context}: unsupported unterminated quoted field; row={line!r}')
+        else:
+            while pos < len(line) and not line[pos].isspace():
+                pos += 1
+        fields.append(line[start:pos])
+    return fields
+
+
+def _cif_unquote(field):
+    """Remove one balanced pair of CIF field quotes, leaving marker meaning to callers."""
+    if len(field) >= 2 and field[0] in ('\"', "'") and field[-1] == field[0]:
+        return field[1:-1]
+    return field
+
+
+def _validate_cif_site_constraints(fields, col_map, context):
+    """Require a unit-weight reference site without coded disorder before expansion.
+
+    Missing occupancy retains legacy unit-site compatibility. Explicit nominal
+    occupancy must be exactly one in decimal arithmetic: no float rounding or
+    tolerance may turn a partial site into a full atom. Digit uncertainties are
+    accepted syntactically but are not propagated or used to fit a unit value.
+    Coded/unknown disorder is unsupported, not declared physically invalid.
+    """
+    for tag in _CIF_SITE_CONSTRAINTS:
+        if tag not in col_map:
+            continue
+        raw = fields[col_map[tag]]
+        if tag != '_atom_site_occupancy':
+            if raw != '.':
+                raise ValueError(f'{context}: unsupported {tag}={raw!r}; only an unquoted '
+                                 "'.' (not applicable) is supported for disorder")
+            continue
+        token = _cif_unquote(raw)
+        nominal = None
+        if _CIF_OCCUPANCY_NUMBER.fullmatch(token):
+            try:
+                nominal = Decimal(re.sub(r'\([0-9]+\)', '', token))
+            except InvalidOperation:
+                pass
+        if nominal is None or not nominal.is_finite() or nominal != 1:
+            raise ValueError(f'{context}: unsupported {tag}={raw!r}; only finite exact '
+                             'nominal occupancy 1 is supported; no partial/unknown-site weighting')
+
+
 def parse_cif(source):
     """
     Parse a CIF file to extract crystal structure data.
@@ -300,18 +437,25 @@ def parse_cif(source):
     or absent usable atom rows; local file read errors may propagate. Raises
     ValueError when symmetry cannot be established: supply explicit symmetry
     operations, or declare P1. A named non-P1 group alone is not expanded from
-    a space-group database.
+    a space-group database. Unsupported occupancy/disorder or ambiguous guarded
+    site input also raises, with source/line and site metadata where available;
+    no partially filtered crystal is returned.
 
-    Uses the first atom-site loop with fractional coordinates, strips numeric
-    parenthetical uncertainties and defaults absent/unusable angles to 90
-    degrees. Atom rows are whitespace-split; occupancies, anisotropic motion,
-    multiple data blocks and sophisticated multiline/quoted CIF constructs
-    are not interpreted. The caller must judge the suitability of such input
-    as a fully occupied ideal reference before drawing structural conclusions.
-    Scalar tags are case-insensitive, but loop/header matching is not. Explicit
-    operators take precedence without checking the declared space group or
-    validating every operator's syntax. Invalid finite/nonfinite cell numbers
-    and coordinates are not comprehensively rejected by this reader.
+    Uses the first atom-site loop with fractional coordinates. Missing occupancy
+    retains legacy unit-site compatibility; explicit finite nominal occupancy
+    must equal one exactly, including optional digit uncertainty syntax. No
+    uncertainty or partial-site weights are propagated. Disorder fields accept
+    only the unquoted '.' not-applicable marker, not coded/unknown alternatives.
+    Relevant metadata outside the imported loop is rejected rather than ignored.
+
+    Atom-site headers are case-insensitive. Guarded rows require complete simple
+    line-based fields (including quotes and inline comments); unguarded rows keep
+    the legacy whitespace subset. Numeric coordinate uncertainties are stripped
+    and absent/unusable angles default to 90 degrees. Anisotropic motion, multiple
+    data blocks and sophisticated multiline CIF constructs are not interpreted.
+    Symmetry-loop matching retains its legacy subset; explicit operators take
+    precedence without validating every operator or declared group. Invalid
+    finite/nonfinite cells/coordinates are not comprehensively rejected here.
     """
     # ── Fetch CIF content ──
     if source.lower().startswith('cod:'):
@@ -374,8 +518,12 @@ def parse_cif(source):
     name = _get_value('_chemical_name_mineral') or _get_value('_chemical_formula_sum') or source
 
     # ── Parse atom_site loop ──
-    # Header-driven indices allow column reordering. This lightweight reader
-    # skips incomplete/unusable rows rather than validating the entire CIF.
+    # Bind explicit site constraints to the imported loop. A scalar, orphan or
+    # second-loop declaration has no established association with these atoms;
+    # refusing it is safer than silently assuming every imported site is full.
+    site_constraints = _cif_site_declarations(cif_text, source)
+    # Header-driven indices allow column reordering. Legacy unguarded rows retain
+    # their whitespace subset; constrained rows must not disappear on a skip.
     # Find the loop_ block containing _atom_site_fract_x
     atom_labels = []
     atom_types = []
@@ -385,20 +533,23 @@ def parse_cif(source):
 
     # Find loop block
     loop_pattern = re.compile(
-        r'loop_\s*((?:_atom_site_\S+\s*)+)((?:(?!loop_|_[a-z]).*\n?)*)',
-        re.MULTILINE
+        r'^[ \t]*loop_\s+((?:_atom_site_\S+\s*)+)'
+        r'((?:(?![ \t]*(?:loop_(?=\s|$)|_[a-z])).*\n?)*)',
+        re.MULTILINE | re.IGNORECASE
     )
 
     for m in loop_pattern.finditer(cif_text):
         header_block = m.group(1)
         data_block = m.group(2)
 
-        if '_atom_site_fract_x' not in header_block:
+        if '_atom_site_fract_x' not in header_block.lower():
             continue
 
-        # Parse column order from header
-        columns = re.findall(r'(_atom_site_\S+)', header_block)
-        col_map = {c: i for i, c in enumerate(columns)}
+        # Normalize tag names before discovering constraints: mixed-case metadata
+        # must not become an ignored extra column beside lowercase coordinates.
+        columns = [tag.lower() for tag in re.findall(
+            r'(_atom_site_\S+)', header_block, re.IGNORECASE)]
+        col_map = {tag: i for i, tag in enumerate(columns)}
 
         idx_label = col_map.get('_atom_site_label')
         idx_type = col_map.get('_atom_site_type_symbol')
@@ -409,14 +560,45 @@ def parse_cif(source):
         if idx_fx is None or idx_fy is None or idx_fz is None:
             continue
 
-        # Parse data rows
-        for line in data_block.strip().split('\n'):
+        for tag, position in site_constraints:
+            if not m.start(1) <= position < m.end(1):
+                lineno = cif_text.count('\n', 0, position) + 1
+                row = cif_text.splitlines()[lineno - 1]
+                raise ValueError(f'{source}:{lineno}: unsupported CIF {tag} placement; '
+                                 'occupancy/disorder metadata must belong to the first '
+                                 f'imported fractional atom-site loop; row={row!r}')
+        guarded = any(tag in col_map for tag in _CIF_SITE_CONSTRAINTS)
+        if guarded and len(columns) != len(col_map):
+            lineno = cif_text.count('\n', 0, m.start(1)) + 1
+            duplicates = sorted({tag for tag in columns if columns.count(tag) > 1})
+            raise ValueError(f'{source}:{lineno}: ambiguous CIF occupancy/disorder '
+                             f'atom-site header: duplicate columns {duplicates!r}')
+
+        # Validate constraints before element/coordinate filtering or expansion.
+        # An otherwise unusable row must not conceal a partial or unknown site.
+        first_line = cif_text.count('\n', 0, m.start(2)) + 1
+        for lineno, line in enumerate(data_block.splitlines(), first_line):
             line = line.strip()
-            if not line or line.startswith('#') or line.startswith('_') or line.startswith('loop'):
+            if not line or line.startswith('#'):
                 continue
-            parts = line.split()
-            if len(parts) < len(columns):
-                continue
+            if guarded:
+                tag = next(tag for tag in _CIF_SITE_CONSTRAINTS if tag in col_map)
+                context = f'{source}:{lineno}: CIF site row with {tag}'
+                fields = _cif_site_fields(line, context)
+                if len(fields) != len(columns):
+                    raise ValueError(f'{context}: malformed guarded row; expected '
+                                     f'{len(columns)} fields, got {len(fields)}; row={line!r}')
+                parts = [_cif_unquote(field) for field in fields]
+                idx_site = idx_label if idx_label is not None else idx_type
+                site = parts[idx_site] if idx_site is not None else '<unlabelled>'
+                _validate_cif_site_constraints(fields, col_map,
+                                              f'{source}:{lineno}: CIF site {site!r}')
+            else:
+                if line.startswith('_') or line.startswith('loop'):
+                    continue  # Preserve the legacy unguarded whitespace subset.
+                parts = line.split()
+                if len(parts) < len(columns):
+                    continue
 
             # Element symbol: prefer type_symbol, fall back to label
             if idx_type is not None:
