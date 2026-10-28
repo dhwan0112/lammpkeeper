@@ -1,6 +1,6 @@
 # REV-REF-1 — reject unsupported CIF occupancy/disorder
 
-Status: implementation and full verification complete; publication in progress.
+Status: complete; [PR #23](https://github.com/dhwan0112/lammpkeeper/pull/23).
 Baseline: merged main `6c073471856748929cdd5a4a2980876db04f4856` (PR #22).
 Branch: `fix/rev-ref-1-cif-occupancy`.
 
