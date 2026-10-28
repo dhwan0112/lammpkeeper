@@ -592,12 +592,19 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.
 
-### GEN-3 · Box model with triclinic + PBC — `open` (builds on PARSE-1)
+### GEN-3 · Box model with triclinic + PBC — `in-progress (gen/gen-3-box-pbc; ADR-0003 accepted)` (builds on PARSE-1)
 - **Target:** `io.Box(lo, hi, tilt, pbc)`. MIC and unwrap in fractional coordinates.
   Until analyses support tilt, they raise an error on triclinic input instead of
   ignoring it.
 - **Done when:** RDF and MSD of a synthetic triclinic cell match brute force over
   images, and orthogonal Fe-O goldens are unchanged.
+- **Architecture approval (2026-10-28):** two independent read-only reviews and a
+  measured fractional-rounding counterexample informed
+  `docs/adr/0003-box-geometry-contract.md`. The maintainer approved immutable Box
+  metadata, exact periodic-lattice MIC, additive opt-in readers, restricted
+  Cartesian triclinic RDF and fixed-cell MSD, with unsupported consumers rejected
+  visibly. No fixture/golden, generated prep/job/structure or FF mapping change
+  was approved; runtime completion still requires the checks above.
 
 ### GEN-4 · Split generic analyses from the `fe_oxidation` domain pack — `open`
 - **Move:** OAR, OR, penetration (+trend/profile), charge evolution/states
