@@ -37,8 +37,8 @@ from lammpkeeper.common.display import banner
 from lammpkeeper.common.hosted import HostedShellMixin
 
 from lammps_post.parsers import (
-    parse_log, parse_data_file, detect_forcefield, parse_input,
-    parse_data_species, parse_run_manifest,
+    parse_log, read_data_file, detect_forcefield, parse_input,
+    parse_run_manifest,
     DumpReader, LazyFrames, ANALYSIS_COLUMNS, DEFAULT_CACHE_BYTES,
     pbc_from_boundary,
 )
@@ -185,6 +185,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
         s.clear_cache()
         s.z_focus = None
+        if s.data_cell is not None:
+            from lammpkeeper.io import Box
+            cell = s.data_cell
+            s.data_cell = Box(cell.lo, cell.hi, tilt=cell.tilt,
+                              pbc=s.input_pbc)
+        if isinstance(s.dump_frames, LazyFrames):
+            s.dump_frames.set_transform(s.dump_frames._store.transform)
         if not s.surface_z_manual:
             s.surface_z = None
             s._guess_surface_z()
@@ -349,6 +356,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Existing values are accepted; interactive input can request automatic
         detection or set a manual plane. No noninteractive default is invented.
         """
+        self._guard_geometry('Surface analysis')
         if self.state.surface_z is not None:
             return True
         print(C.warn("  Surface z not set."))
@@ -375,10 +383,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """
         (x, y, z) periodicity for RDF and MSD, and where it came from.
 
-        Prefers the dump's own BOX BOUNDS flags (e.g. 'pp pp ff'), which hold
-        for the trajectory being analyzed even without an input file. Falls
-        back to the input file's boundary command, then to the surface_z
-        heuristic: a known surface means a slab (z non-periodic).
+        Prefers dump BOX BOUNDS flags, then the explicit input boundary. Unknown
+        triclinic flags raise rather than infer a slab from surface_z. The visible
+        surface heuristic remains only for legacy orthogonal trajectories.
         """
         s = self.state
         # dump_frames is None until a dump is loaded, then a LazyFrames.
@@ -386,9 +393,47 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         pbc = pbc_from_boundary(getattr(reader, 'boundary', None))
         if pbc is not None:
             return pbc, 'dump'
-        if s.input_config and s.input_config.get('boundary'):
-            return tuple(b == 'p' for b in s.input_config['boundary'][:3]), 'input'
-        return (True, True, s.surface_z is None), 'surface_z'
+        pbc = SessionState.input_pbc.fget(s)
+        if pbc is not None:
+            return pbc, 'input'
+        return SessionState.pbc.fget(s), 'surface_z'
+
+    def _guard_geometry(self, operation, family=None, include_data=False):
+        """Fail before cache reuse or domain prompts for unsupported tilted geometry."""
+        try:
+            require = getattr(self.state, 'require_orthogonal', None)
+            if callable(require):
+                require(operation, include_data=include_data)
+            else:
+                # Older embedding clients may provide only frame dictionaries,
+                # not SessionState methods. Validate their geometry explicitly.
+                from lammps_post.analysis import _orthogonal_box
+                for frame in getattr(self.state, 'dump_frames', None) or ():
+                    _orthogonal_box(frame, operation)
+                cell = getattr(self.state, 'data_cell', None)
+                box = getattr(self.state, 'data_box', None)
+                if include_data and (cell is not None or box is not None):
+                    frame = {'timestep': 'static'}
+                    if cell is not None:
+                        frame['cell'] = cell
+                    if box is not None:
+                        frame['box'] = box
+                    _orthogonal_box(frame, operation)
+        except ValueError:
+            cache = getattr(self.state, 'cache', None)
+            if family == 'all':
+                clear = getattr(self.state, 'clear_cache', None)
+                if callable(clear):
+                    clear()
+                elif cache is not None:
+                    cache.clear()
+            elif family and cache is not None:
+                for key in list(cache):
+                    if key == family or key.startswith(family + '_'):
+                        cache.pop(key, None)
+                if family == 'structure' and hasattr(self.state, '_structure_atoms'):
+                    self.state._structure_atoms = None
+            raise
 
     def _require_data(self):
         """Require nonempty static atoms, with interactive loading via _ask.
@@ -529,9 +574,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             try:
                 reader = DumpReader(fpath,
                                     columns=None if all_columns else ANALYSIS_COLUMNS,
-                                    dtype=np.float32 if lite else np.float64)
+                                    dtype=np.float32 if lite else np.float64,
+                                    box_model=True)
                 frames = LazyFrames(reader, cache_bytes=int(cache_mb * 1024 ** 2),
                                     stride=stride, max_frames=max_frames)
+                def resolve_cell_pbc(frame):
+                    """Resolve unknown source flags dynamically without mutating the index."""
+                    cell = frame['cell']
+                    if cell.pbc is None:
+                        flags = self.state.input_pbc
+                        if flags is not None:
+                            return dict(frame, cell=cell.with_pbc(flags))
+                    return frame
+
+                frames.set_transform(resolve_cell_pbc)
                 if frames:
                     frames[-1]   # parse the last frame now so a truncated dump fails at load
             except (ValueError, OSError) as e:
@@ -581,7 +637,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                             f"type mapping {lookup}")
                     return dict(fr, atoms=np.hstack([fr['atoms'], type_arr]))
 
-                frames.set_transform(add_type_column)
+                cell_transform = frames._store.transform
+
+                def typed_frame(frame):
+                    """Compose cell resolution with stable synthetic identity adaptation."""
+                    return add_type_column(cell_transform(frame))
+
+                frames.set_transform(typed_frame)
                 col_idx['type'] = len(col_idx)
                 columns.append('type')
 
@@ -660,7 +722,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                     f"Streaming from disk: ~{est_mb:.0f} MB of frames exceeds the "
                     f"{cache_mb:.0f} MB cache (--cache-mb N to keep them in memory)")
             progress_msg(f"Types: {ff_info['atom_types']}")
-            if self.state.surface_z:
+            if self.state.surface_z is not None and self.state.surface_z_manual:
+                message = f"Preserved manual surface z: {self.state.surface_z:.1f} A"
+                if self.state.has_triclinic_dump():
+                    message += ' (does not enable triclinic slab analysis)'
+                progress_msg(message)
+            elif self.state.surface_z:
                 progress_msg(f"Auto-detected surface z: {self.state.surface_z:.1f} A")
 
         elif ftype == 'log':
@@ -688,14 +755,16 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             # Static structure mass belongs to this file's counts and Masses;
             # incomplete masses must not leave an old total available.
             progress_msg(f"Loading data file: {fpath} ...")
-            atoms, box, masses = parse_data_file(fpath)
-            species = parse_data_species(fpath)
+            data = read_data_file(fpath, pbc=self.state.input_pbc)
+            atoms, cell, masses, species = (data[key] for key in
+                                           ('atoms', 'cell', 'masses', 'species'))
             if len(atoms) == 0:
                 raise ValueError('No atoms found in data file')
 
             self.state.data_path = fpath
             self.state.data_atoms = atoms
-            self.state.data_box = box
+            self.state.data_box = cell.bounds
+            self.state.data_cell = cell
             self.state.data_masses = masses
             self.state.species_sources = dict(self.state.species_sources, data=species)
             self.state.refresh_species()
@@ -854,6 +923,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.data_path = None
             self.state.data_atoms = None
             self.state.data_box = None
+            self.state.data_cell = None
             self.state.data_masses = None
             self.state.total_mass_amu = None
             self.state.species_sources = {key: value for key, value in
@@ -933,6 +1003,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             pairs.append(('Input', C.dim('not loaded')))
 
         pairs.append(('Manifest', s.manifest_path or C.dim('not loaded')))
+        cell = s.dump_frames[0].get('cell') if s.dump_frames else s.data_cell
+        if cell is not None:
+            pairs.append(('Cell kind', 'orthogonal' if cell.is_orthogonal else 'restricted triclinic'))
+            pairs.append(('Physical bounds', str(cell.bounds.tolist())))
+            pairs.append(('Tilt (xy,xz,yz)', str(cell.tilt)))
+            pairs.append(('Cell PBC', str(cell.pbc) if cell.pbc is not None else 'unresolved'))
 
         pairs.append(('Surface z', f"{s.surface_z:.1f} A" if s.surface_z else C.dim('not set')))
         pairs.append(('Normalize', C.ok('ON') if s.normalize else C.dim('OFF')))
@@ -1009,15 +1085,29 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             ], 'Frame Info')
 
         elif what == 'box':
-            if not self._require_dump():
-                return
-            box = s.dump_frames[0]['box']
+            if s.dump_frames:
+                frame = s.dump_frames[0]
+                box, cell = frame['box'], frame.get('cell')
+            elif s.data_cell is not None:
+                cell = s.data_cell
+                box = cell.bounds
+            else:
+                if not self._require_dump():
+                    return
+                frame = s.dump_frames[0]
+                box, cell = frame['box'], frame.get('cell')
             L = box[:, 1] - box[:, 0]
             print_kv([
+                ('Kind', 'restricted triclinic' if cell is not None and not cell.is_orthogonal
+                 else 'orthogonal'),
+                ('Bounds', 'physical lo/hi (not enclosing AABB)'),
+                ('Tilt (xy,xz,yz)', str(cell.tilt) if cell is not None else '(0, 0, 0)'),
+                ('PBC', str(cell.pbc) if cell is not None and cell.pbc is not None
+                 else 'unresolved'),
                 ('x', f"{box[0][0]:.4f} to {box[0][1]:.4f}  (L={L[0]:.4f} A)"),
                 ('y', f"{box[1][0]:.4f} to {box[1][1]:.4f}  (L={L[1]:.4f} A)"),
                 ('z', f"{box[2][0]:.4f} to {box[2][1]:.4f}  (L={L[2]:.4f} A)"),
-                ('Volume', f"{L[0]*L[1]*L[2]:.1f} A^3"),
+                ('Volume', f"{cell.volume if cell is not None else L[0]*L[1]*L[2]:.1f} A^3"),
             ], 'Simulation Box')
 
         elif what == 'composition':
@@ -1414,6 +1504,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         }
 
         if what in analyzers:
+            if what in ('charge_z', 'oar', 'penetration', 'penetration_trend',
+                        'density', 'dissociation', 'structure'):
+                self._guard_geometry(what, what, include_data=what == 'structure')
             if len(parts) > 1 and what not in ('rdf', 'msd', 'density', 'charge_z'):
                 raise ValueError(f'Analysis {what!r} does not accept options')
             if what == 'structure' and s.data_atoms is None and not s.dump_frames:
@@ -1439,6 +1532,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         partial caches and propagate to onecmd; sequential failures propagate
         immediately and may leave earlier successful analyses cached.
         """
+        self._guard_geometry('analyze all', 'all', include_data=True)
         s = self.state
 
         # If nothing is loaded at all, prompt the user
@@ -1587,6 +1681,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Separate jobs let every species profile participate in a shared frame
         pass; the requested label determines the density_<label> cache key.
         """
+        self._guard_geometry('Density profile', 'density')
         s = self.state
         progress_msg(f"Computing density profile (species: {species_name})...")
         s.cache[f'density_{species_name}'] = compute_density_profile(
@@ -1617,6 +1712,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Resolve all Fe and O type channels explicitly; charge_z holds only the
         most recently selected frame, not a frame-indexed cache family.
         """
+        self._guard_geometry('Charge z profile', 'charge_z')
         if not self._require_dump() or not self._require_charge():
             return
         s = self.state
@@ -1757,7 +1853,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                              type_a=type_a, type_b=type_b,
                              max_frames=max_frames,
                              label_a=pair_parts[0], label_b=pair_parts[1],
-                             z_pbc=z_pbc, pbc=s.pbc)
+                             z_pbc=z_pbc, pbc=pbc)
         result['label'] = pair_str
         result['display_label'] = f'{display_a}-{display_b}'
         s.cache[cache_key] = result
@@ -1771,6 +1867,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_oar(self, opts):
         """Cache oxygen absorption relative to the current Angstrom surface plane."""
+        self._guard_geometry('OAR', 'oar')
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1800,6 +1897,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_penetration(self, opts):
         """Cache O z-extrema/counts against the current surface, with fs-derived time."""
+        self._guard_geometry('Penetration', 'penetration')
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1818,6 +1916,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_penetration_trend(self, opts):
         """Cache smoothed surface-relative O trends and report their frame-window size."""
+        self._guard_geometry('Penetration trend', 'penetration_trend')
         if not self._require_dump() or not self._require_surface_z():
             return
         s = self.state
@@ -1847,6 +1946,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
         s = self.state
 
+        self._guard_geometry('Density profile', 'density')
         requested = [opts[i + 1] for i, o in enumerate(opts)
                      if o == '--species' and i + 1 < len(opts)
                      and not opts[i + 1].startswith('--')]
@@ -1903,6 +2003,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_dissociation(self, opts):
         """Replace O2 tracking using resolved oxygen types and per-axis PBC provenance."""
+        self._guard_geometry('O2 dissociation', 'dissociation')
         if not self._require_dump():
             return
         s = self.state
@@ -2017,6 +2118,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         [id, type, x, y, z]. Missing dump IDs are synthesized only for this static
         snapshot, not for atom-tracked time-series analyses.
         """
+        self._guard_geometry('Structure z profile', 'structure', include_data=True)
         s = self.state
 
         # Prefer data file if loaded; otherwise use last dump frame
@@ -2260,6 +2362,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
 
         # ── Confirm output directory before plotting ──
+        if what in ('all', 'charge_z', 'oar', 'penetration', 'penetration_trend',
+                    'penetration_profile', 'density', 'dissociation', 'structure', 'snapshot'):
+            self._guard_geometry('plot ' + what, what,
+                                 include_data=what in ('all', 'structure'))
         # Shows current path and lets user change it (Enter to keep).
         # Only prompt if stdin is interactive (skip in batch/one-shot mode).
         current = s.output_dir or './lammps-post_output'
@@ -2339,7 +2445,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # (3) generates the plot. The _batch parameter suppresses prompts
     # when called from _plot_all.
 
-    def _iplot_common_opts(self, plot_name, edit_mode=False):
+    def _iplot_common_opts(self, plot_name, edit_mode=False, *, spatial=True):
         """
         Ask common plot options shared by most plot types.
         Returns dict with: normalize, z_focus, linewidth, figsize.
@@ -2353,6 +2459,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Angstrom and figsize in inches; the actual line-width key is ``lw``.
         Invalid optional numeric edits retain their previous values. Saving
         these preferences does not invalidate any numerical analysis cache.
+        Nonspatial time curves neither compute nor offer a z-focus selection.
         """
         s = self.state
         recipe_key = plot_name.lower().replace(' ', '_').replace('-', '_')
@@ -2362,7 +2469,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         opts = {
             'normalize': prev.get('normalize', s.normalize),
-            'z_focus': prev.get('z_focus', s.compute_z_focus()),
+            'z_focus': (prev['z_focus'] if 'z_focus' in prev else s.compute_z_focus())
+            if spatial else None,
             'lw': prev.get('lw', s.linewidth),
             'figsize': prev.get('figsize', s.figsize_override),
         }
@@ -2384,29 +2492,29 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         elif ans.lower() in ('n', 'no', 'off'):
             opts['normalize'] = False
 
-        # z_focus
-        zf = opts['z_focus']
-        cur_zf = f"{zf[0]:.1f}:{zf[1]:.1f}" if zf else "full range"
-        ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
-        if ans is None:
-            return None
-        ans = ans.strip().lower()
-        if ans in ('full', 'none', 'all', ''):
-            opts['z_focus'] = None
-        elif ':' in ans:
-            try:
-                lo, hi = ans.split(':', 1)
-                opts['z_focus'] = (float(lo), float(hi))
-            except ValueError:
-                # Optional display edits retain the existing crop on malformed
-                # input; this is not scientific-data validation or cache repair.
-                pass
-        elif ',' in ans:
-            try:
-                lo, hi = ans.split(',', 1)
-                opts['z_focus'] = (float(lo), float(hi))
-            except ValueError:
-                pass
+        if spatial:
+            zf = opts['z_focus']
+            cur_zf = f"{zf[0]:.1f}:{zf[1]:.1f}" if zf else "full range"
+            ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
+            if ans is None:
+                return None
+            ans = ans.strip().lower()
+            if ans in ('full', 'none', 'all', ''):
+                opts['z_focus'] = None
+            elif ':' in ans:
+                try:
+                    lo, hi = ans.split(':', 1)
+                    opts['z_focus'] = (float(lo), float(hi))
+                except ValueError:
+                    # Optional display edits retain the existing crop on malformed
+                    # input; this is not scientific-data validation or cache repair.
+                    pass
+            elif ',' in ans:
+                try:
+                    lo, hi = ans.split(',', 1)
+                    opts['z_focus'] = (float(lo), float(hi))
+                except ValueError:
+                    pass
 
         # Line width
         ans = self._ask(f"Line width", str(opts['lw']))
@@ -2447,6 +2555,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         unsupported _batch argument. Analyzer errors propagate to onecmd.
         """
         s = self.state
+        if key in ('charge_z', 'oar', 'penetration', 'penetration_trend',
+                   'penetration_profile', 'density', 'dissociation', 'structure'):
+            self._guard_geometry('plot ' + key, key, include_data=key == 'structure')
         if key in s.cache:
             return True
         # Check prefix-style keys (rdf_, density_, msd_)
@@ -2583,6 +2694,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         else:
             slab_z = s.plot_recipes.get('pressure', {}).get('slab_z_range')
 
+        if slab_z is not None:
+            self._guard_geometry('Slab pressure normalization', include_data=True)
         pressure_data = s.log_data
         if slab_z is not None and 'lz' not in pressure_data and s.dump_frames:
             # Never apply the last structure's height to an unrelated thermo
@@ -2623,7 +2736,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                                   normalize=norm, figsize=s.figsize_override)
             return
 
-        popts = self._iplot_common_opts('charge_evolution', edit_mode=_edit_mode)
+        popts = self._iplot_common_opts('charge_evolution', edit_mode=_edit_mode, spatial=False)
         if popts is None:
             return
         plt.rcParams['lines.linewidth'] = popts['lw']
@@ -2893,6 +3006,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         only crops rendering. No-O results are reported without caching None,
         and neither batch nor interactive calls ask additional plot questions.
         """
+        self._guard_geometry('Penetration profile plot', 'penetration_profile')
         s = self.state
         if s.dump_frames is None:
             print(C.warn("  No dump file loaded. Use 'load dump' first."))
@@ -2925,6 +3039,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         batch skips an empty family and otherwise overlays every cached profile.
         Selection/crop choices here are not persisted as a dedicated recipe.
         """
+        self._guard_geometry('Density plot', 'density')
         s = self.state
         dens_keys = [k for k in s.cache if k.startswith('density_')]
         if not dens_keys:
@@ -3021,7 +3136,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                       figsize=s.figsize_override)
             return
 
-        popts = self._iplot_common_opts('Spin Evolution', edit_mode=_edit_mode)
+        popts = self._iplot_common_opts('Spin Evolution', edit_mode=_edit_mode, spatial=False)
         if popts is None:
             return
         plt.rcParams['lines.linewidth'] = popts['lw']
@@ -3109,6 +3224,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         source reuse. Interactive mode can change the Angstrom z crop; batch
         uses computed focus and the global figure-size override.
         """
+        self._guard_geometry('Structure plot', 'structure', include_data=True)
         s = self.state
         # Prefer _structure_atoms if analyze structure was run; else data_atoms; else last dump
         atoms = getattr(s, '_structure_atoms', None)
@@ -3154,6 +3270,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         indices to the trajectory and falls back on representative frames for
         invalid numbers; the z-focus crop is a display-only Angstrom interval.
         """
+        self._guard_geometry('Snapshot plot')
         s = self.state
         if not self._require_dump():
             return
@@ -3219,6 +3336,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         absent RDF/density/MSD caches are skipped. Multi-key families are rendered
         once per family below rather than once for each cache entry.
         """
+        self._guard_geometry('plot all', 'all', include_data=True)
         s = self.state
         s.apply_plot_style()
         print(f"\n  {C.bold('Generating all plots...')}")

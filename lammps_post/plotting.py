@@ -576,6 +576,13 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
 
     Output: pressure_analysis.png
     """
+    if slab_z_range is not None and log_data is not None:
+        cell = log_data.get('cell')
+        tilted = any(np.any(np.asarray(log_data.get(key, 0)) != 0)
+                     for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))
+        if tilted or (cell is not None and not cell.is_orthogonal):
+            raise ValueError('Slab pressure normalization is orthogonal-only; '
+                             'triclinic geometry is unsupported')
     _require_matplotlib()
     if log_data is None:
         return
@@ -1269,7 +1276,6 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     scientific species assignment. Explicit indices are used as supplied.
     Output: snapshots.png (N panels side by side)
     """
-    _require_matplotlib()
     if not frames:
         return
 
@@ -1278,6 +1284,10 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
         indices = [0, n // 4, n // 2, 3 * n // 4, n - 1]
         indices = sorted(set(i for i in indices if 0 <= i < n))
 
+    from lammps_post.analysis import _orthogonal_box
+    for idx in indices:
+        _orthogonal_box(frames[idx], 'Snapshot plotting')
+    _require_matplotlib()
     xi, zi_col, ti = col_idx['x'], col_idx['z'], col_idx['type']
     n_snap = len(indices)
     fig, axes = plt.subplots(1, n_snap, figsize=figsize or (4 * n_snap, 8), sharey=True)
