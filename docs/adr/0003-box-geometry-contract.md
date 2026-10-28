@@ -180,7 +180,9 @@ neighborhood. One valid bound is:
   surface**. Unknown triclinic PBC blocks geometry analysis until explicit
   metadata is supplied. Do not freeze an input-derived mask into a stale Box.
 - Typed-cell PBC and an explicitly supplied analysis mask must agree; contradictions
-  raise. RDF may use Box PBC when its legacy `pbc=None` argument is omitted.
+  raise. Triclinic RDF uses Box PBC when `pbc=None`. Orthogonal RDF instead
+  retains the legacy `z_pbc` switch when no three-axis mask is supplied, including
+  Box-aware frames; reader opt-in must not erase an established caller override.
   Direct triclinic MSD callers supply a matching PBC mask because its existing
   signature retains the legacy slab default; shell supplies the resolved mask.
 - Display true cell kind, physical parameters, tilt and resolved/unknown PBC in
