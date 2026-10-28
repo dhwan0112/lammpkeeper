@@ -1046,6 +1046,10 @@ def parse_log(filepath):
     4. Extracts 'Loop time' values for performance analysis
     5. Normalizes column names (e.g., 'PotEng' -> 'pe', 'TotEng' -> 'etotal')
     6. Reassembles compatible MD blocks in source order, never optimizer steps
+    7. Rejects malformed numeric-leading rows in any active thermo table with
+       source path, line number, header and offending row; no partial history
+       is returned. Files are not rewritten. This is format validation, not
+       finite-value/physical validation of otherwise float-convertible records.
 
     Args:
         filepath: str — Path to the LAMMPS log file.
@@ -1115,7 +1119,7 @@ def parse_log(filepath):
     # A later unresolved timestep invalidates dt_fs until a numeric echo resolves
     # it; mixed units or changing numeric dt cannot share this single timeline.
     with open(filepath, 'r') as fh:
-        for raw in fh:
+        for lineno, raw in enumerate(fh, 1):
             line = raw.strip()
             low = line.lower()
             if low.startswith('units '):
@@ -1143,6 +1147,31 @@ def parse_log(filepath):
             # diagnostics, not a table terminator or a simulation-stage marker.
             if line.startswith('WARNING'):
                 continue
+
+            # A numeric first token identifies a candidate thermo record only
+            # within an active Step-headed table. Validate before keyword-based
+            # stage/terminator detection so a corrupt cell such as 'minimize'
+            # cannot disguise a data row as a command. Invalid numeric-leading
+            # records cannot escape checks by later MD-block selection.
+            if reading and current_headers and line:
+                fields = line.split()
+                try:
+                    float(fields[0])
+                except ValueError:
+                    pass  # Text diagnostics retain the legacy handling below.
+                else:
+                    context = (f"{filepath}:{lineno}: malformed thermo row for header "
+                               f"{' '.join(current_headers)!r}; expected "
+                               f"{len(current_headers)} numeric columns")
+                    if len(fields) != len(current_headers):
+                        raise ValueError(f"{context}, got {len(fields)}; row={line!r}")
+                    try:
+                        values = [float(field) for field in fields]
+                    except ValueError as exc:
+                        raise ValueError(f"{context}; nonnumeric value; row={line!r}") from exc
+                    current_data.append(values)
+                    current_stages.append(stage)
+                    continue
 
             # --- Stage detection ---
             # LAMMPS input scripts often print stage markers via 'print' commands.
@@ -1200,22 +1229,14 @@ def parse_log(filepath):
                 current_headers = None
                 continue
 
-            # --- Data line parsing ---
-            # Inside a thermo block, each line should have exactly as many
-            # numeric values as there are column headers.
-            if reading and current_headers:
-                parts = line.split()
-                if len(parts) == len(current_headers):
-                    try:
-                        vals = [float(p) for p in parts]
-                        current_data.append(vals)
-                        current_stages.append(stage)
-                    except ValueError:
-                        # Non-numeric line encountered — end this thermo block
-                        if current_data:
-                            blocks.append(_as_block(current_headers, current_data, current_stages))
-                        reading = False
-                        current_headers = None
+            # Numeric-leading rows were consumed or rejected above. Preserve
+            # the legacy same-width text terminator; other text/blank lines are
+            # not assumed to be thermo observations or new supported formats.
+            if reading and current_headers and len(line.split()) == len(current_headers):
+                if current_data:
+                    blocks.append(_as_block(current_headers, current_data, current_stages))
+                reading = False
+                current_headers = None
 
     # Capture the last thermo block if the file ends during data reading
     if reading and current_data:

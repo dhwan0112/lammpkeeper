@@ -30,7 +30,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_audit_rdf_oracle', 'test_audit_integration', 'test_slab_reference',
            'test_species_map', 'test_species_metadata', 'test_species_session',
            'test_box_model', 'test_box_geometry', 'test_triclinic_io',
-           'test_triclinic_analysis', 'test_triclinic_session']
+           'test_triclinic_analysis', 'test_triclinic_session', 'test_log_integrity']
 
 
 def main():
