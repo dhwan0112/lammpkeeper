@@ -22,6 +22,24 @@ is 65 Python modules / 831 definitions on runtime sources `5ebcfed`; its new
 runtime behavior and verification are recorded in `docs/agent/GEN-1.md`. This
 extends maintained coverage without changing the original annotation-only claim.
 
+## Current whole-source re-review (2026-10-28; after GEN-3)
+
+The maintainer requested another complete code review and annotation pass after
+PR #20. [`REVIEW-20261028.md`](REVIEW-20261028.md) is the exhaustive current
+inventory and findings record: **78 source/build files, 73 Python modules and
+978 function/class definitions**. Every target was reviewed; annotations were
+strengthened in **56 files**, while adequate existing English documentation in
+22 files was retained rather than padded. All 73 module and 978 definition
+docstrings remain present. Executable AST/noncomment code/TOML settings match
+merged-main baseline `75f5e66`.
+
+The new review also found pre-existing defects, including silent thermo-row loss,
+unsupported CIF occupancy and unsafe destination-symlink copyback. They are open
+follow-ups, not fixed or certified by annotation/regression passes. The current
+report distinguishes parent reproductions, reviewer probes, inferred risks and
+interpretation limits. The historical 63-file/713-definition PR #16 inventory
+below remains its original snapshot, not the current source count.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather

@@ -74,6 +74,70 @@ The branch is based on verified audit PR #15 (`f62f0a4`), not a merge to main.
   PR #15 after verification. The subsequent explicit merge request was completed:
   PR #16 was retargeted to main after PR #15 and merged as `4db45c4`.
 
+## REVIEW-20261028 · P3 · Whole-source re-review and English annotations — `verified (fix/review-20261028-annotations; publication pending)`
+
+Requested after GEN-3 by the maintainer: re-review all work to date and retain
+maintenance comments across all code. Baseline: merged main `75f5e66` (PR #20).
+
+- Inventory all 78 tracked Python/Rust/Shell/TOML source/build files: 73 Python
+  modules and 978 function/class definitions, including nested helpers/tests.
+- Review contracts, major logic, scientific assumptions, provenance, lifecycle,
+  failure paths and independent-oracle limitations. Keep comments in English;
+  explain why rather than repeat every execution line.
+- Strengthen missing/stale/unclear annotations without changing executable code,
+  assertions/expectations, generated strings, fixtures, mappings or lockfiles.
+  Existing adequate comments may remain; record every reviewed file explicitly.
+- Record potential defects with source evidence and reproduction status; do not
+  disguise runtime fixes or unsupported claims as annotation-only changes.
+- **Done when:** exhaustive inventory/review, documented findings and English
+  module/function/class coverage; normalized Python AST, Rust/Shell noncomment
+  code and parsed TOML match the baseline; full verifier passes in expanded/native,
+  forced NumPy and default environments with named skips. No actual LAMMPS/HPC,
+  native rebuild, physics rebaseline or architectural approval is implied.
+- **Measured result:** all 78 targets reviewed, English documentation present for
+  all 73 modules and 978 definitions; 56 files strengthened, 22 adequate existing
+  annotations retained. All baseline normalized semantics/settings preserved.
+  Parent full verifier: expanded/native **393/0/0**, forced NumPy **387/0/6**
+  native-only skips, default **377/0/16** ASE/Matplotlib skips. Expanded post/real
+  plots and prep/script smoke pass. Exact commands, named skips, per-file inventory
+  and known open defects: `docs/agent/REVIEW-20261028.md`.
+
+### Review follow-ups — open, not fixed by annotations
+
+Priorities below are review judgments. Concrete findings and parent/worker
+reproduction status are distinguished in `docs/agent/REVIEW-20261028.md`.
+These are separate future items (one per session/PR); no runtime fix, golden
+change or human-gated generated input/structure/job change is approved by listing
+one here. Reproduce under collected tests and show fail → pass before shipping.
+The P1 input-integrity/data-loss risks deserve attention before further generality.
+
+| Item | Priority / source finding | Done when |
+| --- | --- | --- |
+| REV-IO-1 | P1; F-IO-1, malformed thermo rows silently dropped | A short numeric row is diagnosed visibly, source evidence retained and no apparently valid incomplete timeline escapes unnoticed. |
+| REV-REF-1 | P1; F-REF-1, CIF occupancy ignored | Explicit zero/partial/disordered occupancy is rejected visibly unless an independently approved weighting model is implemented; full-occupancy compatibility tested. |
+| REV-PREP-1 | P1; F-PREP-3, successful copyback follows output symlinks | After maintainer approval of generated-script changes, destination-child symlinks cannot overwrite outside the destination; local failure/recovery tests preserve unrelated data. Real HPC remains deferred. |
+| REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
+| REV-ANALYSIS-2 | P2; F-ANALYSIS-2, missing-z region ignored | An explicit charge/OR region without a z column cannot silently become a global analysis; collected missing-column and valid-region tests pass. |
+| REV-ANALYSIS-3 | P2; F-ANALYSIS-3, invalid density range/bins | Equal/reversed/nonfinite ranges and invalid bin counts fail before histogram normalization; valid analytic profiles/goldens unchanged. |
+| REV-IO-2 | P2; F-IO-2, active-stream mutation | Changing a source during iteration is detected before publishing changed-frame atoms/species; unchanged stream/index/cache behavior preserved. |
+| REV-IO-3 | P2; F-IO-3, projection hides row corruption | Raw row width is validated before projection on NumPy and real native paths, including layouts without id/type/element. |
+| REV-REF-2 | P2; F-REF-2, incomplete default reference shells | Unsafe cutoff/replication raises or a justified complete-image policy recovers independent alpha-Fe outer coordination 6, not 3; no wrong-value rebaseline. |
+| REV-REF-3 | P2; F-REF-3, malformed symmetry accepted | Unsupported/malformed operators and component counts reject visibly; valid built-in/P1 geometry independently preserved. |
+| REV-REF-4 | P2; skew-reference MIC / invalid-cell limits | Explicitly validate/reject unsupported skew/cell cases or obtain approval for a bounded exact-geometry extension; never silently clip invalid geometry. |
+| REV-PREP-2 | P2; F-PREP-2, boundary/protocol mismatch | With required generated-input approval, incompatible reflecting-z/placement boundary choices reject visibly; default protocol unchanged. |
+| REV-PREP-3 | P2; F-PREP-1, ASE/manual reproducibility | Record dependency path and, only with generated-structure approval, define/test parity; preserve Fe/O relative coordinates and cross-FF equality. |
+| REV-PLOT-1 | P2; F-SESSION-1, wrong RDF reference pair | Hyphenated/generic cached pairs select matching references per curve; no Fe-O fallback for unrelated pairs; real metadata and mock dispatch regressions. |
+| REV-PLOT-2 | P2; negative-z/generic structure and threshold labels | Define domain-versus-generic plotting constraints, retain all intended z data and show the actual analysis threshold without inventing species. |
+| REV-UI-1 | P2; F-CLI-1, empty fallback table | Header-only and empty tables render or reject deliberately on both Rich/plain paths; no TypeError from scalar max. |
+| REV-VERIFY-1 | P2; F-VERIFY-2, unchecked temp creation | Fault-injected mktemp failures stop before empty-HOME/unisolated work; retained evidence and safe cleanup remain tested. |
+| REV-UI-2 | P3; F-SESSION-2, recipe alias mismatch | Saved charge/spin/etc recipes are found by advertised redo/edit command names without breaking existing names. |
+| REV-OPS-1 | P3; F-CLI-2, history loading/standalone ownership | Startup reads are bounded and independent standalone exit callbacks cannot cross-contaminate history; hosted navigation/opt-out preserved. |
+| REV-VERIFY-2 | P3; F-VERIFY-1, evidence collisions | Concurrent same-second/SHA/mode runs retain independent logs/summaries; no cleanup of retained evidence. |
+| REV-GEOM-1 | P3; F-CORE-1, near-face wrapping | Decide/document a floating-point face convention and test strict range/idempotence where promised without changing physical image selection silently. |
+| REV-TEST-1 | P3; F-CORE-2, finite oracle bounds | Independently justify finite image ranges; interiority alone is not a completeness argument; production geometry is not used as its own oracle. |
+| REV-PREP-4 | P3; F-PREP-4, Masses inspection | Prep's metadata inspector reads conventional blank-separated Masses sections without changing structures/presets. |
+| REV-REF-5 | P3; CIF case/seam behavior | Decide supported case-insensitive loop parsing and metric/seam deduplication limits with independent tiny-CIF tests and visible rejection outside scope. |
+
 ## Suggested order
 
 **Scheduling update (maintainer, 2026-10-26):** defer actual HPC submissions,
