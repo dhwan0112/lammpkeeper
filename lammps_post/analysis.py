@@ -26,6 +26,8 @@ import warnings
 import numpy as np
 
 from lammpkeeper.common.mapping import label_to_type
+from lammpkeeper.io import Box
+from lammpkeeper.core.geometry import minimum_image, to_fractional
 from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
                          O2_BOND_CUTOFF_A)
 
@@ -51,6 +53,82 @@ def _type_ids(selection, name):
     return frozenset(map(int, members))
 
 
+def _typed_cell(frame, analysis):
+    """Validate an explicit Box and all retained compatibility geometry copies.
+
+    Bare legacy bounds/tilt never opt into triclinic interpretation. Exact
+    agreement is required: compatibility arrays describe the very same cell,
+    not an independently fitted or approximately equivalent lattice. A retained
+    ``triclinic`` boolean claims nonorthogonal geometry, not format provenance.
+    Numerical analyses also enforce the core geometry's condition/scale limits
+    and a representable inverse volume; extreme valid metadata is not permission
+    to publish overflowed distances or density normalization.
+    """
+    if 'cell' not in frame:
+        return None
+    cell = frame['cell']
+    context = f"{analysis} timestep {frame['timestep']}"
+    if not isinstance(cell, Box):
+        raise ValueError(f'{context}: cell must be a Box')
+    bounds = np.asarray(cell.bounds, dtype=float)
+    matrix = np.asarray(cell.matrix, dtype=float)
+    if (bounds.shape != (3, 2) or matrix.shape != (3, 3)
+            or not np.all(np.isfinite(bounds)) or not np.all(np.isfinite(matrix))
+            or not np.isfinite(cell.volume) or cell.volume <= 0):
+        raise ValueError(f'{context}: cell geometry must be finite and positive')
+    if 'box' in frame:
+        legacy = np.asarray(frame['box'], dtype=float)
+        if legacy.shape != (3, 2) or not np.array_equal(legacy, bounds):
+            raise ValueError(f'{context}: cell and compatibility box bounds disagree')
+    for key in ('tilt', 'tilt_factors'):
+        if key in frame:
+            retained = np.asarray(frame[key], dtype=float)
+            if retained.shape != (3,) or not np.array_equal(retained, cell.tilt):
+                raise ValueError(f'{context}: cell and retained {key} disagree')
+    for dim, key in enumerate(('xy', 'xz', 'yz')):
+        if key in frame:
+            retained = np.asarray(frame[key], dtype=float)
+            if retained.shape != () or retained != cell.tilt[dim]:
+                raise ValueError(f'{context}: cell and retained {key} disagree')
+    if 'triclinic' in frame:
+        marker = frame['triclinic']
+        if not isinstance(marker, (bool, np.bool_)):
+            raise ValueError(f'{context}: retained triclinic flag must be a boolean scalar')
+        if bool(marker) != (not cell.is_orthogonal):
+            raise ValueError(f'{context}: cell and retained triclinic flag disagree')
+    try:
+        # The empty public transform validates the whole basis without using
+        # PBC, transforming atom coordinates or changing orthogonal arithmetic.
+        to_fractional(np.empty((0, 3), dtype=np.float64), cell)
+    except ValueError as exc:
+        raise ValueError(f'{context}: unsupported numerical geometry: {exc}') from exc
+    with np.errstate(over='ignore', divide='ignore', invalid='ignore'):
+        inverse_volume = np.float64(1.0) / cell.volume
+    if not np.isfinite(inverse_volume):
+        raise ValueError(f'{context}: geometry volume is too small for finite density normalization')
+    return cell
+
+
+def _cell_periodic(cell, explicit, fallback, analysis):
+    """Resolve typed PBC without guessing unknown triclinic boundary flags."""
+    if cell is None:
+        return fallback
+    if cell.pbc is None:
+        if not cell.is_orthogonal:
+            raise ValueError(f'{analysis}: triclinic Box PBC is unresolved')
+        return fallback
+    if explicit is not None and tuple(explicit) != tuple(cell.pbc):
+        raise ValueError(f'{analysis}: explicit PBC and Box PBC disagree')
+    return tuple(cell.pbc)
+
+
+def _guard_slab_frame(frame, analysis):
+    """Reject unsupported typed or retained tilted slab geometry visibly."""
+    if ('cell' in frame or frame.get('triclinic', False)
+            or any(key in frame for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))):
+        _orthogonal_box(frame, analysis)
+
+
 def _orthogonal_box(frame, analysis):
     """Return finite orthogonal bounds and their three positive side lengths.
 
@@ -58,10 +136,12 @@ def _orthogonal_box(frame, analysis):
     array alone does not prove orthogonality. Tilt already discarded upstream
     cannot be recovered here. ``analysis`` supplies context for visible errors.
     """
-    box = np.asarray(frame['box'], dtype=float)
+    cell = _typed_cell(frame, analysis)
+    box = np.asarray(frame['box'] if 'box' in frame else cell.bounds, dtype=float)
     tilted = any(np.any(np.asarray(frame.get(key, 0), dtype=float) != 0)
                  for key in ('tilt', 'tilt_factors', 'xy', 'xz', 'yz'))
-    if box.shape != (3, 2) or tilted or frame.get('triclinic', False):
+    if (box.shape != (3, 2) or tilted or (cell is not None and not cell.is_orthogonal)
+            or (cell is None and frame.get('triclinic', False))):
         raise ValueError(f"{analysis} timestep {frame['timestep']}: requires orthogonal (3, 2) "
                          'bounds; triclinic geometry is unsupported')
     lengths = box[:, 1] - box[:, 0]
@@ -110,11 +190,16 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     qi = col_idx.get('q')    # Charge column index (None if not ReaxFF)
     ti = col_idx['type']     # Atom type column index
     if qi is None:
+        if z_range is not None:
+            for fr in frames:
+                _guard_slab_frame(fr, 'Charge z restriction')
         return None  # No charge data available — not a ReaxFF dump
 
     fe_types = _type_ids(fe_type, 'fe_type')
     time, avg, mx, n_ox, n_fe = [], [], [], [], []
     for fr in frames:
+        if z_range is not None:
+            _guard_slab_frame(fr, 'Charge z restriction')
         atoms = fr['atoms']
         # Select Fe atoms (type 1 in standard ReaxFF Fe-O systems)
         fe_mask = np.isin(atoms[:, ti], list(fe_types))
@@ -176,6 +261,7 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     zi = col_idx.get('z')
     qi = col_idx.get('q')
     ti = col_idx['type']
+    _guard_slab_frame(frame, 'Charge z profile')
     if qi is None or zi is None:
         return None
 
@@ -226,6 +312,11 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
     brute-force loop sees (i, j) and (j, i), whose minimum-image distances are
     bitwise equal (the displacement only changes sign).
     """
+    if isinstance(box, Box):
+        if not box.is_orthogonal:
+            return None
+        pbc = _cell_periodic(box, pbc, (True, True, z_pbc), 'RDF candidates')
+        box = box.bounds
     try:
         from scipy.spatial import cKDTree
     except ImportError:
@@ -289,11 +380,13 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
        for identical selections. Nonperiodic boundaries use the same global
        density convention, without a finite-boundary shell-volume correction.
 
-    With scipy, a periodic cKDTree finds the candidate pairs within r_max and
+    For orthogonal cells with scipy, a periodic cKDTree finds pairs within r_max and
     their distances are recomputed with the same minimum-image formula as the
     brute-force fallback (used without scipy), so both paths bin identically.
-    The distance is the nearest orthogonal-box image, not a sum over repeated
-    images. The caller must choose a cutoff suitable for the periodic cell;
+    Typed triclinic cells use exact nearest-lattice MIC and complete row-wise
+    NumPy pairs, without a triclinic cKDTree backend. The distance is the nearest
+    cell image, not a sum over repeated images. The caller must choose a cutoff
+    suitable for the periodic cell;
     full spherical shells cease to be represented beyond its inscribed radius.
     Exactly coincident pairs and r == r_max are excluded in both paths.
     Empty species frames warn and do not enter the average; if none contribute,
@@ -313,8 +406,10 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         label_b:    str        — Name of target species for plot labels
         z_pbc:      bool       — Apply PBC in z-direction (default: False).
                                  Set to False for slab geometries (boundary p p f).
-        pbc:        three bools or None — Explicit x/y/z flags override z_pbc.
-                    None retains the legacy (True, True, z_pbc) convention.
+        pbc:        three bools or None — Explicit lattice-vector flags must
+                    agree with known Box metadata. None uses resolved Box flags
+                    or the legacy (True, True, z_pbc) convention for bare bounds.
+                    Triclinic Box flags must already be resolved.
 
     Returns:
         dict with keys:
@@ -349,7 +444,16 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     use_frames = frames[-max_frames:] if len(frames) > max_frames else frames
 
     for fr in use_frames:
-        box, L = _orthogonal_box(fr, 'RDF')
+        cell = _typed_cell(fr, 'RDF')
+        # The legacy z_pbc switch remains authoritative for orthogonal inputs
+        # when no explicit three-axis mask is supplied, including typed frames.
+        frame_periodic = (periodic if cell is not None and cell.is_orthogonal and pbc is None
+                          else _cell_periodic(cell, pbc, periodic, 'RDF'))
+        triclinic = cell is not None and not cell.is_orthogonal
+        if triclinic:
+            box, L = cell.bounds, cell.lengths
+        else:
+            box, L = _orthogonal_box(fr, 'RDF')
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
         # Keep singleton arithmetic unchanged while allowing explicit unions.
@@ -367,15 +471,16 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
                           'frame excluded from RDF average', RuntimeWarning, stacklevel=2)
             continue
 
-        pairs = _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
-                                     same_species=same_species, pbc=periodic)
+        pairs = (None if triclinic else
+                 _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
+                                      same_species=same_species, pbc=frame_periodic))
         hist = np.zeros(n_bins)
         if pairs is not None:
             # cKDTree only nominates pairs; distances are recomputed below with
             # the brute-force formula so every r lands in the same bin as before.
             ia, ib, weight = pairs
             d = pos_b[ib] - pos_a[ia]
-            for dim, wrap in enumerate(periodic):
+            for dim, wrap in enumerate(frame_periodic):
                 if wrap:
                     d[:, dim] -= L[dim] * np.round(d[:, dim] / L[dim])
             r = np.linalg.norm(d, axis=1)
@@ -387,15 +492,18 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
             # Row-wise fallback avoids allocating a full N_a x N_b matrix.
             for p in pos_a:
                 d = pos_b - p
-                for dim, wrap in enumerate(periodic):
-                    if wrap:
-                        d[:, dim] -= L[dim] * np.round(d[:, dim] / L[dim])
+                if triclinic:
+                    d = minimum_image(d, cell)
+                else:
+                    for dim, wrap in enumerate(frame_periodic):
+                        if wrap:
+                            d[:, dim] -= L[dim] * np.round(d[:, dim] / L[dim])
                 r = np.linalg.norm(d, axis=1)
                 valid = (r > 0) & (r < r_max)
                 bi = (r[valid] / dr).astype(int)
                 bi = bi[bi < n_bins]
                 np.add.at(hist, bi, 1)
-        rho_b = len(pos_b) / np.prod(L)
+        rho_b = len(pos_b) / (cell.volume if triclinic else np.prod(L))
         g_total += hist / (len(pos_a) * shell_vol * rho_b)
         n_frames_used += 1
 
@@ -435,6 +543,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
     o_types = _type_ids(o_type, 'o_type')
     time, oar, n_abs, n_total = [], [], [], []
     for fr in frames:
+        _guard_slab_frame(fr, 'OAR')
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
         o_mask = np.isin(types, list(o_types))
@@ -462,6 +571,8 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     chemical bond or oxide phase, and is not a time derivative. Selection and
     its denominator are recomputed per frame; empty selections return zero.
     As in charge evolution, a z restriction requires an available z column.
+    Without that restriction this is a pure scalar-charge population fraction,
+    independent of box shape; only the z-restricted variant requires a slab.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -481,11 +592,16 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     zi = col_idx.get('z')
     qi = col_idx.get('q')
     if qi is None:
+        if z_range is not None:
+            for fr in frames:
+                _guard_slab_frame(fr, 'Oxidation rate z restriction')
         return None
 
     fe_types = _type_ids(fe_type, 'fe_type')
     time, vals = [], []
     for fr in frames:
+        if z_range is not None:
+            _guard_slab_frame(fr, 'Oxidation rate z restriction')
         atoms = fr['atoms']
         fe_mask = np.isin(atoms[:, ti], list(fe_types))
         if z_range is not None and zi is not None:
@@ -540,6 +656,7 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     o_types = _type_ids(o_type, 'o_type')
     time, o_min_z, n_ads, n_near, n_total = [], [], [], [], []
     for fr in frames:
+        _guard_slab_frame(fr, 'Penetration')
         atoms = fr['atoms']
         o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
@@ -619,6 +736,7 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
     time_arr, ads_ratio, mean_z, std_z, max_depth = [], [], [], [], []
 
     for fr in frames:
+        _guard_slab_frame(fr, 'Penetration trend')
         atoms = fr['atoms']
         o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
@@ -725,6 +843,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     ti = col_idx['type']
 
     if z_range is None and frames:
+        for fr in frames:
+            _orthogonal_box(fr, 'Density profile')
         boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
         if boxes is not None:
             zlo, zhi = float(boxes[:, 2, 0].min()), float(boxes[:, 2, 1].max())
@@ -844,6 +964,7 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
     for fr in frames:
         atoms = fr['atoms']
         box, L = _orthogonal_box(fr, 'Pair detection')
+        _cell_periodic(_typed_cell(fr, 'Pair detection'), pbc, pbc, 'Pair detection')
         step = fr['timestep']
         o_mask = np.isin(atoms[:, ti], selected_types)
         selected = atoms[o_mask]
@@ -1012,10 +1133,14 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
     gap across which periodic crossings could be lost.
 
     Minimum-image displacements are accumulated on the axes marked periodic.
-    Wrapped coordinates must be sampled often enough that each periodic step is
-    less than half a box length. Only orthogonal (3, 2) bounds are supported;
-    this routine does not reconstruct tilt discarded by an upstream reader.
-    Geometry with retained triclinic bounds is rejected, not approximated.
+    Orthogonal trajectories retain the historical current-frame-length
+    arithmetic, including variable lengths and np.round ties. Typed triclinic
+    trajectories require constant origin, matrix and resolved PBC. Each true
+    step must lie strictly inside the periodic lattice Voronoi cell; fractional
+    components below one-half are not sufficient. Wrapped samples cannot detect
+    arbitrary aliasing. Neither image flags nor unwrapped-coordinate columns are
+    interpreted, and affine cell motion is not subtracted. Bare retained tilt
+    without a Box remains unsupported.
 
     Args:
         frames: list-like trajectory with at least two frames.
@@ -1024,7 +1149,8 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
             atoms initially present. This is an initial-cohort MSD, not a
             time-dependent population or spin-channel MSD.
         dt_fs: timestep in femtoseconds; output time is in picoseconds.
-        pbc: three booleans for x/y/z unwrapping. The historical slab default
+        pbc: three booleans for lattice-vector unwrapping (Cartesian axes for
+            orthogonal cells). The historical slab default
             is retained for compatibility. A bulk cell needs (True, True, True);
             the shell supplies flags from dump/input metadata.
 
@@ -1046,6 +1172,27 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         raise ValueError('MSD pbc must contain exactly three booleans') from None
     if len(pbc) != 3 or not all(isinstance(v, (bool, np.bool_)) for v in pbc):
         raise ValueError('MSD pbc must contain exactly three booleans')
+
+    # Validate typed metadata even if the initial cohort will be empty. A
+    # triclinic trajectory cannot silently become a legacy orthogonal series.
+    reference_cell = None
+    for frame in frames:
+        cell = _typed_cell(frame, 'MSD')
+        _cell_periodic(cell, pbc, pbc, 'MSD')
+        if cell is not None and not cell.is_orthogonal:
+            reference_cell = cell
+            break
+    if reference_cell is not None:
+        for frame in frames:
+            cell = _typed_cell(frame, 'MSD')
+            if cell is None:
+                raise ValueError('MSD triclinic trajectories cannot mix cell representations')
+            _cell_periodic(cell, pbc, pbc, 'MSD')
+            if (not np.array_equal(cell.bounds[:, 0], reference_cell.bounds[:, 0])
+                    or not np.array_equal(cell.matrix, reference_cell.matrix)
+                    or cell.pbc != reference_cell.pbc):
+                raise ValueError(f"MSD timestep {frame['timestep']}: triclinic MSD requires "
+                                 'constant origin, matrix and PBC; cell deformation/flips are unsupported')
 
     position_cols = [col_idx[k] for k in ('x', 'y', 'z')]
     first = frames[0]
@@ -1091,6 +1238,8 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
 
     def box_lengths(frame):
         """Reuse the orthogonal-geometry guard for each unwrapping increment."""
+        if reference_cell is not None:
+            return reference_cell.lengths
         _box, lengths = _orthogonal_box(frame, 'MSD')
         return lengths
 
@@ -1135,8 +1284,11 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         # This uses the current frame's lengths; it is not a subtraction of
         # affine cell motion or a general variable-cell diffusion correction.
         delta = cur_pos - prev_pos
-        for dim in wrap_dims:
-            delta[:, dim] -= lengths[dim] * np.round(delta[:, dim] / lengths[dim])
+        if reference_cell is not None:
+            delta = minimum_image(delta, reference_cell)
+        else:
+            for dim in wrap_dims:
+                delta[:, dim] -= lengths[dim] * np.round(delta[:, dim] / lengths[dim])
         unwrapped += delta
         prev_pos = cur_pos.copy()
 
@@ -1279,6 +1431,8 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
         raise ValueError('surface_percentile must be finite and between 0 and 100')
 
     if len(frames) < 2:
+        for fr in frames:
+            _guard_slab_frame(fr, 'Penetration profile')
         return None
 
     t0 = frames[0]['timestep']
