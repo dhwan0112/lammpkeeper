@@ -1,5 +1,8 @@
 # REV-ANALYSIS-1 — selected charge integrity
 
+Status: implemented and verified in `febe78d`; published as
+[PR #26](https://github.com/dhwan0112/lammpkeeper/pull/26), awaiting merge approval.
+
 ## Scope and context
 
 Work begins from `84ee8d1` after the 2026-10-29 prior-work review. The backlog
