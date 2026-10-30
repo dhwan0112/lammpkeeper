@@ -38,7 +38,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 [ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) establishes
 Rust CLI/TUI frontends over shared Python application execution, with skills
 and an optional MCP adapter using that same contract. **Status: accepted
-2026-10-30; EXEC-1 implemented and verified, PR review pending.** Python scientific APIs, ecosystem
+2026-10-30; EXEC-1 implemented and verified in PR #29, awaiting merge.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 

@@ -42,7 +42,7 @@ not available in this harness and are not claimed as executed.
 
 | Item | Depends on | Done when |
 | --- | --- | --- |
-| EXEC-1 · P3 · Shared Python application contract · implemented, PR review pending | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
+| EXEC-1 · P3 · Shared Python application contract · implemented, PR #29 awaiting merge | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
 | EXEC-2 · P3 · Headless worker and local lifecycle | EXEC-1 | Selected Python environment and compatibility handshake work; progress, cancel, timeout/crash and artifact lifetime are explicit and tested; no stale success or mandatory daemon/Rust dependency |
 | AGENT-1 · P3 · Portable workflow skill | EXEC-2 | Shared scientific workflow uses structured commands and verifies results; host setup and tested/untested Claude, Codex, OpenCode integrations recorded separately |
 | UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |

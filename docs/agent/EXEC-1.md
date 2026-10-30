@@ -1,5 +1,8 @@
 # EXEC-1 — shared thermo summary and structured execution
 
+Published implementation: `8087bb7`, [PR #29](https://github.com/dhwan0112/lammpkeeper/pull/29),
+stacked on proposal PR #28 and awaiting merge. No merge is implied by ADR acceptance.
+
 ## Status and design decision
 
 Implemented and verified on `gen/exec-1-structured-analysis`, based on the ARCH-1 proposal
