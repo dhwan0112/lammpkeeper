@@ -16,6 +16,8 @@ Maintainer requested an ADR and roadmap revision on 2026-10-30. Proposal:
 `docs/adr/0004-rust-frontends-python-execution-agent-access.md`; staged roadmap:
 `MIGRATION.md` → "Proposed interface roadmap". This item delivers planning only.
 Existing accepted ADRs and scientific-integrity priorities remain in force.
+Published proposal: [PR #28](https://github.com/dhwan0112/lammpkeeper/pull/28),
+initial documentation commit `cc6a199`; awaiting maintainer review/acceptance.
 
 **Done when (documentation):** responsibilities, alternatives, Python/environment
 compatibility, versioned execution and artifact contracts, agent access, rollout
