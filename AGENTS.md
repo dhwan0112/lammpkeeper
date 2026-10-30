@@ -59,8 +59,8 @@ Rules while getting there:
   HOME="$(mktemp -d)" python tests/run.py               # fast
   HOME="$(mktemp -d)" LKPR_SLOW=1 python tests/run.py   # + RDF/MSD goldens
   ```
-- `tests/run.py` still counts early-`return` skips as PASS (TEST-1). Until that is
-  fixed, list the skipped tests.
+- TEST-1 (PR #3) fixed skip accounting. Keep named skips and their reasons in
+  verification reports; inspect alternative-path evidence before continuing.
 - End-to-end check: `/verify-lkpr` (`.cursor/skills/verify-lkpr/`).
 - Native parser: `native/build.sh` (optional; same results as NumPy). Never edit or
   commit `*.so`.
@@ -109,8 +109,9 @@ Rules while getting there:
 
 ## 7. Goldens and reference systems
 
-- Goldens detect *change*, not *correctness*. Some currently lock in known-wrong
-  values (e.g. `msd_FeUp`, PHYS-1).
+- Goldens detect *change*, not *correctness*. Historical MSD/RDF defects required
+  explicitly approved rebaselines; see PHYS-1 and the audit records. Their corrected
+  fingerprints are not blanket proof that every scientific path is correct.
 - Re-baseline only in a **dedicated commit**:
   `test(golden): rebaseline <key> — <reason> (<BACKLOG-ID>)`. Include old/new
   summary values, the physical reason and an independent check. Leave a comment
@@ -159,6 +160,10 @@ Rules while getting there:
   changed.
 
 ## 10. Commits
+
+- Maintainer identity: `Kim Donghwan <e1075536@u.nus.edu>`. Confirm repository Git
+  author settings before committing; do not replace them with an agent identity.
+  GitHub merge commits may display `Donghwan Kim` with the same email.
 
 Conventional style: `fix(post): …`, `feat(core): …`, `refactor(io): …`, `test: …`,
 `docs(adr): …`. Reference the backlog ID. One logical change per commit.
