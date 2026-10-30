@@ -1,8 +1,8 @@
 # ADR-0004: Rust frontends, Python execution, and shared agent access
 
-- **Status:** proposed
+- **Status:** accepted (2026-10-30)
 - **Date:** 2026-10-30
-- **Deciders:** 김동환 (maintainer); explicit acceptance required before implementation
+- **Deciders:** 김동환 (maintainer)
 - **Backlog:** ARCH-1, EXEC-1, EXEC-2, AGENT-1, UI-1, UI-2, AGENT-2
 - **Relation:** extends ADR-0001 at the application boundary; does not supersede
   ADR-0001/0002/0003 or approve physical package moves
@@ -33,7 +33,12 @@ Different interfaces must not produce different scientific answers.
 | Embed Python in the Rust frontend immediately | Direct calls, but interpreter/ABI/environment packaging becomes tightly coupled | Can preserve kernels; conda/venv and optional native dependencies become harder to support |
 | Rust frontends and agent adapters share Python execution (recommended) | Adds a versioned process boundary and lifecycle work | Reuses numerical kernels, retains Python-only use and permits incremental generic workflows |
 
-## Proposed decision
+## Decision
+
+The maintainer requested continuation of the five-stage track on 2026-10-30,
+after reviewing the ADR/roadmap proposal. This accepts the direction and starts
+the first bounded vertical slice; later implementation stages retain their
+individual compatibility, validation and scope gates.
 
 ### Responsibility boundaries
 
@@ -168,6 +173,20 @@ Existing scientific integrity work remains first priority. This track does not
 require waiting for all GEN package moves or authorize them implicitly.
 
 ## Acceptance evidence and open decisions
+
+### EXEC-1 implementation selection (2026-10-30)
+
+The first bounded operation is `thermo.summary` version 1: the existing
+`show thermo` column statistics, with no timeline, trajectory arrays, plotting
+or species inference. Add `lammpkeeper/application.py` for the shared Python
+operation and `lammpkeeper/execution.py` for the versioned JSON boundary.
+Existing files are not moved. `lammpkeeper/cli.py` adds `exec`; the existing
+post shell uses the shared application function for its numeric statistics.
+This realizes the maintainer-approved track through an additive application
+boundary rather than a package reorganization. The concrete bounded contract
+and validation evidence are recorded in `docs/agent/EXEC-1.md`.
+
+### Whole-track acceptance checks
 
 - One reference operation agrees across direct Python, legacy CLI and structured
   execution on values, units, selection, diagnostics and failure status.

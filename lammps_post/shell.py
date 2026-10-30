@@ -1066,14 +1066,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if what == 'thermo':
             if not self._require_log():
                 return
-            d = s.log_data
+            from lammpkeeper.application import summarize_thermo
+            summary = summarize_thermo(s.log_data)
             headers = ['Column', 'Min', 'Max', 'Mean', 'Std']
             rows = []
-            for key in ['step', 'temp', 'pe', 'ke', 'etotal', 'press', 'vol']:
-                if key in d:
-                    v = d[key]
-                    rows.append([key, f'{v.min():.4g}', f'{v.max():.4g}',
-                                 f'{v.mean():.4g}', f'{v.std():.4g}'])
+            for key, stats in summary['statistics'].items():
+                rows.append([key] + [f'{stats[name]:.4g}'
+                                     for name in ('min', 'max', 'mean', 'std')])
             print_table(headers, rows, 'Thermo Summary')
 
         elif what == 'columns':

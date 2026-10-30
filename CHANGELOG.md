@@ -12,6 +12,19 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Structured thermo-summary execution (EXEC-1)
+
+- Add a shared Python application operation for existing thermo-summary
+  statistics, reused by `show thermo` and an additive `lkpr exec` JSON interface.
+- Provide versioned capability discovery and bounded strict-JSON requests with
+  explicit outcomes, diagnostics, native-unit metadata and source provenance.
+- Reject invalid summary data and ambiguous supported headers rather than
+  publishing nonfinite or overwritten statistics. Parsed Step precision remains
+  bounded; this does not resolve general source-token precision in REV-IO-5.
+- Record ADR-0004 acceptance and the first vertical slice of the Python/Rust/
+  agent roadmap. Job lifecycle, Rust frontends, skills and MCP remain separate
+  implementation stages.
+
 ### Job result copyback safety (REV-PREP-1)
 
 - Preflight every matching result path before any `cp -a` copyback; refuse
