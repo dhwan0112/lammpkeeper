@@ -1,5 +1,7 @@
 # AGENT-1 — portable structured-analysis Skill
 
+Published implementation: `14ae464`, [PR #31](https://github.com/dhwan0112/lammpkeeper/pull/31).
+
 ## Foundation and scope
 
 User-authorized merges completed in order: PR #28 (`d447a30`), #29 (`ed41c1f`),
