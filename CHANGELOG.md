@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Portable agent workflow (AGENT-1)
+
+- Add a canonical LammpKeeper Skill for capability discovery, explicit Python
+  selection, structured thermo summaries and retained execution/cleanup evidence.
+- Link Claude project discovery to the same instructions; document Codex and
+  OpenCode setup with measured host checks distinguished from untested support.
+- Add three paired evaluation cases for native units, unresolved units and
+  malformed input; retain graders and development evidence.
+
 ### Process-owned local execution (EXEC-2)
 
 - Add a local Python supervisor and additive `lkpr run` entry point for explicit

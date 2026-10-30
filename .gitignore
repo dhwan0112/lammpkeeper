@@ -22,3 +22,6 @@ lammps-post_output/
 # The RDF/MSD/spin golden regression in tests/ reads tests/fixtures/.../traj.dump;
 # without it the numeric checks silently skip.
 !tests/fixtures/**
+
+# Synthetic Skill inputs are versioned; evaluation outputs stay outside the repo.
+!.agents/skills/lammpkeeper/evals/*/files/log.lammps
