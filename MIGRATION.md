@@ -68,6 +68,10 @@ EXEC-1 starts with `thermo.summary`: shared statistics behind Python API,
 legacy `show thermo` and an additive `lkpr exec` JSON boundary. See
 `docs/agent/EXEC-1.md` for scope and measured status. Rust, skills, MCP and job
 lifecycle remain separate implementation items; acceptance is not their delivery.
+EXEC-2 implements verified process-owned local supervision in a separate branch:
+explicit Python environment, handshake, state logs, deadline/cancel and bounded
+cleanup with visible incomplete-cleanup diagnostics. PR review is pending.
+Its lifecycle contract and measured evidence are in `docs/agent/EXEC-2.md`.
 
 ## Audit correction note (2026-10-27)
 

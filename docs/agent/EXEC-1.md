@@ -197,6 +197,27 @@ unverified. Parent/worker reviewed application impact and scientific assumptions
 directly; unavailable `/blast-radius` and `/interrogate` playbooks are not claimed
 as executed.
 
+## Native-only skip audit before EXEC-2 (2026-10-30, measured)
+
+The maintainer asked to check all skipped tests before continuing. Parent matched
+the six NumPy-mode skips to explicit PASS lines in the native full-run
+`tests.log` (lines 46, 63, 331, 360, 361, 447), then reran precisely these six
+functions in the verified native snapshot with isolated HOME:
+
+| Module | Test | Native recheck |
+| --- | --- | --- |
+| `test_dump_reader` | `test_native_parser_matches_loadtxt` | PASS |
+| `test_periodicity` | `test_native_boundary_metadata_matches_numpy_without_fallback` | PASS |
+| `test_slab_reference` | `test_slab_native_and_numpy_match_every_reader_access_path` | PASS |
+| `test_species_metadata` | `test_dump_native_metadata_parity_without_numpy_fallback` | PASS |
+| `test_species_metadata` | `test_dump_native_raw_type_ids_without_fallback` | PASS |
+| `test_triclinic_io` | `test_box_aware_real_native_success_matches_numpy_without_fallback` | PASS |
+
+Recheck: **6 passed, 0 failed, 0 skipped**. The native module was asserted loaded
+from `/tmp/opencode/lkpr-exec1-final._poqs9rc/source/lammps_post/_dumpparse.abi3.so`.
+These tests were intentionally unavailable under forced NumPy, not unverified
+failures. This does not add MDAnalysis, Python 3.9 runtime or real-HPC coverage.
+
 ## Next bounded work
 
 EXEC-2 defines interpreter selection/handshake, supervised local work and lifecycle
