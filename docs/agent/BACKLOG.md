@@ -10,21 +10,22 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
-## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `proposed; awaiting ADR acceptance`
+## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `accepted (2026-10-30); proposal PR #28`
 
 Maintainer requested an ADR and roadmap revision on 2026-10-30. Proposal:
 `docs/adr/0004-rust-frontends-python-execution-agent-access.md`; staged roadmap:
-`MIGRATION.md` → "Proposed interface roadmap". This item delivers planning only.
+`MIGRATION.md` → "Interface roadmap". This item delivers planning only.
 Existing accepted ADRs and scientific-integrity priorities remain in force.
 Published proposal: [PR #28](https://github.com/dhwan0112/lammpkeeper/pull/28),
-initial documentation commit `cc6a199`; awaiting maintainer review/acceptance.
+initial documentation commit `cc6a199`. The maintainer subsequently requested
+continuation of the five-stage track on 2026-10-30, accepting ADR-0004's direction.
 
 **Done when (documentation):** responsibilities, alternatives, Python/environment
 compatibility, versioned execution and artifact contracts, agent access, rollout
 dependencies and implementation acceptance tests are documented and reviewed.
 ADR acceptance and runtime delivery have separate status; no prototype is claimed.
 
-**Documentation review/verification (2026-10-30):** independent source review
+**Original proposal review/verification (2026-10-30, before acceptance):** independent source review
 approved the proposal after moving lifecycle-schema decisions before EXEC-2.
 Local ADR links, shared roadmap IDs and proposed status were checked;
 `git diff --check` passes. Full forced-NumPy verifier on main `84ee8d1`:
@@ -33,15 +34,15 @@ slab parity, two species-metadata checks, triclinic IO); post/plots and prep
 artifact/script checks pass. MDAnalysis is unavailable; native/HPC execution
 was not verified. Evidence:
 `/tmp/opencode/lkpr-arch1-docs/20261030T163851-84ee8d1-full`.
-Only this roadmap, MIGRATION and the proposed ADR changed. Architecture options
+Only the roadmap, MIGRATION and the proposed ADR changed in ARCH-1. Architecture options
 and risks were reviewed directly; `/architect` and `/interrogate` playbooks were
 not available in this harness and are not claimed as executed.
 
-### Proposed implementation track — blocked on ADR-0004 acceptance
+### Implementation track — ADR-0004 accepted; staged delivery
 
 | Item | Depends on | Done when |
 | --- | --- | --- |
-| EXEC-1 · P3 · Shared Python application contract | ADR-0004 acceptance; relevant REV-* fixes | Choose one validated operation; approve exact module paths and versioned schemas; direct Python, legacy CLI and structured execution match values/units/errors with Fe-O and synthetic generic checks; capability/provenance and strict JSON contracts tested |
+| EXEC-1 · P3 · Shared Python application contract · implemented, PR review pending | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
 | EXEC-2 · P3 · Headless worker and local lifecycle | EXEC-1 | Selected Python environment and compatibility handshake work; progress, cancel, timeout/crash and artifact lifetime are explicit and tested; no stale success or mandatory daemon/Rust dependency |
 | AGENT-1 · P3 · Portable workflow skill | EXEC-2 | Shared scientific workflow uses structured commands and verifies results; host setup and tested/untested Claude, Codex, OpenCode integrations recorded separately |
 | UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
@@ -236,7 +237,7 @@ Actual HPC/site work remains deferred as above.
 
 **Phase 2, generalization** (ADR-0001 accepted 2026-10-24): GEN-1 → GEN-3 → GEN-2 → GEN-4 → GEN-5 → GEN-6 → GEN-7 → GEN-8 → GEN-9
 
-**Proposed interface track (ARCH-1; ADR-0004 awaiting acceptance):** EXEC-1 →
+**Interface track (ARCH-1; ADR-0004 accepted 2026-10-30):** EXEC-1 →
 EXEC-2 → AGENT-1 / UI-1 → UI-2 / AGENT-2, with the exact dependencies in the
 table above. Planning does not lift the scientific-integrity priority or GEN-2
 pause; expose only operations whose relevant correctness findings are resolved.

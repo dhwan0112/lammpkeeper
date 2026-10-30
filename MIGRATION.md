@@ -33,18 +33,18 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - Real LAMMPS/HPC execution is deferred. The old run report below is historical,
   not a claim that the current code or this environment was run on LAMMPS.
 
-## Proposed interface roadmap (ARCH-1, 2026-10-30)
+## Interface roadmap (ARCH-1 / EXEC-1, 2026-10-30)
 
-[ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) proposes
+[ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) establishes
 Rust CLI/TUI frontends over shared Python application execution, with skills
-and an optional MCP adapter using that same contract. **Status: proposed;
-implementation awaits maintainer acceptance.** Python scientific APIs, ecosystem
+and an optional MCP adapter using that same contract. **Status: accepted
+2026-10-30; EXEC-1 implemented and verified, PR review pending.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 
 | Stage / backlog | Deliverable | Completion gate |
 | --- | --- | --- |
-| ARCH-1 | ADR and roadmap proposal | Responsibilities, alternatives, compatibility and dependencies documented; acceptance recorded separately |
+| ARCH-1 | Accepted ADR and roadmap | Direction approved by maintainer's request to continue the five-stage track on 2026-10-30 |
 | EXEC-1 | One callable Python operation and versioned structured request/result contract | Direct Python, existing CLI and structured path agree on scientific results/errors; schemas, module paths, capabilities and provenance specified |
 | EXEC-2 | Headless process execution and local job lifecycle | Explicit interpreter selection; protocol mismatch, progress, cancellation, crash and incomplete artifacts tested; Python-only use retained |
 | AGENT-1 (after EXEC-2) | Shared workflow skill plus host setup notes | Capability discovery, run and artifact verification demonstrated; Claude/Codex/OpenCode support reported per exercised host |
@@ -64,9 +64,10 @@ retain explicit units, format and lifetime. Python owns scientific validation;
 Rust and agent adapters handle presentation/transport. Initial subprocess use
 preserves user-selected conda/venv environments. Embedding, persistent services,
 remote execution and replacing the default executable require later decisions.
-No Rust frontend, structured service or MCP implementation exists by virtue of
-this roadmap. Runtime implementation remains tracked separately from this
-documentation-only planning item.
+EXEC-1 starts with `thermo.summary`: shared statistics behind Python API,
+legacy `show thermo` and an additive `lkpr exec` JSON boundary. See
+`docs/agent/EXEC-1.md` for scope and measured status. Rust, skills, MCP and job
+lifecycle remain separate implementation items; acceptance is not their delivery.
 
 ## Audit correction note (2026-10-27)
 
