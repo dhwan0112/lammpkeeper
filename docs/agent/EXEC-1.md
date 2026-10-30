@@ -1,7 +1,7 @@
 # EXEC-1 — shared thermo summary and structured execution
 
 Published implementation: `8087bb7`, [PR #29](https://github.com/dhwan0112/lammpkeeper/pull/29),
-stacked on proposal PR #28 and awaiting merge. No merge is implied by ADR acceptance.
+originally stacked on PR #28; merged into main on 2026-10-30 as `ed41c1f`.
 
 ## Status and design decision
 

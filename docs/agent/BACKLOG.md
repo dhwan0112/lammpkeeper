@@ -10,7 +10,7 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
-## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `accepted (2026-10-30); proposal PR #28`
+## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `accepted (2026-10-30); PR #28 merged`
 
 Maintainer requested an ADR and roadmap revision on 2026-10-30. Proposal:
 `docs/adr/0004-rust-frontends-python-execution-agent-access.md`; staged roadmap:
@@ -42,9 +42,9 @@ not available in this harness and are not claimed as executed.
 
 | Item | Depends on | Done when |
 | --- | --- | --- |
-| EXEC-1 · P3 · Shared Python application contract · implemented, PR #29 awaiting merge | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
-| EXEC-2 · P3 · Headless worker and local lifecycle · implemented, PR #30 awaiting merge | EXEC-1; six native-only skips audited and rerun **6/0/0** | Explicit environment, handshake, state logs, cancel/deadline/cleanup and bounded transport; 32 regressions. Full native **493/0/0**, NumPy **487/0/6** (all six pass native), pytest **493 passed**; installed-venv check passes. See `docs/agent/EXEC-2.md`. |
-| AGENT-1 · P3 · Portable workflow skill | EXEC-2 | Shared scientific workflow uses structured commands and verifies results; host setup and tested/untested Claude, Codex, OpenCode integrations recorded separately |
+| EXEC-1 · P3 · Shared Python application contract · merged PR #29 | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
+| EXEC-2 · P3 · Headless worker and local lifecycle · merged PR #30 | EXEC-1; six native-only skips audited and rerun **6/0/0** | Explicit environment, handshake, state logs, cancel/deadline/cleanup and bounded transport; 32 regressions. Full native **493/0/0**, NumPy **487/0/6** (all six pass native), pytest **493 passed**; installed-venv check passes. See `docs/agent/EXEC-2.md`. |
+| AGENT-1 · P3 · Portable workflow skill · implemented and verified, PR #31 | EXEC-2 (merged PR #30) | Canonical Skill and Claude link; paired evaluations **12/12** vs baseline **7/12** (strict wording caveat in log); full verifier **487/0/6**, all six native PASS records checked. OpenCode discovery/load measured; Claude/Codex live untested. See `docs/agent/AGENT-1.md`. |
 | UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
 | UI-2 · P3 · Rust TUI / interactive workflow | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
 | AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |

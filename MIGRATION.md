@@ -38,7 +38,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 [ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) establishes
 Rust CLI/TUI frontends over shared Python application execution, with skills
 and an optional MCP adapter using that same contract. **Status: accepted
-2026-10-30; EXEC-1 implemented and verified in PR #29, awaiting merge.** Python scientific APIs, ecosystem
+2026-10-30; architecture and EXEC-1/2 merged through PRs #28–30.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 
@@ -70,8 +70,11 @@ legacy `show thermo` and an additive `lkpr exec` JSON boundary. See
 lifecycle remain separate implementation items; acceptance is not their delivery.
 EXEC-2 implements verified process-owned local supervision in a separate branch:
 explicit Python environment, handshake, state logs, deadline/cancel and bounded
-cleanup with visible incomplete-cleanup diagnostics. PR #30 is awaiting merge.
+cleanup with visible incomplete-cleanup diagnostics. PR #30 is merged.
 Its lifecycle contract and measured evidence are in `docs/agent/EXEC-2.md`.
+AGENT-1 adds the portable `.agents/skills/lammpkeeper` workflow and a Claude
+project symlink. Host discovery evidence, paired evaluations and limitations
+are recorded in `docs/agent/AGENT-1.md`; UI-1 is the next client slice.
 
 ## Audit correction note (2026-10-27)
 

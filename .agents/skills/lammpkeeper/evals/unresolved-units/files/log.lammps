@@ -1,0 +1,9 @@
+run 2
+Step Temp Press
+0 2 10
+1 4 20
+2 6 30
+Loop time of 1
+minimize 0 0 1 1
+Step Temp
+0 1000

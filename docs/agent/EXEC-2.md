@@ -1,7 +1,7 @@
 # EXEC-2 — local process-owned execution lifecycle
 
 Published implementation: `417672f`, [PR #30](https://github.com/dhwan0112/lammpkeeper/pull/30),
-stacked on EXEC-1 PR #29 and awaiting merge.
+originally stacked on EXEC-1 PR #29; merged on 2026-10-30 as `07983bd`.
 
 ## Status and scope
 
