@@ -10,6 +10,49 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
+## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `proposed; awaiting ADR acceptance`
+
+Maintainer requested an ADR and roadmap revision on 2026-10-30. Proposal:
+`docs/adr/0004-rust-frontends-python-execution-agent-access.md`; staged roadmap:
+`MIGRATION.md` → "Proposed interface roadmap". This item delivers planning only.
+Existing accepted ADRs and scientific-integrity priorities remain in force.
+Published proposal: [PR #28](https://github.com/dhwan0112/lammpkeeper/pull/28),
+initial documentation commit `cc6a199`; awaiting maintainer review/acceptance.
+
+**Done when (documentation):** responsibilities, alternatives, Python/environment
+compatibility, versioned execution and artifact contracts, agent access, rollout
+dependencies and implementation acceptance tests are documented and reviewed.
+ADR acceptance and runtime delivery have separate status; no prototype is claimed.
+
+**Documentation review/verification (2026-10-30):** independent source review
+approved the proposal after moving lifecycle-schema decisions before EXEC-2.
+Local ADR links, shared roadmap IDs and proposed status were checked;
+`git diff --check` passes. Full forced-NumPy verifier on main `84ee8d1`:
+**438 passed, 0 failed, 6 native-only skips** (dump reader, boundary metadata,
+slab parity, two species-metadata checks, triclinic IO); post/plots and prep
+artifact/script checks pass. MDAnalysis is unavailable; native/HPC execution
+was not verified. Evidence:
+`/tmp/opencode/lkpr-arch1-docs/20261030T163851-84ee8d1-full`.
+Only this roadmap, MIGRATION and the proposed ADR changed. Architecture options
+and risks were reviewed directly; `/architect` and `/interrogate` playbooks were
+not available in this harness and are not claimed as executed.
+
+### Proposed implementation track — blocked on ADR-0004 acceptance
+
+| Item | Depends on | Done when |
+| --- | --- | --- |
+| EXEC-1 · P3 · Shared Python application contract | ADR-0004 acceptance; relevant REV-* fixes | Choose one validated operation; approve exact module paths and versioned schemas; direct Python, legacy CLI and structured execution match values/units/errors with Fe-O and synthetic generic checks; capability/provenance and strict JSON contracts tested |
+| EXEC-2 · P3 · Headless worker and local lifecycle | EXEC-1 | Selected Python environment and compatibility handshake work; progress, cancel, timeout/crash and artifact lifetime are explicit and tested; no stale success or mandatory daemon/Rust dependency |
+| AGENT-1 · P3 · Portable workflow skill | EXEC-2 | Shared scientific workflow uses structured commands and verifies results; host setup and tested/untested Claude, Codex, OpenCode integrations recorded separately |
+| UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
+| UI-2 · P3 · Rust TUI / interactive workflow | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
+| AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |
+
+These are separate future branches/PRs, not an authorization for package moves,
+legacy removals or HPC execution. Fix relevant integrity defects before exposing
+an operation. Coordinate metadata/domain work with GEN-2/GEN-4; GEN-9 is not a
+prerequisite. AGENT-1 and UI-1 are independent after EXEC-2; MCP does not require TUI.
+
 ## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, merged 2026-10-27)`
 
 The maintainer requested all reported findings be fixed on 2026-10-27. This is
@@ -192,6 +235,11 @@ Actual HPC/site work remains deferred as above.
 **Phase 1, trustworthy tests and correct physics:** TEST-1 → OPS-1 → HPC-1 → PARSE-1 → **MSD (PHYS-2 + PHYS-1, one PR)** → PHYS-4 → PHYS-3 → PHYS-5 → TEST-3 → DOC-1 → DOC-2
 
 **Phase 2, generalization** (ADR-0001 accepted 2026-10-24): GEN-1 → GEN-3 → GEN-2 → GEN-4 → GEN-5 → GEN-6 → GEN-7 → GEN-8 → GEN-9
+
+**Proposed interface track (ARCH-1; ADR-0004 awaiting acceptance):** EXEC-1 →
+EXEC-2 → AGENT-1 / UI-1 → UI-2 / AGENT-2, with the exact dependencies in the
+table above. Planning does not lift the scientific-integrity priority or GEN-2
+pause; expose only operations whose relevant correctness findings are resolved.
 
 REL-0 is a hard prerequisite for every item that changes physics outputs (MSD,
 PHYS-4, PHYS-3/5). TEST-1, OPS-1, HPC-1, PARSE-1 and DOC-2 do not change physics

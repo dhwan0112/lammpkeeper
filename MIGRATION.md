@@ -33,6 +33,41 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - Real LAMMPS/HPC execution is deferred. The old run report below is historical,
   not a claim that the current code or this environment was run on LAMMPS.
 
+## Proposed interface roadmap (ARCH-1, 2026-10-30)
+
+[ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) proposes
+Rust CLI/TUI frontends over shared Python application execution, with skills
+and an optional MCP adapter using that same contract. **Status: proposed;
+implementation awaits maintainer acceptance.** Python scientific APIs, ecosystem
+environments and Python-only installation remain first-class. The accepted
+ADR-0001 scientific architecture and GEN sequence remain in effect.
+
+| Stage / backlog | Deliverable | Completion gate |
+| --- | --- | --- |
+| ARCH-1 | ADR and roadmap proposal | Responsibilities, alternatives, compatibility and dependencies documented; acceptance recorded separately |
+| EXEC-1 | One callable Python operation and versioned structured request/result contract | Direct Python, existing CLI and structured path agree on scientific results/errors; schemas, module paths, capabilities and provenance specified |
+| EXEC-2 | Headless process execution and local job lifecycle | Explicit interpreter selection; protocol mismatch, progress, cancellation, crash and incomplete artifacts tested; Python-only use retained |
+| AGENT-1 (after EXEC-2) | Shared workflow skill plus host setup notes | Capability discovery, run and artifact verification demonstrated; Claude/Codex/OpenCode support reported per exercised host |
+| UI-1 (after EXEC-2) | Additive Rust CLI client | Uses the same backend and schemas; environment diagnostics and parity pass; distinct executable avoids replacing Python `lkpr` |
+| UI-2 (after UI-1) | Rust TUI/interactive local workflow | Load/configure/run/status/results/cancel uses shared operations; input errors and interrupted tasks cannot show stale success |
+| AGENT-2 (after AGENT-1 and EXEC-2) | Optional local-stdio MCP adapter | Same operation/error/artifact contract, status/cancel semantics and explicit capabilities; no UI dependency or duplicate scientific logic |
+
+AGENT-1 and UI-1 can proceed independently after the execution foundation;
+MCP need not wait for TUI completion. Select one already validated analysis for
+the first vertical slice, then expand operation by operation. Relevant open
+REV-* integrity defects must be resolved before exposing affected operations.
+GEN-2 metadata work and GEN-4 domain separation remain coordinated dependencies
+where operations need them; wholesale GEN-9 package moves are not a prerequisite.
+
+JSON carries control data and summaries, not trajectories. Array/file artifacts
+retain explicit units, format and lifetime. Python owns scientific validation;
+Rust and agent adapters handle presentation/transport. Initial subprocess use
+preserves user-selected conda/venv environments. Embedding, persistent services,
+remote execution and replacing the default executable require later decisions.
+No Rust frontend, structured service or MCP implementation exists by virtue of
+this roadmap. Runtime implementation remains tracked separately from this
+documentation-only planning item.
+
 ## Audit correction note (2026-10-27)
 
 The historical validation statements below describe the limited checks performed
