@@ -1,5 +1,8 @@
 # REV-ANALYSIS-2 — explicit charge-region integrity
 
+Status: implemented and verified in `8325eac`; published as
+[PR #27](https://github.com/dhwan0112/lammpkeeper/pull/27), awaiting merge approval.
+
 ## Scope
 
 Started from `84ee8d1` on `fix/rev-analysis-2-missing-z`. REV-ANALYSIS-1's
