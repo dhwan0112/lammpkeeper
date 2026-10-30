@@ -40,16 +40,20 @@ not available in this harness and are not claimed as executed.
 
 ### Implementation track — ADR-0004 accepted; staged delivery
 
+Detailed execution steps, requirements and completion gates:
+[`INTERFACE-ROADMAP.md`](INTERFACE-ROADMAP.md). ARCH-1, EXEC-1/2 and AGENT-1
+are merged; UI-1 is next, UI-2 and AGENT-2 remain unimplemented.
+
 | Item | Depends on | Done when |
 | --- | --- | --- |
 | EXEC-1 · P3 · Shared Python application contract · merged PR #29 | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
 | EXEC-2 · P3 · Headless worker and local lifecycle · merged PR #30 | EXEC-1; six native-only skips audited and rerun **6/0/0** | Explicit environment, handshake, state logs, cancel/deadline/cleanup and bounded transport; 32 regressions. Full native **493/0/0**, NumPy **487/0/6** (all six pass native), pytest **493 passed**; installed-venv check passes. See `docs/agent/EXEC-2.md`. |
-| AGENT-1 · P3 · Portable workflow skill · implemented and verified, PR #31 | EXEC-2 (merged PR #30) | Canonical Skill and Claude link; paired evaluations **12/12** vs baseline **7/12** (strict wording caveat in log); full verifier **487/0/6**, all six native PASS records checked. OpenCode discovery/load measured; Claude/Codex live untested. See `docs/agent/AGENT-1.md`. |
+| AGENT-1 · P3 · Portable workflow skill · merged PR #31 | EXEC-2 (merged PR #30) | Canonical Skill and Claude link; paired evaluations **12/12** vs baseline **7/12** (strict wording caveat in log); full verifier **487/0/6**, all six native PASS records checked. OpenCode discovery/load measured; Claude/Codex live untested. See `docs/agent/AGENT-1.md`. |
 | UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
 | UI-2 · P3 · Rust TUI / interactive workflow | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
 | AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |
 
-These are separate future branches/PRs, not an authorization for package moves,
+Remaining items use separate branches/PRs, not an authorization for package moves,
 legacy removals or HPC execution. Fix relevant integrity defects before exposing
 an operation. Coordinate metadata/domain work with GEN-2/GEN-4; GEN-9 is not a
 prerequisite. AGENT-1 and UI-1 are independent after EXEC-2; MCP does not require TUI.

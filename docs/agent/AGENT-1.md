@@ -1,11 +1,13 @@
 # AGENT-1 — portable structured-analysis Skill
 
 Published implementation: `14ae464`, [PR #31](https://github.com/dhwan0112/lammpkeeper/pull/31).
+Merged into main on 2026-10-30 as `f473ff8`; merge contents match the verified branch.
 
 ## Foundation and scope
 
 User-authorized merges completed in order: PR #28 (`d447a30`), #29 (`ed41c1f`),
-#30 (`07983bd`). Merged main is byte-identical to verified EXEC-2 `75ab592`.
+#30 (`07983bd`). That merged EXEC-2 baseline was byte-identical to verified
+EXEC-2 `75ab592`; this comparison predates the additive AGENT-1 merge.
 Implementation commits use Kim Donghwan <e1075536@u.nus.edu>; GitHub merge
 commits display Donghwan Kim with the same email. PRs #26/#27 remain separate.
 

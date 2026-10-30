@@ -33,12 +33,16 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - Real LAMMPS/HPC execution is deferred. The old run report below is historical,
   not a claim that the current code or this environment was run on LAMMPS.
 
-## Interface roadmap (ARCH-1 / EXEC-1, 2026-10-30)
+## Interface roadmap (through AGENT-1, 2026-10-30)
+
+**Detailed stage-by-stage plan:** [INTERFACE-ROADMAP.md](docs/agent/INTERFACE-ROADMAP.md)
+records current status, requirements, implementation steps, deliverables, acceptance
+checks, remaining host validation and the connection to the GEN/scientific backlog.
 
 [ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) establishes
 Rust CLI/TUI frontends over shared Python application execution, with skills
 and an optional MCP adapter using that same contract. **Status: accepted
-2026-10-30; architecture and EXEC-1/2 merged through PRs #28–30.** Python scientific APIs, ecosystem
+2026-10-30; architecture, EXEC-1/2 and AGENT-1 merged through PRs #28–31.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 
@@ -46,8 +50,8 @@ ADR-0001 scientific architecture and GEN sequence remain in effect.
 | --- | --- | --- |
 | ARCH-1 | Accepted ADR and roadmap | Direction approved by maintainer's request to continue the five-stage track on 2026-10-30 |
 | EXEC-1 | One callable Python operation and versioned structured request/result contract | Direct Python, existing CLI and structured path agree on scientific results/errors; schemas, module paths, capabilities and provenance specified |
-| EXEC-2 | Headless process execution and local job lifecycle | Explicit interpreter selection; protocol mismatch, progress, cancellation, crash and incomplete artifacts tested; Python-only use retained |
-| AGENT-1 (after EXEC-2) | Shared workflow skill plus host setup notes | Capability discovery, run and artifact verification demonstrated; Claude/Codex/OpenCode support reported per exercised host |
+| EXEC-2 | Headless process execution and local job lifecycle | Explicit interpreter, mismatch checks, state events, cancel/deadline/crash and cleanup tested; current summary creates no artifacts, so partial-file finalization awaits producing operations |
+| AGENT-1 (after EXEC-2) | Shared workflow skill plus host setup notes | Capability discovery, run, result/cleanup and empty-artifact contract checked; actual file-producing operations need later verification; host support reported per exercised host |
 | UI-1 (after EXEC-2) | Additive Rust CLI client | Uses the same backend and schemas; environment diagnostics and parity pass; distinct executable avoids replacing Python `lkpr` |
 | UI-2 (after UI-1) | Rust TUI/interactive local workflow | Load/configure/run/status/results/cancel uses shared operations; input errors and interrupted tasks cannot show stale success |
 | AGENT-2 (after AGENT-1 and EXEC-2) | Optional local-stdio MCP adapter | Same operation/error/artifact contract, status/cancel semantics and explicit capabilities; no UI dependency or duplicate scientific logic |
@@ -67,13 +71,13 @@ remote execution and replacing the default executable require later decisions.
 EXEC-1 starts with `thermo.summary`: shared statistics behind Python API,
 legacy `show thermo` and an additive `lkpr exec` JSON boundary. See
 `docs/agent/EXEC-1.md` for scope and measured status. Rust, skills, MCP and job
-lifecycle remain separate implementation items; acceptance is not their delivery.
-EXEC-2 implements verified process-owned local supervision in a separate branch:
+lifecycle have distinct delivery records; approval alone is not implementation.
+EXEC-2 implements verified process-owned local supervision:
 explicit Python environment, handshake, state logs, deadline/cancel and bounded
 cleanup with visible incomplete-cleanup diagnostics. PR #30 is merged.
 Its lifecycle contract and measured evidence are in `docs/agent/EXEC-2.md`.
 AGENT-1 adds the portable `.agents/skills/lammpkeeper` workflow and a Claude
-project symlink. Host discovery evidence, paired evaluations and limitations
+project symlink (merged PR #31). Host discovery evidence, paired evaluations and limitations
 are recorded in `docs/agent/AGENT-1.md`; UI-1 is the next client slice.
 
 ## Audit correction note (2026-10-27)
