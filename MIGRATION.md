@@ -70,7 +70,7 @@ legacy `show thermo` and an additive `lkpr exec` JSON boundary. See
 lifecycle remain separate implementation items; acceptance is not their delivery.
 EXEC-2 implements verified process-owned local supervision in a separate branch:
 explicit Python environment, handshake, state logs, deadline/cancel and bounded
-cleanup with visible incomplete-cleanup diagnostics. PR review is pending.
+cleanup with visible incomplete-cleanup diagnostics. PR #30 is awaiting merge.
 Its lifecycle contract and measured evidence are in `docs/agent/EXEC-2.md`.
 
 ## Audit correction note (2026-10-27)

@@ -1,5 +1,8 @@
 # EXEC-2 — local process-owned execution lifecycle
 
+Published implementation: `417672f`, [PR #30](https://github.com/dhwan0112/lammpkeeper/pull/30),
+stacked on EXEC-1 PR #29 and awaiting merge.
+
 ## Status and scope
 
 Implemented and verified on `gen/exec-2-local-job-lifecycle`, based on EXEC-1 `609185e`
