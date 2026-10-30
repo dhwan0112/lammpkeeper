@@ -274,4 +274,12 @@ LAMMPS 확인과 GEN-8의 실제 참조계 확보는 사용자 환경/선택에 
 GitHub 상태를 조회해 PR #28–31 머지 및 #26/#27 open을 대조했다. 기존 안내의
 TEST-1 skip 집계 미해결 문구와 교정 전 MSD golden 예시를 완료 기록에 맞게 수정하고,
 사용자 명의 커밋 확인을 AGENTS.md 상시 규칙에 추가했다. ADR·런타임·과학 계산·
-fixtures는 변경하지 않았다. 문서 리뷰와 저장소 검증 결과를 공개 전에 기록한다.
+fixtures는 변경하지 않았다.
+
+**검증 결과(실측):** 독립 문서 리뷰의 두 보완점(Python 런타임 검증 한계,
+EXEC-2 baseline 비교 시점)을 반영했다. 링크·단계 ID·요구사항 및 diff 검사 통과.
+Full verifier는 **487 passed, 0 failed, 6 skipped**이며 post/plot·prep 검증도
+통과했다. 증거: `/tmp/opencode/lkpr-roadmap-detail-full/20261030T202346-f473ff8-full`.
+6개는 native 전용이며 동일한 runtime/tests/native 소스의 기존 native 검증에서
+각 PASS를 재확인했다. 이번 문서 변경에서 native를 재빌드한 것은 아니다.
+MDAnalysis·Python 3.9 runtime·실제 HPC는 여전히 미검증이다.
