@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Explicit charge-region integrity (REV-ANALYSIS-2)
+
+- Charge evolution and oxidation fraction reject an explicit `z_range` without
+  a `z` column before iterating frames, checking geometry or returning for
+  absent charge data. A requested region no longer silently becomes global.
+- Unrestricted scalar calculations still need neither z nor a box; valid
+  inclusive regions, type unions, threshold comparisons and empty selections
+  retain their previous results.
+
 ### Job result copyback safety (REV-PREP-1)
 
 - Preflight every matching result path before any `cp -a` copyback; refuse

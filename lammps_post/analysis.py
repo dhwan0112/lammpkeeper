@@ -179,7 +179,8 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     state or a phase classifier; partial charges depend on the force field.
     Selection is repeated per frame, so type changes and slab entry/exit alter
     the population. Empty selections produce zero statistics and fractions.
-    A requested z restriction is applied only when a z column is available.
+    A requested z restriction requires a z column; otherwise ValueError is raised
+    before consuming frames, even when charge data are absent.
     Slab endpoints are inclusive; charges equal to q_thr are not oxidized.
     Without a z restriction neither a Box nor orthogonality is required.
 
@@ -202,6 +203,8 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
         Returns None if no charge column is found.
     """
     zi = col_idx.get('z')    # z-coordinate column index
+    if z_range is not None and zi is None:
+        raise ValueError("Charge evolution region z_range requires a 'z' column")
     qi = col_idx.get('q')    # Column presence, not force-field identification
     ti = col_idx['type']     # Atom type column index
     if qi is None:
@@ -589,8 +592,9 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     It is a force-field-dependent oxidation proxy, not proof of a formal charge,
     chemical bond or oxide phase, and is not a time derivative. Selection and
     its denominator are recomputed per frame; empty selections return zero.
-    As in charge evolution, a requested z restriction is applied only if a z
-    column exists. Slab endpoints are inclusive; the charge threshold is strict.
+    As in charge evolution, a requested z restriction requires a z column;
+    otherwise ValueError is raised before consuming frames, even without charge
+    data. Slab endpoints are inclusive; the charge threshold is strict.
     Without that restriction this is a pure scalar-charge population fraction,
     independent of box shape; only the z-restricted variant requires a slab.
 
@@ -608,8 +612,10 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
             'or'   : np.array — Oxidation rate (0 to 1) per frame
         Returns None if no charge column is available.
     """
-    ti = col_idx['type']
     zi = col_idx.get('z')
+    if z_range is not None and zi is None:
+        raise ValueError("Oxidation rate region z_range requires a 'z' column")
+    ti = col_idx['type']
     qi = col_idx.get('q')
     if qi is None:
         if z_range is not None:
