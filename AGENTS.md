@@ -69,6 +69,13 @@ Rules while getting there:
 
 ## 5. Code conventions
 
+- **Logging and comments (maintainer, 2026-10-30):** preserve the existing
+  English maintenance-comment coverage. Every new or materially changed class,
+  function and test needs an intent/contract docstring; explain non-obvious
+  scientific assumptions, state transitions and failure/cleanup branches inline.
+  Keep development logs and backlog status current with measured verification,
+  named skips, review decisions and evidence. Execution/lifecycle work must retain
+  bounded diagnostic and state-event logs; machine stdout stays protocol-only.
 - Indentation: **4 spaces everywhere** (PEP 8). This is what the code uses. The
   3-space note in `MIGRATION.md` is stale (DOC-2).
 - Generic species selections use `lammpkeeper.core.SpeciesMap` (ADR-0002).

@@ -12,6 +12,17 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Process-owned local execution (EXEC-2)
+
+- Add a local Python supervisor and additive `lkpr run` entry point for explicit
+  environment selection, capability handshake, state events and bounded
+  timeout/cancellation cleanup. Reuse the existing structured scientific backend.
+- Preserve interpreter symlinks and reject incompatible backends without silently
+  switching environments. Local status belongs to the owning Python process;
+  this is not a persistent daemon or remote scheduler.
+- Record the native-only skip audit and the maintainer's standing requirement
+  for English intent comments, execution diagnostics and development logs.
+
 ### Structured thermo-summary execution (EXEC-1)
 
 - Add a shared Python application operation for existing thermo-summary

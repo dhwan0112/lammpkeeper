@@ -186,6 +186,17 @@ This realizes the maintainer-approved track through an additive application
 boundary rather than a package reorganization. The concrete bounded contract
 and validation evidence are recorded in `docs/agent/EXEC-1.md`.
 
+### EXEC-2 lifecycle selection (2026-10-30)
+
+Continue the accepted track with additive `lammpkeeper/jobs.py` and `lkpr run`.
+The local Python caller owns job IDs, snapshots, cancellation and bounded
+process cleanup; there is no durable job service. Explicit interpreter selection
+preserves venv symlinks, and capability plus execution provenance checks gate
+publication. State transitions are logged; no scientific percentage progress
+is invented. The pre-implementation state/timeout/race/transport decisions and
+verification criteria are in `docs/agent/EXEC-2.md`. The POSIX-only initial scope
+does not imply remote/HPC or non-POSIX process-tree cleanup support.
+
 ### Whole-track acceptance checks
 
 - One reference operation agrees across direct Python, legacy CLI and structured
