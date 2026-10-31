@@ -53,3 +53,14 @@ results are unchanged. Shared helper: `_require_finite_z` (analysis.py).
   test_regression_numeric): **104 passed, 0 failed, 0 skipped**.
 - The literal-`nan` dump test ran with the installed native extension present and
   with `reader._native = None` (NumPy path).
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `0f93f15` (PR #37). Registered
+  `test_nonfinite_z` in `tests/run.py`; BACKLOG and CHANGELOG updated.
+- Failing-first reproduced by the parent: the new module against main's
+  `analysis.py` gave **3 passed, 11 failed**; with the fix **14 passed**.
+- CLI path checked by the parent (`/tmp/opencode/ra5-shell-probe.sh`): a dump
+  with one selected oxygen at `z = nan` makes `python -m lammps_post --dump ...
+  --analyze oar|penetration|density` exit **1** with the nonfinite-z diagnostic.
+- Full verifier results follow.

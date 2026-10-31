@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Nonfinite selected coordinates (REV-ANALYSIS-5)
+
+- OAR, penetration summary/trend, density profiles, charge-z profiles and
+  z-restricted charge evolution/OR raise `ValueError` naming the analysis,
+  timestep and count when a selected atom has NaN/Inf z. Previously such atoms
+  were silently counted as unabsorbed, outside the range or dropped. Unrelated
+  species, empty selections and finite results are unchanged.
+
 ### Density option validation (REV-ANALYSIS-3)
 
 - `compute_density_profile` raises `ValueError` for equal, reversed or nonfinite
