@@ -37,3 +37,14 @@ results (OAR `[0,0]` or `[1,1]`, MSD time `[0,-0.1]` or `[0,nan]`) with
   test_triclinic_session, test_charge_integrity_session, test_lkpr_cli,
   test_msd: 104 passed, 0 failed, 0 skipped.
 - Full verifier not run by the implementation worker.
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `05a8c9b` (PR #38). Registered
+  `test_session_overrides` in `tests/run.py`; BACKLOG and CHANGELOG updated.
+- Failing-first reproduced by the parent: the new module against main's
+  `shell.py` gave **1 passed, 5 failed**; with the fix **6 passed**.
+- Parent reviewed the diff: validation happens before assignment in `set
+  surface_z`, `set dt`, `set mass` and the interactive surface prompt, whose
+  existing `except ValueError` keeps a rejected prompt value from publishing.
+- Full verifier results follow.
