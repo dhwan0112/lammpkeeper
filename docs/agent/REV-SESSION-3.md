@@ -1,6 +1,6 @@
 # REV-SESSION-3 — stale cached results after the dump changed
 
-Status: implemented; parent verification pending.
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Problem
 Cached families were current on key presence (`_ensure_cache`, direct cache-hit
@@ -43,4 +43,9 @@ modules (10, `LKPR_SLOW=1`): 102 passed, 0 failed, 0 skipped.
   including results derived only from a loaded log (for example performance or
   thermo summaries). That is conservative: those results are recomputed on
   demand from the still-loaded log; nothing stale is published.
-- Full verifier results follow (started after this commit).
+- Full verifier on `4642821`: native **582 passed, 0 failed, 0 skipped**;
+  forced NumPy **573 passed, 0 failed, 9 skipped** (six known native-only checks
+  plus the three REV-IO-4 native-comparison tests). Post analyses/real plots and
+  prep passed. Evidence: `/tmp/opencode/rs3-native/20261101T021835-4642821-full`,
+  `/tmp/opencode/rs3-numpy/20261101T021837-4642821-full`. Native extension not
+  rebuilt; pytest, MDAnalysis and HPC not run.
