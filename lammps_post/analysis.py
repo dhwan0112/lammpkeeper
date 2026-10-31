@@ -872,6 +872,34 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
     }
 
 
+def _density_options(z_range, n_bins):
+    """Validate density-profile bin count and optional explicit z range.
+
+    Return ``(n_bins, (zlo, zhi) or None)`` as plain Python numbers. The bin
+    count must be a real integer type >= 1 (bool, float and string are rejected
+    even when integral, so a count is never guessed). An explicit range needs
+    two finite real endpoints with zlo < zhi; equal or reversed endpoints give
+    zero/negative bin widths and NaN/inf densities, so they raise instead.
+    """
+    if (isinstance(n_bins, (bool, np.bool_))
+            or not isinstance(n_bins, (int, np.integer)) or n_bins < 1):
+        raise ValueError(f'n_bins must be a positive integer, got {n_bins!r}')
+    if z_range is None:
+        return int(n_bins), None
+    try:
+        ends = tuple(z_range)
+    except TypeError:
+        ends = ()
+    if (len(ends) != 2 or any(isinstance(e, (bool, np.bool_, str))
+                              or not isinstance(e, (int, float, np.integer, np.floating))
+                              for e in ends)):
+        raise ValueError(f'z_range must be two finite (zlo, zhi) numbers, got {z_range!r}')
+    zlo, zhi = float(ends[0]), float(ends[1])
+    if not (np.isfinite(zlo) and np.isfinite(zhi) and zlo < zhi):
+        raise ValueError(f'z_range must be finite with zlo < zhi, got {z_range!r}')
+    return int(n_bins), (zlo, zhi)
+
+
 def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
                             species_type=None, species_name='all'):
     """
@@ -896,7 +924,10 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     outside the range are excluded; the last histogram bin includes its upper
     endpoint, unlike analyze_charge_z. No wrapping, comoving rescaling or boundary
     correction is performed. Only orthogonal boxes are accepted. Callers must
-    supply a usable range for an empty trajectory and a positive bin count.
+    supply a usable range for an empty trajectory. Invalid options raise
+    ValueError before any frame is read: n_bins must be an integer >= 1, an
+    explicit z_range two finite numbers with zlo < zhi, and an automatic range
+    must also have positive, finite thickness.
 
     Args:
         frames:       list[dict] — Trajectory frames
@@ -916,7 +947,14 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     zi = col_idx['z']
     ti = col_idx['type']
 
-    if z_range is None and frames:
+    # Validate before touching frames so a bad option never starts a
+    # (possibly lazy, expensive) trajectory pass or reaches normalization.
+    n_bins, z_range = _density_options(z_range, n_bins)
+    if z_range is None and not frames:
+        raise ValueError('z_range is required for an empty trajectory '
+                         '(no box bounds to derive an automatic range)')
+
+    if z_range is None:
         for fr in frames:
             _orthogonal_box(fr, 'Density profile')
         boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
@@ -925,7 +963,12 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
         else:
             zlo = min(fr['box'][2][0] for fr in frames)
             zhi = max(fr['box'][2][1] for fr in frames)
-        z_range = (zlo, zhi)
+        # A zero-thickness union of box bounds is as unusable as an explicit
+        # equal-endpoint range; reject it rather than emit NaN/inf densities.
+        z_range = _density_options((zlo, zhi), n_bins)[1] if zlo < zhi else None
+        if z_range is None:
+            raise ValueError(f'automatic z_range is degenerate or nonfinite '
+                             f'(box z bounds {zlo!r}..{zhi!r}); pass an explicit z_range')
 
     dz = (z_range[1] - z_range[0]) / n_bins
     z_bins = np.linspace(z_range[0] + dz / 2, z_range[1] - dz / 2, n_bins)
