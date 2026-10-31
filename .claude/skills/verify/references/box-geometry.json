@@ -1,0 +1,49 @@
+{
+  "id": "box-geometry",
+  "description": "lammpkeeper.io.Box.from_dump_bounds inverts LAMMPS enclosing dump bounds: enclosing x bounds (0, 12) with xy tilt 2 describe a physical 10 x 10 x 30 A cell (volume 3000, non-orthogonal); enclosing bounds (0, 10) with the same tilt describe an 8 x 10 x 30 A cell (volume 2400). An untilted (0,10)(0,10)(0,30) box has volume 3000 and is orthogonal.",
+  "source": "LAMMPS dump convention (Howto triclinic): xlo_bound = xlo + min(0, xy, xz, xy+xz), xhi_bound = xhi + max(0, xy, xz, xy+xz); volume = lx*ly*lz is invariant under shear. Confirmed against the from_dump_bounds docstring (\"Invert LAMMPS enclosing bounds\") on 2026-10-31. Volume tolerance rel 1e-12 (relaxed from 1e-14 on 2026-10-31 for portability; exact products today).",
+  "status": "confirmed (mathematical identity)",
+  "kind": {
+    "orthogonal_volume": "analytic",
+    "orthogonal_is_orthogonal": "analytic",
+    "tilted_volume": "analytic",
+    "tilted_is_orthogonal": "analytic",
+    "tilted_lengths": "analytic",
+    "enclosing_bounds_shrink_lengths": "analytic",
+    "enclosing_bounds_shrink_volume": "analytic"
+  },
+  "reference": {
+    "orthogonal_volume": 3000.0,
+    "orthogonal_is_orthogonal": true,
+    "tilted_volume": 3000.0,
+    "tilted_is_orthogonal": false,
+    "tilted_lengths": [
+      10.0,
+      10.0,
+      30.0
+    ],
+    "enclosing_bounds_shrink_lengths": [
+      8.0,
+      10.0,
+      30.0
+    ],
+    "enclosing_bounds_shrink_volume": 2400.0
+  },
+  "tolerance": {
+    "orthogonal_volume": {
+      "rel": 1e-12
+    },
+    "tilted_volume": {
+      "rel": 1e-12
+    },
+    "tilted_lengths": {
+      "abs": 1e-12
+    },
+    "enclosing_bounds_shrink_lengths": {
+      "abs": 1e-12
+    },
+    "enclosing_bounds_shrink_volume": {
+      "rel": 1e-12
+    }
+  }
+}

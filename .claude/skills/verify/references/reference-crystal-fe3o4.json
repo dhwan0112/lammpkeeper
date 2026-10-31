@@ -1,0 +1,78 @@
+{
+  "id": "reference-crystal-fe3o4",
+  "description": "Ideal magnetite from lammps_post.references: nearest Fe-O distances by direct image enumeration and the first two non-empty bins of compute_reference_rdf, against analytic Fd-3m (origin 2) bond lengths.",
+  "source": "Analytic: a = 8.396 A and u = 0.2549 as declared in lammps_post/references.py (CRYSTAL_DB[\"Fe3O4\"]); tetrahedral Fe-O = a*sqrt(3)*(u-1/8), octahedral Fe-O = a*sqrt((1/2-u)^2 + 2(u-1/4)^2); 8 tetrahedral and 16 octahedral Fe per 56-atom cell. Same oracle as tests/test_audit_references_plots.py.",
+  "sources": {
+    "lattice_a": "repo constant (lammps_post/references.py: _cubic_cell(8.396)), literature citation pending",
+    "u (oxygen parameter, input to the analytic keys)": "repo constant (lammps_post/references.py: _spinel_u = 0.2549), literature citation pending",
+    "n_fe": "crystallography: Fd-3m conventional cell holds 8 formula units, Fe on 8a (8) + 16d (16)",
+    "n_o": "crystallography: O on 32e (32)",
+    "coordination_histogram": "crystallography: 8a is tetrahedral (4 O), 16d octahedral (6 O); references.py comment records an ASE space-group-227 cross-check (AUDIT-20261027)",
+    "nearest_fe_o_sorted": "analytic from a and u: a*sqrt(3)*(u-1/8) and a*sqrt((1/2-u)^2+2(u-1/4)^2)",
+    "rdf_first_two_nonzero_r": "same two analytic distances, compared with compute_reference_rdf bin centres (tolerance one bin width)"
+  },
+  "status": "confirmed-in-repo (analytic from declared lattice constants)",
+  "kind": {
+    "lattice_a": "external",
+    "n_fe": "external",
+    "n_o": "external",
+    "coordination_histogram": "external",
+    "nearest_fe_o_sorted": "analytic",
+    "rdf_first_two_nonzero_r": "analytic",
+    "rdf_bin_width": "analytic"
+  },
+  "reference": {
+    "lattice_a": 8.396,
+    "n_fe": 24,
+    "n_o": 32,
+    "nearest_fe_o_sorted": [
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      1.8890445855872438,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419,
+      2.058681908002419
+    ],
+    "coordination_histogram": {
+      "4": 8,
+      "6": 16
+    },
+    "rdf_first_two_nonzero_r": [
+      1.8890445855872438,
+      2.058681908002419
+    ],
+    "rdf_bin_width": 0.03
+  },
+  "tolerance": {
+    "nearest_fe_o_sorted": {
+      "abs": 1e-12
+    },
+    "rdf_first_two_nonzero_r": {
+      "abs": 0.03
+    },
+    "rdf_bin_width": {
+      "abs": 1e-12
+    },
+    "lattice_a": {
+      "abs": 1e-12
+    }
+  }
+}

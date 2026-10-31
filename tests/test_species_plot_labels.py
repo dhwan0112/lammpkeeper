@@ -25,6 +25,14 @@ class _Axes:
         """Capture the human-facing title independently of the output filename."""
         self.properties['title'] = title
 
+    def plot(self, *args, label=None, **kwargs):
+        """Record legend labels; line data and styling are not inspected."""
+        self.properties.setdefault('legend', []).append(label)
+
+    def text(self, x, y, text, **kwargs):
+        """Record curve annotations used instead of a legend in stacked views."""
+        self.properties.setdefault('text', []).append(text)
+
     def __getattr__(self, name):
         """Ignore rendering-only methods outside this label-plumbing test boundary."""
         # No rendering is needed to inspect titles and the _save_fig path.
@@ -81,6 +89,28 @@ def test_rdf_display_label_does_not_rename_output_file():
             plotting.plot_rdf(data, 'out')
         assert axes.properties['title'] == f'{display} RDF'
         assert paths == [os.path.join('out', f'rdf_{raw.replace("-", "_")}.png')]
+
+
+def test_rdf_legend_names_the_averaged_frame_window():
+    """The MD curve says which frames were averaged, in both plot layouts."""
+    _util.require_numpy()
+    import numpy as np
+    window = {'first_step': 3400, 'last_step': 3587, 'n_frames': 20, 'selection': 'last'}
+    data = {'r': np.array([1., 2.]), 'g': np.array([0., 1.]), 'n_frames': 20,
+            'label': 'Fe_up-O', 'frame_window': window}
+    expected = 'MD, last 20 frames (steps 3400\u20133587)'
+    with _fake_backend() as (plotting, axes, paths):
+        plotting.plot_rdf(data, 'out')
+    assert axes.properties['legend'] == [expected]
+    ref = {'r': np.array([1., 2.]), 'g': np.array([1., 0.]), 'label': 'Fe3O4'}
+    with _fake_backend() as (plotting, axes, paths):
+        plotting.plot_rdf(data, 'out', ref_rdfs=[ref])
+    assert axes.properties['text'][:2] == ['Fe3O4', expected]
+    # Cached results predating frame_window keep the old legend text.
+    del data['frame_window']
+    with _fake_backend() as (plotting, axes, paths):
+        plotting.plot_rdf(data, 'out')
+    assert axes.properties['legend'] == ['MD (20 frames)']
 
 
 def test_plot_labels_without_metadata_keep_legacy_behavior():

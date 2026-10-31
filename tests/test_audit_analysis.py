@@ -60,6 +60,36 @@ def test_rdf_variable_volume_arithmetic_ensemble_exact():
         assert got['n_frames'] == 2
 
 
+def test_rdf_frame_window_reports_selected_steps():
+    """The result names the averaged frames; g(r) and n_frames are unchanged."""
+    _util.require_numpy()
+    import numpy as np
+    from lammps_post.analysis import compute_rdf, describe_frame_window
+    rows = [[1, 4, 4, 5, 5], [2, 9, 5, 5, 5]]
+    frames = [_frame(rows, step) for step in (100, 200, 300, 400)]
+    # Default is the LAST max_frames frames: steps 300-400, not 100-200.
+    got = compute_rdf(frames, COL, 4, 9, r_max=2, n_bins=2, max_frames=2, z_pbc=True)
+    assert got['frame_window'] == {'first_step': 300, 'last_step': 400,
+                                   'n_frames': 2, 'selection': 'last'}
+    assert got['n_frames'] == 2
+    assert describe_frame_window(got['frame_window']) == 'last 2 frames (steps 300\u2013400)'
+    np.testing.assert_allclose(
+        got['g'], compute_rdf(frames[2:], COL, 4, 9, r_max=2, n_bins=2, z_pbc=True)['g'])
+    # A trajectory shorter than max_frames is used whole and says so.
+    got = compute_rdf(frames, COL, 4, 9, r_max=2, n_bins=2, z_pbc=True)
+    assert got['frame_window'] == {'first_step': 100, 'last_step': 400,
+                                   'n_frames': 4, 'selection': 'all'}
+    assert describe_frame_window(got['frame_window']) == 'all 4 frames (steps 100\u2013400)'
+    # The window counts selected frames; n_frames counts contributing ones.
+    frames[-1] = _frame([[1, 4, 4, 5, 5]], 400)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        got = compute_rdf(frames, COL, 4, 9, r_max=2, n_bins=2, max_frames=2, z_pbc=True)
+    assert got['frame_window']['n_frames'] == 2 and got['n_frames'] == 1
+    assert describe_frame_window({'first_step': None, 'last_step': None,
+                                  'n_frames': 0, 'selection': 'all'}) == '0 frames'
+
+
 def test_rdf_variable_population_arithmetic_ensemble_exact():
     """Doubling target atoms and bin counts together leaves the normalized RDF fixed."""
     _util.require_numpy()

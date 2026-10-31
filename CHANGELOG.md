@@ -12,6 +12,20 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Reference-value verification and RDF frame window (VERIFY-REF-1, RDF-PROV-1)
+
+- Add `.claude/skills/verify`: real-code reference checks with per-key kinds
+  (`analytic`, `external`, `fixture`, `snapshot`) and stated tolerances. Snapshot
+  passes are regression checks against `a974563`, not correctness proofs.
+- `compute_rdf` also returns `frame_window` (first/last step, frame count,
+  `last`/`all` selection); `describe_frame_window()` renders it. g(r) and the
+  default last-20-frame average are unchanged.
+- RDF plot legends name the averaged steps. RDF `export csv`/`latex`/`summary`
+  record the window; CSV/LaTeX gain one leading comment line (`#`/`%`) and are
+  written as UTF-8. CSV readers must skip `#` comments.
+- The slow RDF golden test hashes only numeric fields; its stored fingerprint is
+  unchanged (not a re-baseline).
+
 ### Load-tolerant job timeout test (REV-TEST-2)
 
 - The overall-timeout lifecycle test no longer assumes two Python startups fit in

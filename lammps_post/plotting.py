@@ -813,6 +813,19 @@ def plot_charge_z(data, output_dir, dpi=150, normalize=False, z_focus=None, figs
     _save_fig(fig, os.path.join(output_dir, 'charge_z_distribution.png'), dpi)
 
 
+def _rdf_md_label(data):
+    """Legend text for the MD curve: the averaged frame window when known.
+
+    Results carrying compute_rdf's frame_window read 'MD, last 20 frames
+    (steps 3400–3587)'; older cached results keep 'MD (20 frames)'.
+    """
+    window = data.get('frame_window')
+    if window:
+        from lammps_post.analysis import describe_frame_window
+        return f'MD, {describe_frame_window(window)}'
+    return f'MD ({data["n_frames"]} frames)'
+
+
 def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
     """
     Plot radial distribution function g(r).
@@ -877,7 +890,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
             if is_md:
                 color = CLR['avg']
                 lw = 2.0
-                curve_label = f'MD ({data["n_frames"]} frames)'
+                curve_label = _rdf_md_label(data)
             else:
                 color = ref_colors[i % len(ref_colors)]
                 lw = 1.2
@@ -911,7 +924,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
         fig, ax = plt.subplots(figsize=figsize or (8, 5))
 
         ax.plot(data['r'], data['g'], color=CLR['avg'], lw=2,
-                label=f'MD ({data["n_frames"]} frames)')
+                label=_rdf_md_label(data))
         ax.axhline(1, linestyle='--', color='grey', alpha=0.5, lw=0.8)
 
         if 'Fe' in label and 'O' in label:

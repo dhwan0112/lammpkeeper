@@ -53,6 +53,13 @@ are merged; UI-1 is next, UI-2 and AGENT-2 remain unimplemented.
 | UI-2 · P3 · Rust TUI / interactive workflow | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
 | AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |
 
+### Maintainer tooling and provenance (2026-10-31/11-01)
+
+| Item | Status | Done when |
+| --- | --- | --- |
+| VERIFY-REF-1 · P3 · Reference-value verify skill | done (PR #35; native **522/0/0**, NumPy **516/0/6**) | `.claude/skills/verify` runs six kind-tagged checks (analytic/external/fixture/snapshot) on real code paths with stated tolerances; snapshot PASS is labelled regression-only. See `docs/agent/VERIFY-REFS.md`. |
+| RDF-PROV-1 · P3 · RDF frame-window provenance | done (PR #35, with VERIFY-REF-1) | `compute_rdf` returns `frame_window` and legend/exports show it; g(r) and goldens unchanged (golden test hashes numeric fields only, fingerprint identical). CSV export gains a `#` comment line: compatibility note recorded. See `docs/agent/VERIFY-REFS.md`. |
+
 Remaining items use separate branches/PRs, not an authorization for package moves,
 legacy removals or HPC execution. Fix relevant integrity defects before exposing
 an operation. Coordinate metadata/domain work with GEN-2/GEN-4; GEN-9 is not a

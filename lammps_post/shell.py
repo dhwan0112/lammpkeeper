@@ -50,6 +50,7 @@ from lammpkeeper.common.mapping import (
 
 from lammps_post.analysis import (
     analyze_charge_evolution, analyze_charge_z, compute_rdf, compute_oar,
+    describe_frame_window,
     compute_or, analyze_penetration, analyze_penetration_trend,
     compute_density_profile,
     detect_o2_dissociation, analyze_spin_evolution, analyze_msd,
@@ -3486,10 +3487,26 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if df_data:
             import pandas as pd
             df = pd.DataFrame(df_data)
-            df.to_csv(fname, index=False)
+            with open(fname, 'w', encoding='utf-8', newline='') as f:
+                for line in self._export_header_lines(data):
+                    f.write(f'# {line}\n')
+                df.to_csv(f, index=False)
             progress_msg(f"Exported: {C.ok(fname)}")
         else:
             print(C.warn("  No exportable array data found."))
+
+    @staticmethod
+    def _export_header_lines(data):
+        """Provenance lines written as comments above exported tables.
+
+        Currently only the RDF frame window (which frames were averaged); other
+        results export without a header, exactly as before.
+        """
+        window = data.get('frame_window') if isinstance(data, dict) else None
+        if not window:
+            return []
+        from lammps_post.analysis import describe_frame_window
+        return [f'frame_window: {describe_frame_window(window)}']
 
     def _export_latex(self, what, fname):
         """Write exact-key cached 1-D arrays as a four-decimal pandas LaTeX table.
@@ -3519,7 +3536,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if df_data:
             import pandas as pd
             df = pd.DataFrame(df_data)
-            with open(fname, 'w') as f:
+            with open(fname, 'w', encoding='utf-8') as f:
+                for line in self._export_header_lines(data):
+                    f.write(f'% {line}\n')
                 f.write(df.to_latex(index=False, float_format='%.4f'))
             progress_msg(f"Exported: {C.ok(fname)}")
 
@@ -3564,6 +3583,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                         lines.append(f"  {k}: min={v.min():.4g}, max={v.max():.4g}, mean={v.mean():.4g}")
                     elif isinstance(v, (int, float)):
                         lines.append(f"  {k}: {v}")
+                    elif k == 'frame_window' and isinstance(v, dict):
+                        lines.append(f"  {k}: {describe_frame_window(v)}")
             elif isinstance(data, dict):
                 for k, v in data.items():
                     lines.append(f"  {k}: {v}")

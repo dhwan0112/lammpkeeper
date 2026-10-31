@@ -346,3 +346,36 @@ def test_audit_log_data_provenance_invalidates_performance_mass_and_box():
         assert shell.state.data_box is None
         assert shell.state.data_masses is None
         assert shell.state.total_mass_amu is None
+
+
+def test_audit_rdf_export_headers_record_frame_window():
+    """Summary/CSV/LaTeX exports of an RDF name the averaged frames."""
+    from lammps_post.shell import LammpsPostShell
+    from lammps_post.analysis import compute_rdf
+    frames = [{'timestep': step, 'natoms': 2,
+               'atoms': np.array([[1, 1, 4., 5., 5.], [2, 2, 5., 5., 5.]]),
+               'box': np.array([(0., 10.)] * 3)} for step in (100, 200, 300)]
+    col = {'id': 0, 'type': 1, 'x': 2, 'y': 3, 'z': 4}
+    result = compute_rdf(frames, col, 1, 2, r_max=2, n_bins=2, max_frames=2, z_pbc=True)
+    shell = LammpsPostShell()
+    expected = 'frame_window: last 2 frames (steps 200\u2013300)'
+    assert shell._export_header_lines(result) == [expected]
+    assert shell._export_header_lines({'r': result['r']}) == []
+    with tempfile.TemporaryDirectory(prefix='lk-export-') as temp:
+        shell.state.output_dir = temp
+        shell.state.cache['rdf_Fe-O'] = result
+        summary = Path(temp) / 'summary.txt'
+        _quiet(lambda: shell._export_summary(str(summary)))
+        text = summary.read_text(encoding='utf-8')
+        assert '--- rdf_Fe-O ---' in text and f'  {expected}' in text
+        try:
+            import pandas  # noqa: F401
+        except ImportError:
+            return
+        csv = Path(temp) / 'rdf.csv'
+        _quiet(lambda: shell._export_csv('rdf_Fe-O', str(csv)))
+        lines = csv.read_text(encoding='utf-8').splitlines()
+        assert lines[0] == f'# {expected}' and lines[1] == 'r,g'
+        tex = Path(temp) / 'rdf.tex'
+        _quiet(lambda: shell._export_latex('rdf_Fe-O', str(tex)))
+        assert tex.read_text(encoding='utf-8').splitlines()[0] == f'% {expected}'

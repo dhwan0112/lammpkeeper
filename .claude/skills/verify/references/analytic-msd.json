@@ -1,0 +1,56 @@
+{
+  "id": "analytic-msd",
+  "description": "analyze_msd on hand-built frames with exact answers: uniform shift (1,2,2) gives 9 A^2; static atoms with swapped type labels give 0; one atom crossing the periodic x face (9.5 -> 0.5 in a 10 A box) gives 1. Variable box: x length 10 -> 12 -> 8 with x 9.5 -> 0.5 -> 6.5 gives MSD [0, 9, 1] under the documented current-frame-length MIC (a first-frame-length implementation would give [0, 1, 9]).",
+  "source": "Analytic squared displacements. Time axis: dt_fs = 2 and a 100-step gap is 0.2 ps.",
+  "sources": {
+    "variable_box_msd": "Pins the current-frame-length MIC convention of analyze_msd. Not evidence of physical diffusion accuracy; if unwrapping moves to fractional coordinates or dump unwrapped columns, this expected value must be revised."
+  },
+  "status": "confirmed (mathematical identity)",
+  "kind": {
+    "uniform_shift_msd": "analytic",
+    "uniform_shift_time_ps": "analytic",
+    "type_swap_static_msd": "analytic",
+    "periodic_crossing_msd": "analytic",
+    "variable_box_msd": "analytic"
+  },
+  "reference": {
+    "uniform_shift_msd": [
+      0.0,
+      9.0
+    ],
+    "uniform_shift_time_ps": [
+      0.0,
+      0.2
+    ],
+    "type_swap_static_msd": [
+      0.0,
+      0.0
+    ],
+    "periodic_crossing_msd": [
+      0.0,
+      1.0
+    ],
+    "variable_box_msd": [
+      0.0,
+      9.0,
+      1.0
+    ]
+  },
+  "tolerance": {
+    "uniform_shift_msd": {
+      "abs": 1e-12
+    },
+    "uniform_shift_time_ps": {
+      "abs": 1e-12
+    },
+    "type_swap_static_msd": {
+      "abs": 1e-12
+    },
+    "periodic_crossing_msd": {
+      "abs": 1e-12
+    },
+    "variable_box_msd": {
+      "abs": 1e-12
+    }
+  }
+}
