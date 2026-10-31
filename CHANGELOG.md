@@ -12,6 +12,39 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Portable agent workflow (AGENT-1)
+
+- Add a canonical LammpKeeper Skill for capability discovery, explicit Python
+  selection, structured thermo summaries and retained execution/cleanup evidence.
+- Link Claude project discovery to the same instructions; document Codex and
+  OpenCode setup with measured host checks distinguished from untested support.
+- Add three paired evaluation cases for native units, unresolved units and
+  malformed input; retain graders and development evidence.
+
+### Process-owned local execution (EXEC-2)
+
+- Add a local Python supervisor and additive `lkpr run` entry point for explicit
+  environment selection, capability handshake, state events and bounded
+  timeout/cancellation cleanup. Reuse the existing structured scientific backend.
+- Preserve interpreter symlinks and reject incompatible backends without silently
+  switching environments. Local status belongs to the owning Python process;
+  this is not a persistent daemon or remote scheduler.
+- Record the native-only skip audit and the maintainer's standing requirement
+  for English intent comments, execution diagnostics and development logs.
+
+### Structured thermo-summary execution (EXEC-1)
+
+- Add a shared Python application operation for existing thermo-summary
+  statistics, reused by `show thermo` and an additive `lkpr exec` JSON interface.
+- Provide versioned capability discovery and bounded strict-JSON requests with
+  explicit outcomes, diagnostics, native-unit metadata and source provenance.
+- Reject invalid summary data and ambiguous supported headers rather than
+  publishing nonfinite or overwritten statistics. Parsed Step precision remains
+  bounded; this does not resolve general source-token precision in REV-IO-5.
+- Record ADR-0004 acceptance and the first vertical slice of the Python/Rust/
+  agent roadmap. Job lifecycle, Rust frontends, skills and MCP remain separate
+  implementation stages.
+
 ### Explicit charge-region integrity (REV-ANALYSIS-2)
 
 - Charge evolution and oxidation fraction reject an explicit `z_range` without

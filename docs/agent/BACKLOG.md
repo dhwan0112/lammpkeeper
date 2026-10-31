@@ -10,6 +10,54 @@ Revised the same day after the first Cursor read-only audit (P0): MSD items merg
 forward dependencies removed, DOC-2 added.
 Older open decisions live in `MIGRATION.md` → "Issues found by the end-to-end run".
 
+## ARCH-1 · P3 · Rust/Python/agent interface roadmap — `accepted (2026-10-30); PR #28 merged`
+
+Maintainer requested an ADR and roadmap revision on 2026-10-30. Proposal:
+`docs/adr/0004-rust-frontends-python-execution-agent-access.md`; staged roadmap:
+`MIGRATION.md` → "Interface roadmap". This item delivers planning only.
+Existing accepted ADRs and scientific-integrity priorities remain in force.
+Published proposal: [PR #28](https://github.com/dhwan0112/lammpkeeper/pull/28),
+initial documentation commit `cc6a199`. The maintainer subsequently requested
+continuation of the five-stage track on 2026-10-30, accepting ADR-0004's direction.
+
+**Done when (documentation):** responsibilities, alternatives, Python/environment
+compatibility, versioned execution and artifact contracts, agent access, rollout
+dependencies and implementation acceptance tests are documented and reviewed.
+ADR acceptance and runtime delivery have separate status; no prototype is claimed.
+
+**Original proposal review/verification (2026-10-30, before acceptance):** independent source review
+approved the proposal after moving lifecycle-schema decisions before EXEC-2.
+Local ADR links, shared roadmap IDs and proposed status were checked;
+`git diff --check` passes. Full forced-NumPy verifier on main `84ee8d1`:
+**438 passed, 0 failed, 6 native-only skips** (dump reader, boundary metadata,
+slab parity, two species-metadata checks, triclinic IO); post/plots and prep
+artifact/script checks pass. MDAnalysis is unavailable; native/HPC execution
+was not verified. Evidence:
+`/tmp/opencode/lkpr-arch1-docs/20261030T163851-84ee8d1-full`.
+Only the roadmap, MIGRATION and the proposed ADR changed in ARCH-1. Architecture options
+and risks were reviewed directly; `/architect` and `/interrogate` playbooks were
+not available in this harness and are not claimed as executed.
+
+### Implementation track — ADR-0004 accepted; staged delivery
+
+Detailed execution steps, requirements and completion gates:
+[`INTERFACE-ROADMAP.md`](INTERFACE-ROADMAP.md). ARCH-1, EXEC-1/2 and AGENT-1
+are merged; UI-1 is next, UI-2 and AGENT-2 remain unimplemented.
+
+| Item | Depends on | Done when |
+| --- | --- | --- |
+| EXEC-1 · P3 · Shared Python application contract · merged PR #29 | ADR-0004 accepted; bounded thermo ingestion guards | `thermo.summary` v1 through shared application, legacy shell and strict JSON CLI; 17 new regressions; native **461/0/0**, NumPy **455/0/6**, pytest **461 passed**; installed-wheel/API/CLI parity passes. See `docs/agent/EXEC-1.md`. |
+| EXEC-2 · P3 · Headless worker and local lifecycle · merged PR #30 | EXEC-1; six native-only skips audited and rerun **6/0/0** | Explicit environment, handshake, state logs, cancel/deadline/cleanup and bounded transport; 32 regressions. Full native **493/0/0**, NumPy **487/0/6** (all six pass native), pytest **493 passed**; installed-venv check passes. See `docs/agent/EXEC-2.md`. |
+| AGENT-1 · P3 · Portable workflow skill · merged PR #31 | EXEC-2 (merged PR #30) | Canonical Skill and Claude link; paired evaluations **12/12** vs baseline **7/12** (strict wording caveat in log); full verifier **487/0/6**, all six native PASS records checked. OpenCode discovery/load measured; Claude/Codex live untested. See `docs/agent/AGENT-1.md`. |
+| UI-1 · P3 · Additive Rust CLI | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
+| UI-2 · P3 · Rust TUI / interactive workflow | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
+| AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |
+
+Remaining items use separate branches/PRs, not an authorization for package moves,
+legacy removals or HPC execution. Fix relevant integrity defects before exposing
+an operation. Coordinate metadata/domain work with GEN-2/GEN-4; GEN-9 is not a
+prerequisite. AGENT-1 and UI-1 are independent after EXEC-2; MCP does not require TUI.
+
 ## AUDIT-20261027 · P1 · Whole-code audit corrections — `done (PR #15, merged 2026-10-27)`
 
 The maintainer requested all reported findings be fixed on 2026-10-27. This is
@@ -116,8 +164,8 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-IO-1 · done (PR #22) | P1; F-IO-1, malformed thermo rows silently dropped | Complete: fail → pass; 12 collected regressions; numeric-leading bad rows reject with path/line/header/row before block selection; valid logs/goldens unchanged. Full verifier **405/0/0** native, **399/0/6** forced NumPy, **389/0/16** default. See `docs/agent/REV-IO-1.md`. |
 | REV-REF-1 · done (PR #23) | P1; F-REF-1, CIF occupancy ignored | Complete: fail → pass; 20 new regressions; exact nominal-one occupancy and conservative disorder guards reject unsupported/ambiguous site metadata before filtering/expansion. Supported unit-site compatibility preserved, no weighting model. Full verifier **425/0/0** native, **419/0/6** forced NumPy, **408/0/17** default. See `docs/agent/REV-REF-1.md`. |
 | REV-PREP-1 · done (PR #24) | P1; F-PREP-3, successful copyback follows output symlinks | Approved copy-behavior safety fix; no real HPC. Fail → pass; 19 new regressions; parent targeted **51/0/0**. Full verifier **444/0/0** native, **438/0/6** forced NumPy, **427/0/17** default. Full preflight preserves colliding links/targets through copyback, scratch, modes and solver status. Copyback-only limits and separate early logging risk: `docs/agent/REV-PREP-1.md`. |
-| REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
-| REV-ANALYSIS-2 · implemented, PR #27 awaiting merge approval | P2; F-ANALYSIS-2, missing-z region ignored | Explicit regions without z reject before frame consumption. Eight new regressions; full native **452/0/0**, forced NumPy **446/0/6**, native pytest **452 passed**. See `docs/agent/REV-ANALYSIS-2.md`. |
+| REV-ANALYSIS-1 · PR #26 open (stale base, conflicts) | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
+| REV-ANALYSIS-2 · implemented, PR #27; main a974563 merged locally, awaiting re-verification/merge approval | P2; F-ANALYSIS-2, missing-z region ignored | Explicit regions without z reject before frame consumption. Eight new regressions; full native **452/0/0**, forced NumPy **446/0/6**, native pytest **452 passed**. See `docs/agent/REV-ANALYSIS-2.md`. |
 | REV-ANALYSIS-3 | P2; F-ANALYSIS-3, invalid density range/bins | Equal/reversed/nonfinite ranges and invalid bin counts fail before histogram normalization; valid analytic profiles/goldens unchanged. |
 | REV-ANALYSIS-4 | P2; prior review, float32 RDF backend disagreement | In-box cutoff-edge pairs agree across SciPy/fallback using an independent exact represented-input oracle; no spurious pair or golden rebaseline. Parent reproduced 0 versus nonzero bin. |
 | REV-ANALYSIS-5 | P2; prior review, nonfinite selected coordinates | OAR/penetration/density reject or visibly diagnose selected NaN/Inf z; no silent denominator dilution or missing density population. Parent reproduced OAR 0.5 and one-count density for `[1, NaN]`. |
@@ -151,6 +199,44 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
 ## Suggested order
+
+**Status checkpoint (2026-10-31, maintainer requested review of development,
+roadmap and logs):** main is `a974563` (PR #32). Measured repository state:
+
+- Merged since the prior-work review: ARCH-1 (#28), EXEC-1 (#29), EXEC-2 (#30),
+  AGENT-1 (#31) and the detailed interface roadmap (#32). Their logs, CHANGELOG
+  and `INTERFACE-ROADMAP.md` agree with GitHub state. UI-1 is the next interface
+  item; UI-2 and AGENT-2 are not started.
+- **REV-ANALYSIS-1 (PR #26) and REV-ANALYSIS-2 (PR #27) are open, implemented and
+  verified only on their original base `84ee8d1`.** Each now conflicts with main in
+  `CHANGELOG.md` and `tests/run.py` (`git merge-tree`), and they conflict with each
+  other in those files plus `BACKLOG.md`. Their `analysis.py` edits merge textually,
+  but no combined branch has been verified. Rebase, resolve, rerun failing-first and
+  full verification, then merge only with maintainer approval. Their rows below are
+  updated to show this state; main previously still listed them as untouched.
+- **GEN-2 proposal numbering conflict:** the unmerged local proposal on
+  `gen/gen-2-explicit-metadata` (`e019dd7`, never pushed) is named ADR-0004, but
+  accepted ADR-0004 is now the interface ADR. Renumbered locally to ADR-0005 in
+  `e273ce0` (content unchanged); it still needs a rebase on main before
+  publication and remains proposed, not accepted. Its manifest decision
+  follows ADR-0001 (no units/pair_style/timestep in the manifest); the older GEN-2
+  target text below and the GEN-2 row of `INTERFACE-ROADMAP.md` were corrected.
+- **Unlogged local work:** branch `skills/verify-reference-checks` (three local
+  maintainer commits, not pushed) adds `.claude/skills/verify`, returns RDF
+  `frame_window` provenance and changes legend/export headers. It is not yet in
+  BACKLOG/CHANGELOG. Its slow RDF golden test now hashes only numeric fields; the
+  stored fingerprint is unchanged, but the hashed object changed, so record this
+  explicitly under the golden rules (§7) when the branch is published. It merges
+  cleanly with main (`git merge-tree`); its verification is not recorded here.
+- Fresh full verifier on clean `a974563` worktree (expanded Python 3.12; native
+  extension not present in that worktree, so NumPy path): **487 passed, 0 failed,
+  6 skipped**; the six skips are the known native-only checks. Post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/status-check-main/20261031T233839-a974563-full`. Native,
+  MDAnalysis, pytest and HPC were not run in this check.
+- Order recommendation: finish/merge the already-verified integrity fixes
+  (#26/#27) and other silent-result REV items before exposing those analyses
+  through new interfaces. UI-1 may proceed for `thermo.summary` only.
 
 **Independent prior-work review (2026-10-29, maintainer requested):** pause GEN-2
 implementation and independently inspect prior Sol-authored work. Model authorship
@@ -192,6 +278,11 @@ Actual HPC/site work remains deferred as above.
 **Phase 1, trustworthy tests and correct physics:** TEST-1 → OPS-1 → HPC-1 → PARSE-1 → **MSD (PHYS-2 + PHYS-1, one PR)** → PHYS-4 → PHYS-3 → PHYS-5 → TEST-3 → DOC-1 → DOC-2
 
 **Phase 2, generalization** (ADR-0001 accepted 2026-10-24): GEN-1 → GEN-3 → GEN-2 → GEN-4 → GEN-5 → GEN-6 → GEN-7 → GEN-8 → GEN-9
+
+**Interface track (ARCH-1; ADR-0004 accepted 2026-10-30):** EXEC-1 →
+EXEC-2 → AGENT-1 / UI-1 → UI-2 / AGENT-2, with the exact dependencies in the
+table above. Planning does not lift the scientific-integrity priority or GEN-2
+pause; expose only operations whose relevant correctness findings are resolved.
 
 REL-0 is a hard prerequisite for every item that changes physics outputs (MSD,
 PHYS-4, PHYS-3/5). TEST-1, OPS-1, HPC-1, PARSE-1 and DOC-2 do not change physics
@@ -682,10 +773,12 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   Python 3.9/docstrings. Full evidence, review findings and limits:
   `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
-### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open`
+### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open (proposal unpublished; see 2026-10-31 checkpoint)`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
-- **Target:** read `pair_style` / `units` / `atom_style` from the input script or run
-  manifest. The heuristic stays only as a last resort and prints what it guessed.
+- **Target:** read `pair_style` / `units` / `atom_style` / timestep from LAMMPS
+  input metadata. Per accepted ADR-0001 the optional manifest does not duplicate
+  these physics facts. The heuristic stays only as a last resort and prints what
+  it guessed.
   Unknown FFs get `generic` with no domain defaults.
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.

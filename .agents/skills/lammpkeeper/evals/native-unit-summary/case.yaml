@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: native-unit-summary
+expected_outcome: |
+  A real backend execution gives three selected samples, temperature mean 4 K,
+  pressure mean 20 atm and correct population standard deviations. Evidence
+  identifies the selected interpreter, request, response, events and exit status.
+context:
+  scaffold_script: place-files.sh

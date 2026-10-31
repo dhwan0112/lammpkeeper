@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: malformed-row
+expected_outcome: |
+  Backend rejects the short numeric-leading row with invalid_input and nonzero
+  exit, retains source context, and publishes no successful partial statistics.
+context:
+  scaffold_script: place-files.sh
