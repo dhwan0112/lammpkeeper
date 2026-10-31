@@ -1,0 +1,76 @@
+{
+  "id": "fixture-ace-bulk",
+  "description": "Load the committed ACE Fe3O4 bulk trajectory through the post shell and check the documented population, box and spin-population facts. Composition convention: types 1 and 2 are both Fe (type 2 is the ACE Mn proxy slot for Fe_down), so metal:O = 192:256 = 3:4 and type1:type2 = 64:128 = 1:2.",
+  "source": "Fixture facts aggregated from the committed data file without repository code (awk over the element column and TIMESTEP/BOX BOUNDS headers of tests/fixtures/ace_examples/regular_MD/traj.dump, 2026-10-31): 350 frames, 448 atoms, Fe 64 / Mn 128 / O 256 in every frame, first TIMESTEP 100, last 3587, frame-0 bounds 0..16.79 A, BOX BOUNDS pp pp pp. Consistent with .cursor/rules/tests-and-goldens.mdc. Type numbering (Fe->1, Mn->2, O->3) and the spin reading (1 = Fe_up, 2 = Fe_down in the Mn proxy slot) follow lammpkeeper/common/mapping.py and the analyze_spin_evolution docstring; README.md cites Bienvenu et al., npj Comput. Mater. 11, 81, 2025 for the convention. box_lengths refers to frame 0 only: the NPT trajectory box varies between 16.737 and 17.182 A in later frames.",
+  "sources": {
+    "spin_up_fraction": "64 / (64 + 128) = 1/3 from the fixture counts",
+    "metal_to_o_ratio": "(64 + 128) / 256 from the awk counts; magnetite A+B : O = 3 : 4",
+    "type1_to_type2_ratio": "64 / 128 from the awk counts; in this fixture type 1 occupies the tetrahedral sites (4 O at 1.883 A in the relaxed tail), but the site assignment is fixture-specific and is documented, not checked"
+  },
+  "status": "confirmed (fixture data file, independently aggregated 2026-10-31)",
+  "kind": {
+    "n_frames": "fixture",
+    "n_atoms": "fixture",
+    "type_counts": "fixture",
+    "box_lengths": "fixture",
+    "pbc": "fixture",
+    "first_timestep": "fixture",
+    "last_timestep": "fixture",
+    "spin_n_up_min_max": "fixture",
+    "spin_n_down_min_max": "fixture",
+    "spin_n_o_min_max": "fixture",
+    "spin_up_fraction": "analytic",
+    "metal_to_o_ratio": "fixture",
+    "type1_to_type2_ratio": "fixture"
+  },
+  "reference": {
+    "n_frames": 350,
+    "n_atoms": 448,
+    "type_counts": {
+      "1": 64,
+      "2": 128,
+      "3": 256
+    },
+    "box_lengths": [
+      16.79,
+      16.79,
+      16.79
+    ],
+    "pbc": [
+      true,
+      true,
+      true
+    ],
+    "first_timestep": 100,
+    "last_timestep": 3587,
+    "spin_n_up_min_max": [
+      64,
+      64
+    ],
+    "spin_n_down_min_max": [
+      128,
+      128
+    ],
+    "spin_n_o_min_max": [
+      256,
+      256
+    ],
+    "spin_up_fraction": 0.3333333333333333,
+    "metal_to_o_ratio": 0.75,
+    "type1_to_type2_ratio": 0.5
+  },
+  "tolerance": {
+    "box_lengths": {
+      "abs": 1e-09
+    },
+    "spin_up_fraction": {
+      "rel": 1e-12
+    },
+    "metal_to_o_ratio": {
+      "abs": 1e-12
+    },
+    "type1_to_type2_ratio": {
+      "abs": 1e-12
+    }
+  }
+}

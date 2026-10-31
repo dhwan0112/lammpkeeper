@@ -1,0 +1,45 @@
+{
+  "id": "fixture-ace-rdf-msd",
+  "description": "Snapshot of the ACE fixture trajectory analyses: Fe_up-O g(r) peak (compute_rdf defaults: LAST 20 frames, r_max 6.0, 200 bins) and the MSD endpoints of Fe_up and O over all 350 frames with pbc (T,T,T). In this fixture the last 20 frames (steps 3400-3587) are the tail of the final minimize/box-relax phase, so the g(r) first peak sits in a single bin.",
+  "source": "snapshot: values produced by this repository at baseline_commit on 2026-10-31 (Python 3.14.4, NumPy 2.3.5, scipy present). The RDF peak and MSD(Fe_up) agree with the values quoted in tests/test_regression_numeric.py comments (AUDIT-20261027 re-baseline). A PASS means the output is unchanged since baseline_commit; it is not evidence that the numbers are physically right (see features/fixture-ace-rdf-msd.md Gotchas: affine cell motion is not subtracted from the MSD, dt_fs heuristic differs from the run).",
+  "sources": {
+    "rdf_frames_timestep_range": "fixture: the last 20 TIMESTEP headers of traj.dump are 3400..3587 (grep, no repository code); pins that compute_rdf uses the last max_frames frames",
+    "rdf_feup_o_peak_r": "snapshot; tolerance half a bin (0.015 A) because bin centres come from linspace. Neighbouring bins 1.845 and 1.905 are exactly 0 at baseline; relaxed Fe_up-O distances are 1.8828-1.8849 A, 0.005 A below the 1.89 bin edge",
+    "rdf_feup_o_peak_g": "snapshot; rel 1e-8 covers summation-order differences across BLAS/SIMD builds",
+    "msd_feup_endpoint": "snapshot; current-frame-length unwrap of wrapped x y z; includes affine NPT box-scaling motion",
+    "msd_o_endpoint": "snapshot; same caveats"
+  },
+  "status": "snapshot (regression) \u2014 re-measured at baseline_commit 2026-10-31",
+  "kind": {
+    "rdf_frames_timestep_range": "fixture",
+    "rdf_feup_o_peak_r": "snapshot",
+    "rdf_feup_o_peak_g": "snapshot",
+    "msd_feup_endpoint": "snapshot",
+    "msd_o_endpoint": "snapshot"
+  },
+  "baseline_commit": "a974563066b192f62fad9c96066f064e4b63d9df",
+  "reference": {
+    "rdf_frames_timestep_range": [
+      3400,
+      3587
+    ],
+    "rdf_feup_o_peak_r": 1.875,
+    "rdf_feup_o_peak_g": 55.81309067093663,
+    "msd_feup_endpoint": 0.07462399282798773,
+    "msd_o_endpoint": 0.04990725287878125
+  },
+  "tolerance": {
+    "rdf_feup_o_peak_r": {
+      "abs": 0.015
+    },
+    "rdf_feup_o_peak_g": {
+      "rel": 1e-08
+    },
+    "msd_feup_endpoint": {
+      "rel": 1e-08
+    },
+    "msd_o_endpoint": {
+      "rel": 1e-08
+    }
+  }
+}

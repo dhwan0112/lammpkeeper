@@ -1,0 +1,31 @@
+{
+  "id": "analytic-rdf-pair",
+  "description": "compute_rdf on an isolated A-B pair in a 20 A periodic box: the only non-empty bin must contain the pair distance, both for an in-box pair (2.0 A) and for a pair split across the periodic x face (0.5 and 19.5, i.e. 1.0 A by minimum image).",
+  "source": "Analytic pair distances; bin width r_max/n_bins = 6.0/200 = 0.03 A, so a peak bin centre is within half a bin (0.015 A) of the true distance.",
+  "status": "confirmed (mathematical identity)",
+  "kind": {
+    "isolated_pair_peak_r": "analytic",
+    "isolated_pair_nonzero_bins": "analytic",
+    "bin_width": "analytic",
+    "wrapped_pair_peak_r": "analytic",
+    "wrapped_pair_nonzero_bins": "analytic"
+  },
+  "reference": {
+    "isolated_pair_peak_r": 2.0,
+    "isolated_pair_nonzero_bins": 1,
+    "bin_width": 0.03,
+    "wrapped_pair_peak_r": 1.0,
+    "wrapped_pair_nonzero_bins": 1
+  },
+  "tolerance": {
+    "isolated_pair_peak_r": {
+      "abs": 0.015
+    },
+    "wrapped_pair_peak_r": {
+      "abs": 0.015
+    },
+    "bin_width": {
+      "abs": 1e-12
+    }
+  }
+}
