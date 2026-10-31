@@ -1,6 +1,7 @@
 # REV-SESSION-1 — physical shell overrides
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #39](https://github.com/dhwan0112/lammpkeeper/pull/39).
 
 ## Scope and context
 
