@@ -1,7 +1,7 @@
 # REV-ANALYSIS-2 — explicit charge-region integrity
 
 Status: implemented and verified in `8325eac`; published as
-[PR #27](https://github.com/dhwan0112/lammpkeeper/pull/27), awaiting merge approval.
+[PR #27](https://github.com/dhwan0112/lammpkeeper/pull/27); merge approved 2026-11-01.
 
 ## Scope
 
@@ -85,7 +85,7 @@ tests; they are not a reduction in coverage from that separate branch.
 
 ## Conflict resolution against main (2026-11-01, local)
 
-Main advanced to `a974563` (PRs #28–33) after this branch was verified on
+Main advanced to `0ed2b8a` (PR #33, including PRs #28–32) after this branch was verified on
 `84ee8d1`. Merged `origin/main` into this branch locally as `2ad6684` (merge,
 not rebase; no force-push). Conflicts were limited to bookkeeping files:
 `CHANGELOG.md` (main's newer sections first, then this item), `tests/run.py`
@@ -117,7 +117,23 @@ Measured after the merge (expanded Python 3.12, isolated HOME):
   `/tmp/opencode/ra2-numpy/20261101T001312-2ad6684-full`.
 - Native extension: existing ignored build (SHA-256 prefix `944b5832c317b418`),
   copied into the worktree, not rebuilt. Pytest, MDAnalysis and HPC not run.
-  Not pushed; merge still needs maintainer approval.
+  The maintainer approved pushing and merging on 2026-11-01.
+
+## Final merge with main (2026-11-01)
+
+PR #26 (REV-ANALYSIS-1) and PR #34 (REV-TEST-2) then merged into main. Merged
+main `3ace63f` into this branch as `45e53c0` without conflicts, so this tree now
+contains both charge fixes and the load-tolerant timeout test. The intermediate
+merge `2916fde` (main `f44f043`) had resolved the same three bookkeeping
+conflicts; its full verifier hit the timeout flake again (**518/1**, evidence
+`/tmp/opencode/ra2b-native/20261101T001933-2916fde-full`), which led to REV-TEST-2.
+
+Final full verifier on `45e53c0` (native and NumPy started together):
+
+- Native: **519 passed, 0 failed, 0 skipped**; post/plots and prep passed.
+  Evidence: `/tmp/opencode/ra2c-native/20261101T003415-45e53c0-full`.
+- Forced NumPy: **513 passed, 0 failed, 6 skipped** (known native-only checks).
+  Evidence: `/tmp/opencode/ra2c-numpy/20261101T003416-45e53c0-full`.
 
 ## Next item
 
