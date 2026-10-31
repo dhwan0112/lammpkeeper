@@ -1,0 +1,32 @@
+# REV-IO-4 — '#' is ordinary text in dump atom rows
+
+Status: implemented, parent verification pending.
+
+## Defect (measured)
+The NumPy fallback in `DumpReader._parse_block` called `np.loadtxt` with its
+default `comments='#'`. For `ITEM: ATOMS id type element x y z`:
+- `1 1 A 1 2 3#CORRUPTED`: native rejected the token, NumPy stripped
+  `#CORRUPTED` and returned `[[1,1,1,2,3]]` with no warning (both readers).
+- `1 1 A#site 1 2 3`: native returned element `A#site`; forced NumPy raised
+  `invalid column index 3 ...`.
+
+## Fix
+`lammps_post/parsers.py`: both `np.loadtxt` calls on atom rows now pass
+`comments=None`. Corrupted numeric tokens raise `ValueError` ("malformed atom
+block") on both paths; text labels with '#' parse identically.
+
+## Scope check
+`grep loadtxt|genfromtxt` over `lammps_post`, `lammpkeeper`, `lammps_pre`: only
+these two calls exist. Data-file, log and input parsing use their own line
+code and keep '#' comment handling unchanged.
+
+## Tests
+`tests/test_dump_comment_tokens.py` (4 tests): corrupted tokens rejected on
+NumPy and native; numeric-only projection; `A#site` parity with `np.loadtxt`
+patched to raise (no fallback masking); fixture arrays equal on both paths.
+Native-dependent tests skip visibly when the module is not built.
+
+## Evidence (measured, before/after)
+- Before fix: native 1 passed / 3 failed; `LKPR_NO_NATIVE=1` 0 passed / 3 failed / 1 skipped.
+- After fix, 8 requested modules, `LKPR_SLOW=1`: native 79 passed 0 failed 0 skipped;
+  `LKPR_NO_NATIVE=1` 70 passed 0 failed 9 skipped (native-only tests).
