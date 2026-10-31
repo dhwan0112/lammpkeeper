@@ -246,7 +246,7 @@ PR #26/#27은 아직 열려 있는 charge 관련 수정이다. 현재 thermo.sum
 | Phase 1 테스트·물리 교정 | 기존 주요 항목 완료, 후속 REV 일부 미해결 | 관련 실패 재현 → 수정 → 독립 oracle/회귀 → 리뷰 순서; open REV를 완료로 표시하지 않음 |
 | GEN-1 species model | 완료, PR #19 | system-owned species/group 계약을 새 operation에서도 사용 |
 | GEN-3 box/PBC | 완료, PR #20 | 지원되는 triclinic/PBC는 검증된 geometry 재사용; 미지원 소비자는 명시적 거절 |
-| GEN-2 명시적 metadata | open, 설계 승인·관련 검토 필요 | input/manifest에서 FF·units·atom_style 해석 → 충돌 검증 → heuristic 최후 수단 경고 → LJ/EAM을 Fe 전용 모델로 오인하지 않는 시험 |
+| GEN-2 명시적 metadata | open, 설계안 미게시(로컬 ADR-0005, `e273ce0`)·승인 필요 | LAMMPS input에서 FF·units·atom_style·timestep 해석(ADR-0001: manifest는 이 값을 중복 저장하지 않음) → 충돌 검증 → heuristic 최후 수단 경고 → LJ/EAM을 Fe 전용 모델로 오인하지 않는 시험 |
 | GEN-4 domain 분리 | open, GEN-2 이후 | Fe/O 전용 분석·상수를 domain pack으로 이동 → 기존 import shim → generic 경로의 원소 하드코딩 점검 → Fe-O 회귀 |
 | GEN-5 molecule/bond | open | generic per-pair cutoff·PBC pairing → O2 preset 연결 → 기존 결과 및 A–B 합성 분자 검증 |
 | GEN-6 HPC site profiles | deferred | 사이트 설정과 run logic 분리 → 기존 NUS 출력 보존 → local/Slurm 문법·실패 주입; 실제 HPC는 별도 사용자 승인 후 |
@@ -269,6 +269,12 @@ LAMMPS 확인과 GEN-8의 실제 참조계 확보는 사용자 환경/선택에 
 기준을 충족할 때만 상태를 갱신하며, 다음 단계 시작 전에 미검증 항목을 다시 확인한다.
 
 ## 문서 정비 기록
+
+2026-10-31: 사용자 요청으로 개발 현황·로드맵·로그를 대조했다. PR #26/#27은
+`84ee8d1` 기준으로만 검증된 open 상태이며 현재 main 및 서로 간에 CHANGELOG/tests/run.py
+충돌이 있다. GEN-2 설계안은 미게시 로컬 브랜치에 있고 ADR 번호가 승인된 ADR-0004와
+겹쳐 로컬에서 ADR-0005로 재번호했다(`e273ce0`, 내용 변경 없음). 로컬 `skills/verify-reference-checks` 작업은 아직 BACKLOG/
+CHANGELOG에 없다. 세부 내용은 BACKLOG의 2026-10-31 checkpoint에 기록했다.
 
 2026-10-30: 사용자 요청으로 단계별 상세 계획과 조건 추적표를 작성했다.
 GitHub 상태를 조회해 PR #28–31 머지 및 #26/#27 open을 대조했다. 기존 안내의
