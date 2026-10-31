@@ -1,6 +1,7 @@
 # REV-SESSION-3 — stale cached results after the dump changed
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #44](https://github.com/dhwan0112/lammpkeeper/pull/44).
 
 ## Problem
 Cached families were current on key presence (`_ensure_cache`, direct cache-hit
