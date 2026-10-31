@@ -17,7 +17,7 @@ ARCH-1 설계 승인 [완료]
       └─ EXEC-2 Python 환경 선택 / 로컬 작업 수명주기 [완료]
           ├─ AGENT-1 공통 Skill [완료: 호스트별 미검증 범위 별도]
           │   └─ AGENT-2 선택적 MCP [미착수]
-          └─ UI-1 Rust CLI [다음 단계]
+          └─ UI-1 Rust CLI [무결성 묶음 이후]
               └─ UI-2 Rust TUI [미착수]
 ```
 
@@ -31,7 +31,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-1 | 구현·검증·머지 | PR #29, `ed41c1f` | 다른 과학 작업은 개별 확장 |
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
-| UI-1 | 미착수, 다음 구현 | 아래 7절 | Rust CLI 전체 |
+| UI-1 | 미착수, 무결성 묶음 이후 | 아래 7절 | Rust CLI 전체 |
 | UI-2 | 미착수 | 아래 8절 | Rust TUI 전체 |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
@@ -259,6 +259,11 @@ LAMMPS 확인과 GEN-8의 실제 참조계 확보는 사용자 환경/선택에 
 합성 시험으로 대체 완료 처리하지 않는다. 상세 과학 항목은 BACKLOG의 해당 ID가 기준이다.
 
 ## 12. 바로 다음 실행 순서
+
+**우선순위 결정(2026-11-01, 사용자 승인):** 결과가 조용히 틀릴 수 있는 분석 오류를
+먼저 고친다. REV-ANALYSIS-3 → REV-ANALYSIS-5 → REV-SESSION-1 → REV-SESSION-2 →
+REV-ANALYSIS-4 → REV-IO-4 → REV-IO-6 → REV-SESSION-3 순서로 항목별 브랜치·PR을
+진행한 뒤 아래 UI-1을 시작한다. GEN-2(ADR-0005) 승인 검토는 그 다음이다.
 
 1. UI-1 설계 노트에서 실행 파일·crate·배포 대상·중단 소유권을 확정한다.
 2. 승인된 구조 안에서 가장 작은 capability/thermo.summary Rust client를 구현한다.
