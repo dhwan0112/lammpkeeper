@@ -41,3 +41,18 @@ is never nominated. This is float64 range loss in the candidate stage, not
 dtype; the float64 policy cannot fix it. Left unfixed; suggested follow-up:
 reject (or route to an exact reduction) frames whose |coordinate|/L exceeds a
 safe bound (about 2^40), loudly.
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `e4de18a` (PR #40);
+  `lammps_post/analysis.py` on main is unchanged since the worker's base, so the
+  old/new comparison below still applies. Registered `test_rdf_precision`;
+  BACKLOG and CHANGELOG updated; the extreme-image case is now backlog item
+  **REV-ANALYSIS-6** (P3).
+- Failing-first reproduced by the parent with the final five tests: against
+  main's `analysis.py` **2 passed, 3 failed**; with the fix **5 passed**. (The
+  worker's "4 failed" count included the extreme-image test it later removed.)
+- Float64 byte-identity rerun by the parent (`/tmp/opencode/ra4-equal.py`):
+  **484** comparisons identical (fixture frames and random frames, SciPy and
+  forced fallback, single-type and union selections).
+- Full verifier results follow (started after this commit).
