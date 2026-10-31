@@ -436,6 +436,14 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
             'g'        : np.array — Normalized RDF values g(r)
             'label'    : str      — Pair label (e.g., 'Fe-O')
             'n_frames' : int      — Number of frames used in averaging
+            'frame_window' : dict — The frames selected for averaging, before
+                                    empty-species frames are dropped:
+                                    'first_step'/'last_step' (dump timesteps,
+                                    None when no frame is selected), 'n_frames'
+                                    (selected count) and 'selection' ('last'
+                                    when the trajectory was truncated to its
+                                    last max_frames frames, 'all' otherwise).
+                                    describe_frame_window() renders it.
     """
     types_a, types_b = _type_ids(type_a, 'type_a'), _type_ids(type_b, 'type_b')
     try:
@@ -460,7 +468,14 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
 
     # Restrict to the requested tail; choosing a tail does not establish that
     # it is equilibrated, and its frames receive equal (not elapsed-time) weight.
-    use_frames = frames[-max_frames:] if len(frames) > max_frames else frames
+    truncated = len(frames) > max_frames
+    use_frames = frames[-max_frames:] if truncated else frames
+    frame_window = {
+        'first_step': int(use_frames[0]['timestep']) if len(use_frames) else None,
+        'last_step': int(use_frames[-1]['timestep']) if len(use_frames) else None,
+        'n_frames': len(use_frames),
+        'selection': 'last' if truncated else 'all',
+    }
 
     for fr in use_frames:
         cell = _typed_cell(fr, 'RDF')
@@ -528,7 +543,22 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
 
     g = g_total / n_frames_used if n_frames_used else g_total
     return {'r': r_centers, 'g': g, 'label': f'{label_a}-{label_b}',
-            'n_frames': n_frames_used}
+            'n_frames': n_frames_used, 'frame_window': frame_window}
+
+
+def describe_frame_window(window):
+    """Render a compute_rdf frame_window as 'last 20 frames (steps 3400–3587)'.
+
+    'all N frames' marks an untruncated trajectory; a window with no frames
+    renders as '0 frames'. This describes which frames were selected, not
+    whether they are equilibrated.
+    """
+    n = int(window['n_frames'])
+    if n == 0 or window.get('first_step') is None:
+        return '0 frames'
+    word = 'frame' if n == 1 else 'frames'
+    return (f"{window.get('selection', 'last')} {n} {word} "
+            f"(steps {window['first_step']}\u2013{window['last_step']})")
 
 
 def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):

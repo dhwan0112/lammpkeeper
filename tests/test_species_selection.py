@@ -510,8 +510,10 @@ def test_numeric_apis_keep_existing_return_keys_without_shell_metadata():
     _util.require_numpy()
     from lammps_post.analysis import analyze_msd, compute_rdf
     assert set(analyze_msd(_msd_frames(), COL, species_type=1)) == {'time', 'msd'}
+    # frame_window is numeric provenance (which frames were averaged), not
+    # shell display metadata; display_label still must not appear here.
     assert set(compute_rdf(_rdf_frames(), COL, type_a=1, type_b=3)) == {
-        'r', 'g', 'label', 'n_frames'}
+        'r', 'g', 'label', 'n_frames', 'frame_window'}
 
 
 def test_explicit_groups_cannot_borrow_unrelated_preset_display_names():

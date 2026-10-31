@@ -85,6 +85,9 @@ def test_numeric_regression_rdf_msd_slow():
     assert pbc == (True, True, True), 'the ACE reference trajectory is bulk, not a slab'
     # section_hash rounds array values to eight decimals before hashing. These
     # fingerprints catch drift at that serialization precision, not bitwise drift.
-    assert section_hash(A.compute_rdf(f, ci, type_a=1, type_b=3, z_pbc=True)) == GOLDEN_SLOW['rdf_FeUp_O']
+    rdf = A.compute_rdf(f, ci, type_a=1, type_b=3, z_pbc=True)
+    # Fingerprint the numeric result only; frame_window is provenance metadata
+    # (which frames were averaged) and must not perturb the arithmetic golden.
+    assert section_hash({k: rdf[k] for k in ('r', 'g', 'label', 'n_frames')}) == GOLDEN_SLOW['rdf_FeUp_O']
     assert section_hash(A.analyze_msd(f, ci, species_type=3, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_O']
     assert section_hash(A.analyze_msd(f, ci, species_type=1, dt_fs=s.dt_fs, pbc=pbc)) == GOLDEN_SLOW['msd_FeUp']
