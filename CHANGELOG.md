@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Load-tolerant job timeout test (REV-TEST-2)
+
+- The overall-timeout lifecycle test no longer assumes two Python startups fit in
+  0.3 s. Budgets leave over a second for startup, a missing phase sentinel reports
+  the budget instead of `FileNotFoundError`, and the execution case now also
+  rejects a per-phase deadline. Test-only; `lammpkeeper/jobs.py` is unchanged.
+
 ### Portable agent workflow (AGENT-1)
 
 - Add a canonical LammpKeeper Skill for capability discovery, explicit Python
@@ -44,6 +51,26 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 - Record ADR-0004 acceptance and the first vertical slice of the Python/Rust/
   agent roadmap. Job lifecycle, Rust frontends, skills and MCP remain separate
   implementation stages.
+
+### Selected charge integrity (REV-ANALYSIS-1)
+
+- Charge evolution, charge profiles and oxidation fractions reject selected
+  NaN/Inf charges with a diagnostic instead of publishing invalid statistics
+  or silently treating bad charges as unoxidized atoms.
+- Validate only charges contributing to the requested species/region/profile;
+  preserve unrelated species, count-only oxygen, empty selections and finite
+  results. Unrestricted evolution/OR still need no spatial columns or box.
+- A failed shell retry clears only the attempted charge result, and one-shot
+  CLI analyses return failure for invalid selected charge input.
+
+### Explicit charge-region integrity (REV-ANALYSIS-2)
+
+- Charge evolution and oxidation fraction reject an explicit `z_range` without
+  a `z` column before iterating frames, checking geometry or returning for
+  absent charge data. A requested region no longer silently becomes global.
+- Unrestricted scalar calculations still need neither z nor a box; valid
+  inclusive regions, type unions, threshold comparisons and empty selections
+  retain their previous results.
 
 ### Job result copyback safety (REV-PREP-1)
 

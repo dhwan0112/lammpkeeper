@@ -164,8 +164,8 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-IO-1 · done (PR #22) | P1; F-IO-1, malformed thermo rows silently dropped | Complete: fail → pass; 12 collected regressions; numeric-leading bad rows reject with path/line/header/row before block selection; valid logs/goldens unchanged. Full verifier **405/0/0** native, **399/0/6** forced NumPy, **389/0/16** default. See `docs/agent/REV-IO-1.md`. |
 | REV-REF-1 · done (PR #23) | P1; F-REF-1, CIF occupancy ignored | Complete: fail → pass; 20 new regressions; exact nominal-one occupancy and conservative disorder guards reject unsupported/ambiguous site metadata before filtering/expansion. Supported unit-site compatibility preserved, no weighting model. Full verifier **425/0/0** native, **419/0/6** forced NumPy, **408/0/17** default. See `docs/agent/REV-REF-1.md`. |
 | REV-PREP-1 · done (PR #24) | P1; F-PREP-3, successful copyback follows output symlinks | Approved copy-behavior safety fix; no real HPC. Fail → pass; 19 new regressions; parent targeted **51/0/0**. Full verifier **444/0/0** native, **438/0/6** forced NumPy, **427/0/17** default. Full preflight preserves colliding links/targets through copyback, scratch, modes and solver status. Copyback-only limits and separate early logging risk: `docs/agent/REV-PREP-1.md`. |
-| REV-ANALYSIS-1 | P2; F-ANALYSIS-1, nonfinite selected charges | Charge/OR analyses reject or visibly diagnose selected NaN/Inf; no silent atom dropping/denominator change; pure nonspatial path preserved. |
-| REV-ANALYSIS-2 | P2; F-ANALYSIS-2, missing-z region ignored | An explicit charge/OR region without a z column cannot silently become a global analysis; collected missing-column and valid-region tests pass. |
+| REV-ANALYSIS-1 · done (PR #26; re-verified after main merge, native **511/0/0**, NumPy **505/0/6**) | P2; F-ANALYSIS-1, nonfinite selected charges | Selected NaN/Inf rejects visibly; no atom dropping/denominator change; pure nonspatial path and finite results preserved. 18 new regressions; full native **462/0/0**, forced NumPy **456/0/6**, native pytest **462 passed**. See `docs/agent/REV-ANALYSIS-1.md`. |
+| REV-ANALYSIS-2 · done (PR #27; final tree with PR #26/#34, native **519/0/0**, NumPy **513/0/6**) | P2; F-ANALYSIS-2, missing-z region ignored | Explicit regions without z reject before frame consumption. Eight new regressions; full native **452/0/0**, forced NumPy **446/0/6**, native pytest **452 passed**. See `docs/agent/REV-ANALYSIS-2.md`. |
 | REV-ANALYSIS-3 | P2; F-ANALYSIS-3, invalid density range/bins | Equal/reversed/nonfinite ranges and invalid bin counts fail before histogram normalization; valid analytic profiles/goldens unchanged. |
 | REV-ANALYSIS-4 | P2; prior review, float32 RDF backend disagreement | In-box cutoff-edge pairs agree across SciPy/fallback using an independent exact represented-input oracle; no spurious pair or golden rebaseline. Parent reproduced 0 versus nonzero bin. |
 | REV-ANALYSIS-5 | P2; prior review, nonfinite selected coordinates | OAR/penetration/density reject or visibly diagnose selected NaN/Inf z; no silent denominator dilution or missing density population. Parent reproduced OAR 0.5 and one-count density for `[1, NaN]`. |
@@ -193,12 +193,51 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-VERIFY-3 | P2; R-VERIFY-1, failed evidence retention still PASS | Fault-injected required evidence copy/write failures produce a nonzero verifier result; no PASS with missing retained `post-summary.txt`. Parent measured exit 0 after denied evidence copy during prior-work review; see `PRIOR-WORK-REVIEW-20261029.md`. |
 | REV-GEOM-1 | P3; F-CORE-1, near-face wrapping | Decide/document a floating-point face convention and test strict range/idempotence where promised without changing physical image selection silently. |
 | REV-TEST-1 | P3; F-CORE-2, finite oracle bounds | Independently justify finite image ranges; interiority alone is not a completeness argument; production geometry is not used as its own oracle. |
+| REV-TEST-2 · done (PR #34; native **511/0/0**, NumPy **505/0/6**) | P2; EXEC-2 lifecycle test assumes two interpreter startups fit in 0.3 s | Found 2026-11-01 while re-verifying PR #27: `test_jobs.test_overall_timeout_includes_handshake_and_execution_and_reaps` failed with a missing `execution.started`. Measured start→execution latency 0.25–0.30 s unloaded; original test failed 1/30 unloaded, 10/10 under 8 busy loops and 3/3 with a 0.1 s startup delay. Done when the test is load-tolerant, still proves one overall deadline (kills a per-phase-deadline mutant the old test missed) and full verification passes. Production `jobs.py` unchanged. See `docs/agent/REV-TEST-2.md`. |
 | REV-PREP-4 | P3; F-PREP-4, Masses inspection | Prep's metadata inspector reads conventional blank-separated Masses sections without changing structures/presets. |
 | REV-REF-5 | P3; CIF case/seam behavior | Decide supported case-insensitive loop parsing and metric/seam deduplication limits with independent tiny-CIF tests and visible rejection outside scope. |
 | REV-PREP-5 | P2; parent-reproduced in prior review, early logging symlink | After separate generated-script approval, prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Parent measured target append with exit 0 and scratch removed. Not a copyback-preflight bypass. |
 | REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
 ## Suggested order
+
+**Status checkpoint (2026-10-31, maintainer requested review of development,
+roadmap and logs):** main is `a974563` (PR #32). Measured repository state:
+
+- Merged since the prior-work review: ARCH-1 (#28), EXEC-1 (#29), EXEC-2 (#30),
+  AGENT-1 (#31) and the detailed interface roadmap (#32). Their logs, CHANGELOG
+  and `INTERFACE-ROADMAP.md` agree with GitHub state. UI-1 is the next interface
+  item; UI-2 and AGENT-2 are not started.
+- **REV-ANALYSIS-1 (PR #26) and REV-ANALYSIS-2 (PR #27) are open, implemented and
+  verified only on their original base `84ee8d1`.** Each now conflicts with main in
+  `CHANGELOG.md` and `tests/run.py` (`git merge-tree`), and they conflict with each
+  other in those files plus `BACKLOG.md`. Their `analysis.py` edits merge textually,
+  but no combined branch has been verified. Rebase, resolve, rerun failing-first and
+  full verification, then merge only with maintainer approval. Their rows below are
+  updated to show this state; main previously still listed them as untouched.
+- **GEN-2 proposal numbering conflict:** the unmerged local proposal on
+  `gen/gen-2-explicit-metadata` (`e019dd7`, never pushed) is named ADR-0004, but
+  accepted ADR-0004 is now the interface ADR. Renumbered locally to ADR-0005 in
+  `e273ce0` (content unchanged); it still needs a rebase on main before
+  publication and remains proposed, not accepted. Its manifest decision
+  follows ADR-0001 (no units/pair_style/timestep in the manifest); the older GEN-2
+  target text below and the GEN-2 row of `INTERFACE-ROADMAP.md` were corrected.
+- **Unlogged local work:** branch `skills/verify-reference-checks` (three local
+  maintainer commits, not pushed) adds `.claude/skills/verify`, returns RDF
+  `frame_window` provenance and changes legend/export headers. It is not yet in
+  BACKLOG/CHANGELOG. Its slow RDF golden test now hashes only numeric fields; the
+  stored fingerprint is unchanged, but the hashed object changed, so record this
+  explicitly under the golden rules (§7) when the branch is published. It merges
+  cleanly with main (`git merge-tree`); its verification is not recorded here.
+- Fresh full verifier on clean `a974563` worktree (expanded Python 3.12; native
+  extension not present in that worktree, so NumPy path): **487 passed, 0 failed,
+  6 skipped**; the six skips are the known native-only checks. Post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/status-check-main/20261031T233839-a974563-full`. Native,
+  MDAnalysis, pytest and HPC were not run in this check.
+- Order recommendation: finish/merge the already-verified integrity fixes
+  (#26/#27) and other silent-result REV items before exposing those analyses
+  through new interfaces. UI-1 may proceed for `thermo.summary` only.
 
 **Independent prior-work review (2026-10-29, maintainer requested):** pause GEN-2
 implementation and independently inspect prior Sol-authored work. Model authorship
@@ -735,10 +774,12 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   Python 3.9/docstrings. Full evidence, review findings and limits:
   `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
-### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open`
+### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open (proposal unpublished; see 2026-10-31 checkpoint)`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
-- **Target:** read `pair_style` / `units` / `atom_style` from the input script or run
-  manifest. The heuristic stays only as a last resort and prints what it guessed.
+- **Target:** read `pair_style` / `units` / `atom_style` / timestep from LAMMPS
+  input metadata. Per accepted ADR-0001 the optional manifest does not duplicate
+  these physics facts. The heuristic stays only as a last resort and prints what
+  it guessed.
   Unknown FFs get `generic` with no domain defaults.
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.
