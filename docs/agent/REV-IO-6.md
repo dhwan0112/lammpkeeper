@@ -1,6 +1,7 @@
 # REV-IO-6 — validate dump and input boundary flags
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #43](https://github.com/dhwan0112/lammpkeeper/pull/43).
 
 ## Problem (measured)
 `_BOUNDARY_TOKEN = ^[pfsm]{1,2}$` accepted single letters and mixed faces, while
