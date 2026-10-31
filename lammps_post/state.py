@@ -369,6 +369,33 @@ class SessionState:
         self.cache.clear()
         self._structure_atoms = None
 
+    def verify_trajectory_source(self):
+        """Refuse to publish cached results whose dump file changed or vanished.
+
+        The loaded reader keeps a stat snapshot (device, inode, size, mtime,
+        ctime); re-checking it costs one os.stat and never reads the file.
+        Sessions with no cache, no reader (in-memory frame lists) or an
+        unchanged source pass untouched. On a mismatch every cached result is
+        dropped (all families derive from the trajectory or from settings tied
+        to it) and ValueError asks for a reload, so nothing stale is written.
+        Log/data-derived results have no stored source snapshot and are out of
+        scope (REV-SESSION-3).
+        """
+        if not self.cache:
+            return
+        reader = getattr(getattr(self, 'dump_frames', None), 'reader', None)
+        check = getattr(reader, '_check_source', None)
+        if check is None:
+            return
+        try:
+            check()
+        except (ValueError, OSError) as exc:
+            # OSError covers a deleted/unreadable source; same remedy as a rewrite.
+            self.clear_cache()
+            raise ValueError(f"cached results were discarded because the loaded dump "
+                             f"changed or disappeared ({exc}); reload the file with "
+                             f"'load dump <file>' and rerun the analysis") from exc
+
     @property
     def input_pbc(self):
         """Resolve only an explicitly parsed input boundary, never LAMMPS defaults."""

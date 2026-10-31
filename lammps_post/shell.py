@@ -2337,6 +2337,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """
         parts = shlex.split(arg) if arg.strip() else []
 
+        # Direct cache-hit plot paths bypass _ensure_cache; check the source once here.
+        if not (parts and parts[0] in ('recipes', 'save_defaults')):
+            self.state.verify_trajectory_source()
+
         # ── plot recipes: show saved recipes ──
         if parts and parts[0] == 'recipes':
             recipes = self.state.plot_recipes
@@ -2628,6 +2632,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         unsupported _batch argument. Analyzer errors propagate to onecmd.
         """
         s = self.state
+        # Key presence alone must not make a result current: verify the source.
+        s.verify_trajectory_source()
         if key in ('charge_z', 'oar', 'penetration', 'penetration_trend',
                    'penetration_profile', 'density', 'dissociation', 'structure'):
             self._guard_geometry('plot ' + key, key, include_data=key == 'structure')
@@ -3489,6 +3495,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         what = parts[1]  # keep original case for cache key matching
         fname = parts[2] if len(parts) > 2 else None
         s = self.state
+        s.verify_trajectory_source()
 
         if fmt == 'csv':
             self._export_csv(what, fname)
