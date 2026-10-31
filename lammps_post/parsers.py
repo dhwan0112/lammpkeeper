@@ -602,13 +602,16 @@ class DumpReader:
                 atoms = np.empty((natoms, 0), dtype=self.dtype)
                 elements = None
             elif not self.has_elements:
-                atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2)
+                # comments=None: '#' is ordinary text in dump atom rows (REV-IO-4).
+                atoms = np.loadtxt(lines, dtype=self.dtype, usecols=self._usecols, ndmin=2,
+                                   comments=None)
                 elements = None
             else:
                 width = max(1, max(len(row[self._element_col]) for row in fields))
                 row_dtype = [(f'c{k}', f'U{width}' if self.raw_columns[i] in STRING_COLUMNS else self.dtype)
                              for k, i in enumerate(self._usecols)]
-                rec = np.loadtxt(lines, dtype=row_dtype, usecols=self._usecols, ndmin=1)
+                rec = np.loadtxt(lines, dtype=row_dtype, usecols=self._usecols, ndmin=1,
+                                 comments=None)
                 names = rec.dtype.names
                 elements = rec[names[self._element_pos]]
                 # Fixed-width str array: ~8 bytes/atom for 2-letter symbols,

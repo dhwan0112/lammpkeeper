@@ -35,7 +35,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_jobs', 'test_charge_integrity', 'test_charge_integrity_session',
            'test_charge_region', 'test_density_options',
            'test_nonfinite_z', 'test_session_overrides',
-           'test_spin_species', 'test_rdf_precision']
+           'test_spin_species', 'test_rdf_precision', 'test_dump_comment_tokens']
 
 
 def main():
