@@ -1706,6 +1706,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_charge(self, opts):
         """Cache Fe-group charge/oxidized counts using the session fs step and e cutoff."""
+        self.state.cache.pop('charge', None)
         if not self._require_dump() or not self._require_charge():
             return
         s = self.state
@@ -1745,6 +1746,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 return
             frame_idx = int(ans)
 
+        self.state.cache.pop('charge_z', None)
         progress_msg(f"Computing z-direction charge distribution (frame {frame_idx})...")
         result = analyze_charge_z(s.dump_frames[frame_idx], s.dump_col_idx,
                                   fe_type=s._guess_fe_types(), o_type=s._guess_o_type())
@@ -1899,6 +1901,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_or(self, opts):
         """Cache the oxidized Fe-group fraction using the partial-charge threshold in e."""
+        self.state.cache.pop('or', None)
         if not self._require_dump() or not self._require_charge():
             return
         s = self.state
