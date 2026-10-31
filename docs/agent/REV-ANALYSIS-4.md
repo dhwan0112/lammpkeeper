@@ -1,6 +1,6 @@
 # REV-ANALYSIS-4 — float32 positions in RDF cutoff
 
-Status: implemented; parent verification pending. Branch `fix/rev-analysis-4-float32-rdf`.
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Defect (measured)
 Two atoms (types 4 and 9), float32 x = -49.95 and 49.15 (represented
@@ -55,4 +55,9 @@ safe bound (about 2^40), loudly.
 - Float64 byte-identity rerun by the parent (`/tmp/opencode/ra4-equal.py`):
   **484** comparisons identical (fixture frames and random frames, SciPy and
   forced fallback, single-type and union selections).
-- Full verifier results follow (started after this commit).
+- Full verifier on `1de6809`: native **564 passed, 0 failed, 0 skipped**, forced
+  NumPy **558 passed, 0 failed, 6 skipped** (known native-only checks); post
+  analyses/real plots and prep passed; slow RDF golden unchanged. Evidence:
+  `/tmp/opencode/ra4-native/20261101T020057-1de6809-full`,
+  `/tmp/opencode/ra4-numpy/20261101T020059-1de6809-full`. Native extension not
+  rebuilt; pytest, MDAnalysis and HPC not run.
