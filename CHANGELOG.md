@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Density option validation (REV-ANALYSIS-3)
+
+- `compute_density_profile` raises `ValueError` for equal, reversed or nonfinite
+  `z_range` endpoints and for non-integer, boolean, zero, negative or nonfinite
+  `n_bins`, before reading frames. Previously it could return NaN/inf densities
+  with NumPy warnings. An empty trajectory with no `z_range` now raises
+  `ValueError` instead of `TypeError`. Valid profiles are unchanged.
+
 ### Reference-value verification and RDF frame window (VERIFY-REF-1, RDF-PROV-1)
 
 - Add `.claude/skills/verify`: real-code reference checks with per-key kinds
