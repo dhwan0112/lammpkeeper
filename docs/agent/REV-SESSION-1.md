@@ -1,6 +1,6 @@
 # REV-SESSION-1 — physical shell overrides
 
-Status: implemented; parent verification pending.
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Scope and context
 
@@ -47,4 +47,14 @@ results (OAR `[0,0]` or `[1,1]`, MSD time `[0,-0.1]` or `[0,nan]`) with
 - Parent reviewed the diff: validation happens before assignment in `set
   surface_z`, `set dt`, `set mass` and the interactive surface prompt, whose
   existing `except ValueError` keeps a rejected prompt value from publishing.
-- Full verifier results follow.
+- Native full verifier: **551 passed, 0 failed, 0 skipped**; post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/rs1-native/20261101T014143-c43898c-full`.
+- Forced NumPy: **545 passed, 0 failed, 6 skipped** (known native-only checks).
+  Evidence: `/tmp/opencode/rs1-numpy/20261101T014144-c43898c-full`.
+- Both runs started a moment before commit `efdff43`, so they record HEAD
+  `c43898c` with four dirty files. Those were the registration, BACKLOG,
+  CHANGELOG and this log, committed unchanged as `efdff43`; the native log shows
+  all six new tests ran.
+- Native extension: existing ignored build, not rebuilt. Pytest, MDAnalysis and
+  HPC were not run.
