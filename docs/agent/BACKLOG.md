@@ -42,8 +42,8 @@ not available in this harness and are not claimed as executed.
 
 Detailed execution steps, requirements and completion gates:
 [`INTERFACE-ROADMAP.md`](INTERFACE-ROADMAP.md). ARCH-1, EXEC-1/2 and AGENT-1
-are merged; UI-1 is the next interface item but waits for the integrity batch
-(see "Priority decision 2026-11-01" under Suggested order). UI-2 and AGENT-2
+are merged; the integrity batch is complete (PRs #37–#44), so UI-1 is the next
+interface item (see "Integrity batch complete" under Suggested order). UI-2 and AGENT-2
 remain unimplemented.
 
 | Item | Depends on | Done when |
@@ -264,6 +264,25 @@ roadmap and logs):** main is `a974563` (PR #32). Measured repository state:
   REV-ANALYSIS-4 → REV-IO-4 → REV-IO-6 → REV-SESSION-3. One item per branch/PR,
   failing-first. After the batch: UI-1, then the GEN-2 ADR-0005 approval review.
   `INTERFACE-ROADMAP.md` §1 and §12 follow this order.
+
+**Integrity batch complete (2026-11-01):** all eight items merged, each with
+failing-first tests and native + forced-NumPy full verification:
+REV-ANALYSIS-3 (#37), REV-ANALYSIS-5 (#38), REV-SESSION-1 (#39), REV-SESSION-2
+(#40), REV-ANALYSIS-4 (#41), REV-IO-4 (#42), REV-IO-6 (#43), REV-SESSION-3 (#44).
+Earlier the same day: REV-ANALYSIS-1/2 (#26/#27), REV-TEST-2 (#34),
+VERIFY-REF-1/RDF-PROV-1 (#35). Found during the batch and recorded, not fixed:
+REV-ANALYSIS-6 (P3, extreme-image RDF candidate wrap). REV-SESSION-2's first
+full verifier caught a regression in `analyze all` (slab reference), fixed before
+merge. Review table: **14 done, 24 open** (incl. REV-ANALYSIS-6). Merged-main
+full verifier after #44 (`37e077b`, native): **582 passed, 0 failed, 0 skipped**;
+post/plots and prep passed. Evidence:
+`/tmp/opencode/main-after-batch/20261101T022348-37e077b-full`.
+
+**Next (per the decision above):** UI-1 (Rust CLI, `thermo.summary` client first;
+needs its design note on executable/crate/packaging/cancel ownership), then the
+GEN-2 ADR-0005 approval review. Remaining P2 review items (REV-IO-2/3/5,
+REV-REF-2/3/4, REV-PREP-2/3, REV-PLOT-1/2, REV-UI-1/3, REV-VERIFY-1/3, REV-PREP-5)
+stay open; REV-PREP-2/3/5 need generated-input/structure/script approval.
 
 **Independent prior-work review (2026-10-29, maintainer requested):** pause GEN-2
 implementation and independently inspect prior Sol-authored work. Model authorship
