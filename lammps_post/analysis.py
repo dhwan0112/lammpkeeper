@@ -535,8 +535,10 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         mask_b = types == next(iter(types_b)) if len(types_b) == 1 else np.isin(types, list(types_b))
 
         # Extract xyz positions for both species
-        pos_a = atoms[mask_a][:, [xi, yi, zi]]
-        pos_b = atoms[mask_b][:, [xi, yi, zi]]
+        # float64 once per frame: float32 inputs are evaluated at their represented
+        # values so MIC and the cutoff compare identically in both pair backends.
+        pos_a = np.asarray(atoms[mask_a][:, [xi, yi, zi]], dtype=np.float64)
+        pos_b = np.asarray(atoms[mask_b][:, [xi, yi, zi]], dtype=np.float64)
         if not np.all(np.isfinite(pos_a)) or not np.all(np.isfinite(pos_b)):
             raise ValueError(f"RDF timestep {fr['timestep']}: selected positions must be finite")
 
