@@ -2061,6 +2061,26 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
         if s.ff != 'ace':
             raise ValueError('Spin analysis is not applicable to the current force field')
+        # A failed or rejected retry must not leave an older spin curve plottable.
+        s.cache.pop('spin', None)
+        # The kernel reads fixed canonical ACE type channels. Refuse to run when
+        # the active species selections (manual override, input/data labels,
+        # groups) do not coincide with those channels, rather than relabel counts.
+        from lammpkeeper.common.mapping import label_to_type
+        canonical = label_to_type('ace')
+        slots = {name: frozenset({canonical[name]}) for name in ('Fe_up', 'Fe_down')}
+        active_map = s.species_map.type_sets()
+        active = {name: active_map.get(name) for name in slots}
+        if active != slots:
+            def fmt(sel):
+                return 'missing' if sel is None else '{%s}' % ', '.join(map(str, sorted(sel)))
+            raise ValueError(
+                'Spin analysis uses canonical ACE type channels ('
+                + ', '.join(f'{n}={fmt(v)}' for n, v in slots.items())
+                + ') but the active species selections are ('
+                + ', '.join(f'{n}={fmt(v)}' for n, v in active.items())
+                + '); a manual override, input/data labels or groups changed them. '
+                'Remove the override or relabel types to the canonical ACE convention.')
         progress_msg("Computing spin evolution...")
         result = analyze_spin_evolution(s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs)
         s.cache['spin'] = result
