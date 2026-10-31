@@ -1,7 +1,9 @@
 # REV-ANALYSIS-5 — selected nonfinite z integrity
 
-Status: implemented and fully verified by the parent; publication in progress.
-`fix/rev-analysis-3-density-options` @ `7066061`); parent verification pending.
+Status: implemented and fully verified by the parent;
+[PR #38](https://github.com/dhwan0112/lammpkeeper/pull/38). Branch
+`fix/rev-analysis-5-nonfinite-z`, first built on REV-ANALYSIS-3 (`7066061`),
+then rebased onto main `0f93f15` after PR #37 merged.
 
 ## Problem (measured)
 
