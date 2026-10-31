@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Spin analysis species guard (REV-SESSION-2)
+
+- `analyze spin` (and `plot spin` through its cache path) fails with an error
+  naming the active and canonical selections when the active Fe_up/Fe_down
+  differ from the canonical ACE type channels (Fe_up = type 1, Fe_down = type 2),
+  for example after `set types 1=Fe_down 2=Fe_up`. Previously it counted fixed
+  type channels under the overridden labels. Canonical results are unchanged.
+
 ### Physical shell settings validation (REV-SESSION-1)
 
 - `set surface_z` rejects NaN/Inf; `set dt` and `set mass` reject NaN/Inf and

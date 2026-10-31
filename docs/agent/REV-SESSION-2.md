@@ -35,3 +35,18 @@ Tested; no new provenance system (REV-SESSION-3).
 Tests: `tests/test_spin_species.py` (7). On unmodified code 4 failed, 3 passed
 (swap, missing labels, stale-cache retry, batch exit code failed). With the fix
 all pass.
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `d72a123` (PR #39, which also
+  edits `shell.py` in the separate `set` handler). Registered
+  `test_spin_species` in `tests/run.py`; BACKLOG and CHANGELOG updated.
+- Failing-first reproduced by the parent on the rebased tree: the new module
+  against main's `shell.py` gave **3 passed, 4 failed**; with the fix **7 passed**.
+- The worker's one unexplained failure (98/1 when run from `tests/`) was traced
+  by the parent to `test_audit_workflow.test_audit_cli_errors_spaces_and_batch_quit`:
+  its subprocess `python -m lammps_post` needs the repository root as working
+  directory (`No module named lammps_post`). The same test fails the same way on
+  unmodified main code from `tests/`, and passes from the documented repo-root
+  invocation. Pre-existing working-directory assumption, not caused by this item.
+- Full verifier results follow (started only after this commit).
