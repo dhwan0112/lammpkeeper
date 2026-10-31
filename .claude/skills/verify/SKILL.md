@@ -68,11 +68,13 @@ paths a user takes: `LammpsPostShell.do_load('dump <fixture>')`, then
 `lammps_post.references.compute_reference_rdf` and `lammpkeeper.io.Box`. It never
 imports test helpers and never changes files under `tests/`.
 
-For the full regression suite and the CLI smoke run (`lkpr post --analyze all`,
-`lkpr prep` with ASE) use the sibling Cursor skill
-`bash .cursor/skills/verify-lkpr/scripts/verify.sh quick|full`. That script
-checks that analyses run and files appear; this skill checks that the numbers
-are right.
+This skill's default is the reference checks only (`verify_refs.py`, about
+5 s). The full regression suite (`tests/run.py`, with or without `LKPR_SLOW=1`)
+and the CLI smoke run (`lkpr post --analyze all`, `lkpr prep` with ASE; sibling
+Cursor skill `bash .cursor/skills/verify-lkpr/scripts/verify.sh quick|full`)
+are separate, slower tools: run them only when the task explicitly asks for
+them; otherwise mention them under NEXT_ACTION. The sibling script checks that
+analyses run and files appear; this skill checks that the numbers are right.
 
 ## Evidence
 
