@@ -45,6 +45,17 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   agent roadmap. Job lifecycle, Rust frontends, skills and MCP remain separate
   implementation stages.
 
+### Selected charge integrity (REV-ANALYSIS-1)
+
+- Charge evolution, charge profiles and oxidation fractions reject selected
+  NaN/Inf charges with a diagnostic instead of publishing invalid statistics
+  or silently treating bad charges as unoxidized atoms.
+- Validate only charges contributing to the requested species/region/profile;
+  preserve unrelated species, count-only oxygen, empty selections and finite
+  results. Unrestricted evolution/OR still need no spatial columns or box.
+- A failed shell retry clears only the attempted charge result, and one-shot
+  CLI analyses return failure for invalid selected charge input.
+
 ### Explicit charge-region integrity (REV-ANALYSIS-2)
 
 - Charge evolution and oxidation fraction reject an explicit `z_range` without

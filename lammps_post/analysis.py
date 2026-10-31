@@ -163,6 +163,13 @@ def _orthogonal_box(frame, analysis):
     return box, lengths
 
 
+def _require_finite_charges(charges, frame, analysis):
+    """Reject nonfinite contributing charges; keep empty selections valid."""
+    if not np.all(np.isfinite(charges)):
+        raise ValueError(f"{analysis} timestep {frame.get('timestep', 'unknown')}: "
+                         'selected charges contain nonfinite values (NaN/Inf)')
+
+
 def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E,
                              fe_type=1):
     """
@@ -183,6 +190,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     before consuming frames, even when charge data are absent.
     Slab endpoints are inclusive; charges equal to q_thr are not oxidized.
     Without a z restriction neither a Box nor orthogonality is required.
+    Nonfinite charges in the selected type/slab population raise ValueError.
 
     Args:
         frames:  list[dict] — Parsed trajectory frames from parse_dump
@@ -226,6 +234,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
             z = atoms[:, zi]
             fe_mask &= (z >= z_range[0]) & (z <= z_range[1])
         qs = atoms[fe_mask, qi]  # Charges of selected Fe atoms
+        _require_finite_charges(qs, fr, 'Charge evolution')
         n_fe_total = len(qs)
         # Convert timestep to picoseconds: step * dt_fs / 1000
         time.append(fr['timestep'] * dt_fs / 1000)
@@ -261,6 +270,8 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     bins exclude the upper box boundary with the digitize convention used here.
     Empty metal bins report zero mean charge, distinguished by fe_count == 0.
     If type selections overlap, the metal branch takes precedence for counts.
+    Nonfinite metal charges in valid bins raise ValueError; charges of count-only
+    species and atoms outside the bins do not contribute and are not validated.
 
     Args:
         frame:   dict — A single frame from parse_dump output
@@ -299,6 +310,8 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     charges = atoms[:, qi]
     bin_idx = np.digitize(z_all, bins) - 1
     valid = (bin_idx >= 0) & (bin_idx < z_bins)
+    _require_finite_charges(charges[valid & np.isin(types, list(fe_types))],
+                            frame, 'Charge z profile')
 
     for i in np.where(valid)[0]:
         # Average over the atoms in each occupied bin, not over the whole slab:
@@ -597,6 +610,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     data. Slab endpoints are inclusive; the charge threshold is strict.
     Without that restriction this is a pure scalar-charge population fraction,
     independent of box shape; only the z-restricted variant requires a slab.
+    Nonfinite charges in the selected type/slab population raise ValueError.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -634,6 +648,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
             z = atoms[:, zi]
             fe_mask &= (z >= z_range[0]) & (z <= z_range[1])
         qs = atoms[fe_mask, qi]
+        _require_finite_charges(qs, fr, 'Oxidation rate')
         time.append(fr['timestep'] * dt_fs / 1000)
         vals.append(np.sum(qs > q_thr) / len(qs) if len(qs) > 0 else 0)
 
