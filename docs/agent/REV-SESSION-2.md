@@ -1,6 +1,6 @@
 # REV-SESSION-2 — spin analysis vs. the active species map
 
-Status: implemented, parent verification pending.
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Problem
 With explicit canonical ACE input and `set types 1=Fe_down 2=Fe_up 3=O`, the
@@ -67,4 +67,9 @@ all pass.
   `0ea021e` and passes now (8 tests in the module). Targeted rerun with
   `LKPR_SLOW=1` of spin/slab/species-session/audit-workflow/numeric modules:
   **59 passed, 0 failed, 0 skipped**.
-- Final full verifier results follow (started only after the fix commit).
+- Final full verifier on `306a196` (started after the fix commit):
+  native **559 passed, 0 failed, 0 skipped**, forced NumPy **553 passed, 0
+  failed, 6 skipped** (known native-only checks); post analyses/real plots and
+  prep passed. Evidence: `/tmp/opencode/rs2b-native/20261101T015506-306a196-full`,
+  `/tmp/opencode/rs2b-numpy/20261101T015507-306a196-full`. Native extension not
+  rebuilt; pytest, MDAnalysis and HPC not run.
