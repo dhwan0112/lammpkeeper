@@ -1,6 +1,7 @@
 # REV-ANALYSIS-3 — density profile option validation
 
-Status: implemented (`aba2c1f`) and fully verified by the parent; publication in progress.
+Status: implemented (`aba2c1f`) and fully verified by the parent;
+[PR #37](https://github.com/dhwan0112/lammpkeeper/pull/37).
 
 ## Scope
 
