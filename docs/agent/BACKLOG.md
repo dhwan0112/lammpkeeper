@@ -42,7 +42,9 @@ not available in this harness and are not claimed as executed.
 
 Detailed execution steps, requirements and completion gates:
 [`INTERFACE-ROADMAP.md`](INTERFACE-ROADMAP.md). ARCH-1, EXEC-1/2 and AGENT-1
-are merged; UI-1 is next, UI-2 and AGENT-2 remain unimplemented.
+are merged; UI-1 is the next interface item but waits for the integrity batch
+(see "Priority decision 2026-11-01" under Suggested order). UI-2 and AGENT-2
+remain unimplemented.
 
 | Item | Depends on | Done when |
 | --- | --- | --- |
@@ -245,6 +247,22 @@ roadmap and logs):** main is `a974563` (PR #32). Measured repository state:
 - Order recommendation: finish/merge the already-verified integrity fixes
   (#26/#27) and other silent-result REV items before exposing those analyses
   through new interfaces. UI-1 may proceed for `thermo.summary` only.
+
+**Update and priority decision (2026-11-01, maintainer approved):**
+
+- Since the checkpoint: PR #26 (REV-ANALYSIS-1) and #27 (REV-ANALYSIS-2) were
+  merged after resolving their conflicts against main and re-verifying; #34
+  (REV-TEST-2) fixed a load-sensitive EXEC-2 timeout test found during that
+  work; #35 published the maintainer's local `skills/verify-reference-checks`
+  work as VERIFY-REF-1/RDF-PROV-1. Final merged-main check after #27: native
+  **519/0/0** (`/tmp/opencode/main-after-27/20261101T003923-9b40f04-full`).
+- The checkpoint bullets above about #26/#27 being open and the local branch
+  being unlogged are now historical.
+- **Order:** the silent-result integrity batch comes before UI-1 and before GEN-2
+  resumes: REV-ANALYSIS-3 → REV-ANALYSIS-5 → REV-SESSION-1 → REV-SESSION-2 →
+  REV-ANALYSIS-4 → REV-IO-4 → REV-IO-6 → REV-SESSION-3. One item per branch/PR,
+  failing-first. After the batch: UI-1, then the GEN-2 ADR-0005 approval review.
+  `INTERFACE-ROADMAP.md` §1 and §12 follow this order.
 
 **Independent prior-work review (2026-10-29, maintainer requested):** pause GEN-2
 implementation and independently inspect prior Sol-authored work. Model authorship
