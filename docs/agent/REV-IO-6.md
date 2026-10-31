@@ -1,6 +1,6 @@
 # REV-IO-6 — validate dump and input boundary flags
 
-Status: implemented, parent verification pending (branch `fix/rev-io-6-boundary-flags`).
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Problem (measured)
 `_BOUNDARY_TOKEN = ^[pfsm]{1,2}$` accepted single letters and mixed faces, while
@@ -49,4 +49,10 @@ After: 7 pass with native and with `LKPR_NO_NATIVE=1`.
   inputs write literal styles and are unaffected.
 - Failing-first reproduced by the parent: against main's `parsers.py`
   **4 passed, 3 failed**; with the fix **7 passed**.
-- Full verifier results follow (started after this commit).
+- Full verifier on `f7c97f6`: native **575 passed, 0 failed, 0 skipped**;
+  forced NumPy **566 passed, 0 failed, 9 skipped** (six known native-only checks
+  plus the three REV-IO-4 native-comparison tests; all PASS natively). Post
+  analyses/real plots and prep passed. Evidence:
+  `/tmp/opencode/io6-native/20261101T021231-f7c97f6-full`,
+  `/tmp/opencode/io6-numpy/20261101T021233-f7c97f6-full`. Native extension not
+  rebuilt; pytest, MDAnalysis and HPC not run.
