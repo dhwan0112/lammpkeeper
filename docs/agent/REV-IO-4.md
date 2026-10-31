@@ -1,6 +1,7 @@
 # REV-IO-4 — '#' is ordinary text in dump atom rows
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #42](https://github.com/dhwan0112/lammpkeeper/pull/42).
 
 ## Defect (measured)
 The NumPy fallback in `DumpReader._parse_block` called `np.loadtxt` with its
