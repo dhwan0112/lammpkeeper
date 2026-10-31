@@ -1,7 +1,7 @@
 # REV-ANALYSIS-1 — selected charge integrity
 
-Status: implemented and verified in `febe78d`; published as
-[PR #26](https://github.com/dhwan0112/lammpkeeper/pull/26), awaiting merge approval.
+Status: implemented and verified in `febe78d`; re-verified after merging main
+(`b74eebc`); published as [PR #26](https://github.com/dhwan0112/lammpkeeper/pull/26), merge approved 2026-11-01.
 
 ## Scope and context
 
@@ -112,7 +112,7 @@ issues remain tracked in REV-VERIFY-*; this work does not close them.
 
 ## Conflict resolution against main (2026-11-01, local)
 
-Main advanced to `a974563` (PRs #28–33) after this branch was verified on
+Main advanced to `0ed2b8a` (PR #33, including PRs #28–32) after this branch was verified on
 `84ee8d1`. Merged `origin/main` into this branch locally as `b74eebc` (merge,
 not rebase; no force-push). Conflicts were limited to bookkeeping files:
 
@@ -139,8 +139,8 @@ Measured after the merge (expanded Python 3.12, isolated HOME):
 - The native extension was the existing ignored build (SHA-256 prefix
   `944b5832c317b418`), copied into the worktree and not rebuilt.
 - Fixtures, goldens and runtime code outside the merged files are unchanged.
-  Pytest, MDAnalysis and HPC were not run. Not pushed; merge still needs
-  maintainer approval.
+  Pytest, MDAnalysis and HPC were not run. The maintainer approved pushing
+  and merging on 2026-11-01.
 
 ## Next bounded target
 
