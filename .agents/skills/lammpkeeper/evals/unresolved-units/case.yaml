@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: unresolved-units
+expected_outcome: |
+  Three selected rows give temperature mean 4 and pressure mean 20 in unresolved
+  native units. Report omitted minimization/incompatible block and unresolved-unit
+  diagnostics without inferring bar, atm or K from another source.
+context:
+  scaffold_script: place-files.sh

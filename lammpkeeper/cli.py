@@ -4,9 +4,9 @@ Top-level entry point for the `lkpr` command (LammpKeeper).
 Keep routing separate from subcommand semantics: `lkpr prep ...` and
 `lkpr post ...` forward remaining arguments verbatim to `lammps_pre.cli.main`
 and `lammps_post.cli.main`. Those modules own option parsing, noninteractive
-execution, failure status and scientific behavior. The top-level parser owns
-only menu/help/version/unknown-command handling. It must not duplicate or
-partially reinterpret flags that belong to a sub-CLI.
+execution, failure status and scientific behavior. Top-level routing adds only
+menu/help/version/unknown-command handling and the exec/run adapters. It
+must not duplicate or partially reinterpret flags that belong to a sub-CLI.
 
 `lkpr` with no arguments (in a terminal) or `lkpr shell` opens the unified
 interactive session (lammpkeeper.shell), where prep and post are chosen and
@@ -29,7 +29,7 @@ def _build_parser():
     """Parser used only for `lkpr -h`, `lkpr --version`, and error messages.
 
     Subcommand arguments are intentionally NOT declared here: they are owned by
-    each subcommand's own parser and forwarded untouched by main(). The three
+    each subcommand's own parser and forwarded untouched by main(). The
     sub-parsers below exist solely so that `lkpr -h` lists the commands.
     """
     parser = argparse.ArgumentParser(
@@ -49,6 +49,10 @@ def _build_parser():
     sub.add_parser('shell', add_help=False,
                    help='interactive session: choose prep or post, switch '
                         'between them (default when run in a terminal)')
+    sub.add_parser('exec', add_help=False,
+                   help='bounded structured execution (JSON request/result)')
+    sub.add_parser('run', add_help=False,
+                   help='process-owned local execution (JSON job snapshot)')
     return parser
 
 
@@ -65,6 +69,14 @@ def main(argv=None):
             return 0
 
     command, rest = argv[0], argv[1:]
+
+    if command == 'exec':
+        from lammpkeeper.execution import main as execution_main
+        return execution_main(rest)
+
+    if command == 'run':
+        from lammpkeeper.jobs import main as jobs_main
+        return jobs_main(rest)
 
     if command == 'shell':
         from lammpkeeper.shell import main as shell_main
