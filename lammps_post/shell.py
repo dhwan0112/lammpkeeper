@@ -1648,7 +1648,13 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # These closures likewise delay whole-trajectory work until the runner.
         jobs.append(lambda: self._analyze_dissociation([]))
         if s.ff == 'ace':
-            jobs.append(lambda: self._analyze_spin([]))
+            # 'analyze all' runs optional analyses that apply; an explicit
+            # 'analyze spin' still fails. Skip visibly, like the surface skip.
+            mismatch = self._spin_channel_mismatch()
+            if mismatch:
+                jobs.append(lambda m=mismatch: print(C.warn(f"  Skipping spin: {m}")))
+            else:
+                jobs.append(lambda: self._analyze_spin([]))
         jobs.append(lambda: self._analyze_msd([], _batch=True))
         return jobs
 
@@ -2054,6 +2060,31 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             progress_msg(f"Dissociated O atoms: {result['n_dissociated'][-1]}")
         print(C.ok("  Done. Use 'plot dissociation' to visualize."))
 
+    def _spin_channel_mismatch(self):
+        """Describe why active species cannot use the spin kernel, or return None.
+
+        The kernel reads fixed canonical ACE type channels (Fe_up and Fe_down
+        slots). A manual override, input/data labels or groups that select other
+        types (or no such labels) would put those counts under wrong labels.
+        """
+        from lammpkeeper.common.mapping import label_to_type
+        canonical = label_to_type('ace')
+        slots = {name: frozenset({canonical[name]}) for name in ('Fe_up', 'Fe_down')}
+        active_map = self.state.species_map.type_sets()
+        active = {name: active_map.get(name) for name in slots}
+        if active == slots:
+            return None
+
+        def fmt(sel):
+            """Render one selection for the diagnostic."""
+            return 'missing' if sel is None else '{%s}' % ', '.join(map(str, sorted(sel)))
+        return ('Spin analysis uses canonical ACE type channels ('
+                + ', '.join(f'{n}={fmt(v)}' for n, v in slots.items())
+                + ') but the active species selections are ('
+                + ', '.join(f'{n}={fmt(v)}' for n, v in active.items())
+                + '); a manual override, input/data labels or groups changed them. '
+                'Remove the override or relabel types to the canonical ACE convention.')
+
     def _analyze_spin(self, opts):
         """Cache ACE-specific type-channel spin evolution; reject other force fields."""
         if not self._require_dump():
@@ -2061,6 +2092,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         s = self.state
         if s.ff != 'ace':
             raise ValueError('Spin analysis is not applicable to the current force field')
+        # A failed or rejected retry must not leave an older spin curve plottable.
+        s.cache.pop('spin', None)
+        # Refuse rather than relabel counts when the active map is not canonical.
+        mismatch = self._spin_channel_mismatch()
+        if mismatch:
+            raise ValueError(mismatch)
         progress_msg("Computing spin evolution...")
         result = analyze_spin_evolution(s.dump_frames, s.dump_col_idx, dt_fs=s.dt_fs)
         s.cache['spin'] = result
