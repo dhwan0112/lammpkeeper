@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Stale cached results (REV-SESSION-3)
+
+- `plot` and `export` no longer publish cached results after the loaded dump
+  file was modified or deleted. The session cache is discarded and the command
+  fails with a reload message, so batch and one-shot runs exit nonzero. An
+  unchanged source costs one `os.stat`. Log/data-derived results are not
+  covered by this check.
+
 ### Boundary flag validation (REV-IO-6)
 
 - Invalid dump `BOX BOUNDS` flags (single letters, mixed `p` faces, unknown

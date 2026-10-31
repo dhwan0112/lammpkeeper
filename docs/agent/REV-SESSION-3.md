@@ -32,3 +32,15 @@ Agg PNG save, FIFO-driven real batch CLI exit code 1). On unmodified code:
 2 passed, 5 failed (changed plot, changed export csv/latex/summary, deleted
 source, `_ensure_cache` reuse, batch exit code). With the fix: 7 passed. Related
 modules (10, `LKPR_SLOW=1`): 102 passed, 0 failed, 0 skipped.
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `b86379b` (PR #43). Registered
+  `test_stale_cache`; BACKLOG and CHANGELOG updated.
+- Failing-first reproduced by the parent: against main's `shell.py`/`state.py`
+  **2 passed, 5 failed**; with the fix **7 passed**.
+- Parent review note: on a changed dump the whole session cache is cleared,
+  including results derived only from a loaded log (for example performance or
+  thermo summaries). That is conservative: those results are recomputed on
+  demand from the still-loaded log; nothing stale is published.
+- Full verifier results follow (started after this commit).
