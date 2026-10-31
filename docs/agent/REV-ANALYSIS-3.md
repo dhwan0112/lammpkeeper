@@ -1,10 +1,11 @@
 # REV-ANALYSIS-3 — density profile option validation
 
-Status: implemented; parent verification pending (not yet committed).
+Status: implemented (`aba2c1f`) and fully verified by the parent; publication in progress.
 
 ## Scope
 
-Branch `fix/rev-analysis-3-density-options` from `main` `9b40f04`. Addresses
+Branch `fix/rev-analysis-3-density-options`, implemented on `main` `9b40f04` and
+rebased (unpublished, no force-push) onto `6bf1a3d` (PR #36). Addresses
 F-ANALYSIS-3: `compute_density_profile(z_range=(1, 1), n_bins=2)` returned
 centers `[1, 1]` and density `[NaN, inf]` with NumPy warnings.
 
@@ -47,3 +48,19 @@ box pin, which already held). After the fix: **9 passed**. Combined with
 Only the analysis function is validated. Nonfinite atom z values, `species_type`
 and other review items are separate. Fixtures and goldens are unchanged. The
 full verifier has not been run here.
+
+## Parent verification (2026-11-01, measured)
+
+- Failing-first reproduced independently by the parent on the rebased branch:
+  the new module against main's `analysis.py` gave **2 passed, 7 failed**; with
+  the fix **9 passed, 0 failed**.
+- Native full verifier: **531 passed, 0 failed, 0 skipped**; post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/ra3-native/20261101T013004-aba2c1f-full`. The run started a
+  moment before commit `7066061`, so it records HEAD `aba2c1f` with three dirty
+  files; those were the test registration, BACKLOG and CHANGELOG edits committed
+  unchanged as `7066061`, and the log shows all nine new tests ran.
+- Forced NumPy: **525 passed, 0 failed, 6 skipped** (known native-only checks).
+  Evidence: `/tmp/opencode/ra3-numpy/20261101T013006-7066061-full`.
+- Native extension: existing ignored build, not rebuilt. Pytest, MDAnalysis and
+  HPC were not run.
