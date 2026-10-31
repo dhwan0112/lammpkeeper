@@ -35,3 +35,18 @@ parsed in Python for both paths. No native change.
 `tests/test_boundary_flags.py` (7 tests). Before the fix: 3 failed, 4 passed
 (the other 4 cover valid mappings, no-flags dumps and unchanged valid input).
 After: 7 pass with native and with `LKPR_NO_NATIVE=1`.
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `214b975` (PR #42). Registered
+  `test_boundary_flags`; BACKLOG and CHANGELOG updated.
+- The parent checked the rules against the official LAMMPS `boundary` page
+  (docs.lammps.org/boundary.html, release 30Sep2026): each of x, y, z is p, s, f
+  or m, one or two letters, and "the p style must be applied to both faces of a
+  dimension". This matches the validation; the worker's assumption is confirmed.
+- Reviewed consequence: an input `boundary` that uses an unresolved variable
+  (e.g. `${bx}`) now raises instead of being stored verbatim. Prep-generated
+  inputs write literal styles and are unaffected.
+- Failing-first reproduced by the parent: against main's `parsers.py`
+  **4 passed, 3 failed**; with the fix **7 passed**.
+- Full verifier results follow (started after this commit).
