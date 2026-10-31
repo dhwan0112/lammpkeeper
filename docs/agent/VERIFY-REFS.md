@@ -1,7 +1,7 @@
 # VERIFY-REF-1 and RDF-PROV-1 — reference-value verify skill and RDF frame window
 
 Status: implemented by the maintainer; integrated and fully verified by the
-agent; publication in progress.
+agent; [PR #35](https://github.com/dhwan0112/lammpkeeper/pull/35).
 Branch: `skills/verify-reference-checks` (maintainer commits `7367ab3`,
 `a99318f`, `7cfc16a`, 2026-10-31), main merged in as `ee4c5d5`.
 

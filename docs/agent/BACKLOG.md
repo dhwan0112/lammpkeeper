@@ -57,8 +57,8 @@ are merged; UI-1 is next, UI-2 and AGENT-2 remain unimplemented.
 
 | Item | Status | Done when |
 | --- | --- | --- |
-| VERIFY-REF-1 · P3 · Reference-value verify skill | verified (native **522/0/0**, NumPy **516/0/6**); publication pending | `.claude/skills/verify` runs six kind-tagged checks (analytic/external/fixture/snapshot) on real code paths with stated tolerances; snapshot PASS is labelled regression-only. See `docs/agent/VERIFY-REFS.md`. |
-| RDF-PROV-1 · P3 · RDF frame-window provenance | verified with VERIFY-REF-1; publication pending | `compute_rdf` returns `frame_window` and legend/exports show it; g(r) and goldens unchanged (golden test hashes numeric fields only, fingerprint identical). CSV export gains a `#` comment line: compatibility note recorded. See `docs/agent/VERIFY-REFS.md`. |
+| VERIFY-REF-1 · P3 · Reference-value verify skill | done (PR #35; native **522/0/0**, NumPy **516/0/6**) | `.claude/skills/verify` runs six kind-tagged checks (analytic/external/fixture/snapshot) on real code paths with stated tolerances; snapshot PASS is labelled regression-only. See `docs/agent/VERIFY-REFS.md`. |
+| RDF-PROV-1 · P3 · RDF frame-window provenance | done (PR #35, with VERIFY-REF-1) | `compute_rdf` returns `frame_window` and legend/exports show it; g(r) and goldens unchanged (golden test hashes numeric fields only, fingerprint identical). CSV export gains a `#` comment line: compatibility note recorded. See `docs/agent/VERIFY-REFS.md`. |
 
 Remaining items use separate branches/PRs, not an authorization for package moves,
 legacy removals or HPC execution. Fix relevant integrity defects before exposing
