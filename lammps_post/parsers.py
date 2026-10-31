@@ -139,28 +139,71 @@ ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
 _INDEX_RELEASE_BYTES = 32 * 1024 ** 2
 
 
-# One boundary token per axis in 'ITEM: BOX BOUNDS' ('pp', 'ff', 'fs', 'mm', ...).
-_BOUNDARY_TOKEN = re.compile(r'^[pfsm]{1,2}$')
+# One boundary token per axis in 'ITEM: BOX BOUNDS': a lo-face and a hi-face letter.
+_BOUNDARY_TOKEN = re.compile(r'^[pfsm]{2}$')
+# One word of an input-script 'boundary' command: one letter (both faces) or two.
+_INPUT_BOUNDARY_WORD = re.compile(r'^[pfsm]{1,2}$')
+
+
+def _check_face_pair(token, what):
+    """Raise ValueError unless a face pair keeps 'p' on both faces or neither."""
+    if ('p' in token) and token != 'pp' and token != 'p':
+        raise ValueError(f"{what} {token!r}: periodic 'p' cannot be mixed with a non-periodic face")
 
 
 def parse_boundary_flags(line):
     """
     Per-axis boundary flags from an 'ITEM: BOX BOUNDS ...' header line.
 
-    LAMMPS writes one token per axis after the keyword, preceded by
-    'xy xz yz' for triclinic boxes, e.g. 'ITEM: BOX BOUNDS pp pp ff'.
+    LAMMPS writes one two-letter token per axis (lo face, hi face; letters
+    p, f, s, m) after the keyword, preceded by 'xy xz yz' for triclinic boxes,
+    e.g. 'ITEM: BOX BOUNDS pp pp ff'.
 
     Returns:
         tuple[str, str, str] — e.g. ('pp', 'pp', 'ff'), or None when the line
         carries no flags (dumps written by very old LAMMPS versions).
+
+    Raises:
+        ValueError: flags are present but are not exactly three valid tokens
+        (wrong count/length, unknown letters, or 'p' mixed with another face).
+        Invalid flags must never become authoritative periodicity.
     """
     tokens = line.split()[3:]
-    if len(tokens) < 3:
+    if tokens[:3] == ['xy', 'xz', 'yz']:
+        tokens = tokens[3:]
+    if not tokens:
         return None
-    flags = tuple(tokens[-3:])
-    if not all(_BOUNDARY_TOKEN.match(t) for t in flags):
-        return None
-    return flags
+    if len(tokens) != 3:
+        raise ValueError(f"invalid BOX BOUNDS boundary flags {tokens!r}: expected three tokens")
+    for t in tokens:
+        if not _BOUNDARY_TOKEN.match(t):
+            raise ValueError(f"invalid BOX BOUNDS boundary token {t!r}: expected two letters from p, f, s, m")
+        _check_face_pair(t, "invalid BOX BOUNDS boundary token")
+    return tuple(tokens)
+
+
+def parse_input_boundary(words, where='boundary'):
+    """
+    Validate the three style words of an input-script 'boundary' command.
+
+    Each word is one letter (both faces) or two (lo, hi) from p, f, s, m, and
+    'p' must be on both faces or neither ('p p f' and 'pp ff fs' are valid;
+    'pf', 'potato' and a wrong word count are rejected visibly).
+
+    Returns:
+        list[str] — the words unchanged, so valid scripts keep their old form.
+    """
+    words = list(words)
+    if len(words) != 3:
+        raise ValueError(f"{where}: boundary needs exactly three style words, got {words!r}")
+    for w in words:
+        if not _INPUT_BOUNDARY_WORD.match(w):
+            raise ValueError(f"{where}: invalid boundary word {w!r}: expected p, f, s, m or a two-letter pair")
+        try:
+            _check_face_pair(w, "boundary word")
+        except ValueError as exc:
+            raise ValueError(f"{where}: {exc}") from None
+    return words
 
 
 def pbc_from_boundary(boundary):
@@ -362,8 +405,11 @@ class DumpReader:
             raise ValueError(f"{self.filepath}: triclinic dump boxes require box_model=True and "
                              f"the complete xy xz yz header (step {timestep})")
         flag_tokens = tokens[3:] if restricted else tokens
-        boundary = parse_boundary_flags(bounds_header)
-        if flag_tokens and (len(flag_tokens) != 3 or boundary is None):
+        try:
+            boundary = parse_boundary_flags(bounds_header)
+        except ValueError as exc:
+            raise ValueError(f"{self.filepath}: malformed boundary flags at step {timestep}: {exc}") from None
+        if flag_tokens and boundary is None:
             raise ValueError(f"{self.filepath}: malformed boundary flags at step {timestep}")
         if first:
             self.boundary = boundary
@@ -1801,10 +1847,11 @@ def parse_input(filepath):
                 raise ValueError(f"{filepath}: unsupported units style {config['units']!r}; supported: metal, real")
         elif cmd == 'atom_style' and len(parts) >= 2:
             config['atom_style'] = parts[1]
-        elif cmd == 'boundary' and len(parts) >= 4:
-            if config['boundary'] and config['boundary'] != parts[1:4]:
+        elif cmd == 'boundary':
+            words = parse_input_boundary(parts[1:], where=f"{filepath}: boundary command")
+            if config['boundary'] and config['boundary'] != words:
                 raise ValueError(f"{filepath}: changing boundary requires separate trajectories/configuration")
-            config['boundary'] = parts[1:4]
+            config['boundary'] = words
         elif cmd == 'pair_style':
             config['pair_style'] = ' '.join(parts[1:])
             mappings.clear()

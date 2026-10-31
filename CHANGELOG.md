@@ -12,6 +12,17 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Boundary flag validation (REV-IO-6)
+
+- Invalid dump `BOX BOUNDS` flags (single letters, mixed `p` faces, unknown
+  letters, wrong count) and invalid input-script `boundary` words now raise a
+  `ValueError` naming the file and token. Previously `p p f` in a dump became
+  fully nonperiodic and `pf` became nonperiodic without warning.
+- Input `boundary` lines with fewer than three words, or with unresolved
+  variables, are no longer silently ignored or stored verbatim; they raise.
+  Valid single-letter input (`boundary p p f`) and flag-less old dumps are
+  unchanged.
+
 ### Dump '#' tokens (REV-IO-4)
 
 - The NumPy dump fallback no longer treats `#` in atom rows as a comment. A
