@@ -83,6 +83,42 @@ are copied from this branch. MDAnalysis is unavailable.
 Counts are for this independent branch from main, excluding PR #26's eighteen
 tests; they are not a reduction in coverage from that separate branch.
 
+## Conflict resolution against main (2026-11-01, local)
+
+Main advanced to `a974563` (PRs #28–33) after this branch was verified on
+`84ee8d1`. Merged `origin/main` into this branch locally as `2ad6684` (merge,
+not rebase; no force-push). Conflicts were limited to bookkeeping files:
+`CHANGELOG.md` (main's newer sections first, then this item), `tests/run.py`
+(union with main's `test_execution_contract`/`test_jobs`, each module once) and
+`docs/agent/BACKLOG.md` (this item's row; main's REV-ANALYSIS-1 row).
+`analysis.py` merged without conflict. A scratch merge with REV-ANALYSIS-1
+(PR #26) also auto-merged `analysis.py`; combined charge/region/analysis tests
+passed **60/0/1** (opt-in slow golden skipped). After one PR merges, the other
+will again conflict only in these bookkeeping files.
+
+Measured after the merge (expanded Python 3.12, isolated HOME):
+
+- First native full verifier, run concurrently with another full verifier:
+  **500 passed, 1 failed**. The failure was
+  `test_jobs.test_overall_timeout_includes_handshake_and_execution_and_reaps`
+  (EXEC-2, unchanged by this branch): `execution.started` did not exist because
+  the 0.3 s overall deadline expired before the fake child reached execution.
+  Evidence: `/tmp/opencode/ra2-native/20261101T000354-2ad6684-full`.
+  The same test then passed 15/15 standalone runs here and 15/15 on unmodified
+  `origin/main`, both while another verifier ran. Inferred: a load-sensitive
+  timing assumption in that test, not a regression from this merge. An earlier
+  targeted run also had one unnamed failure (name not captured), then 8/8 clean
+  reruns; it is probably the same test but this is not established.
+- Native full verifier rerun without concurrent load: **501 passed, 0 failed,
+  0 skipped**; post analyses/real plots and prep artifacts/script syntax passed.
+  Evidence: `/tmp/opencode/ra2-native-rerun/20261101T000859-2ad6684-full`.
+- Forced NumPy: **495 passed, 0 failed, 6 skipped** (the six known native-only
+  checks, all PASS natively). Evidence:
+  `/tmp/opencode/ra2-numpy/20261101T001312-2ad6684-full`.
+- Native extension: existing ignored build (SHA-256 prefix `944b5832c317b418`),
+  copied into the worktree, not rebuilt. Pytest, MDAnalysis and HPC not run.
+  Not pushed; merge still needs maintainer approval.
+
 ## Next item
 
 REV-ANALYSIS-3: reject invalid density ranges/bin counts before histogram
