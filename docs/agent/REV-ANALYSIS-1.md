@@ -110,6 +110,38 @@ issues remain tracked in REV-VERIFY-*; this work does not close them.
   passes; fixtures, goldens, ADRs and generated-input/template sources are
   unchanged. Native artifacts remain outside the repository.
 
+## Conflict resolution against main (2026-11-01, local)
+
+Main advanced to `a974563` (PRs #28–33) after this branch was verified on
+`84ee8d1`. Merged `origin/main` into this branch locally as `b74eebc` (merge,
+not rebase; no force-push). Conflicts were limited to bookkeeping files:
+
+- `CHANGELOG.md`: kept main's newer AGENT-1/EXEC-2/EXEC-1 sections, then this
+  item's section.
+- `tests/run.py`: union of main's `test_execution_contract`/`test_jobs` and this
+  branch's two charge modules; every module registered once.
+- `docs/agent/BACKLOG.md`: this item's detailed row; main's REV-ANALYSIS-2 row.
+
+`analysis.py` and `shell.py` merged without conflict; the shell edits only clear
+the attempted charge cache before retry and do not touch main's EXEC-1 code.
+A separate scratch merge of this branch with REV-ANALYSIS-2 also auto-merged
+`analysis.py`; the combined charge/region/analysis tests passed **60/0/1** (the
+skip is the opt-in slow golden). That scratch merge is not a published branch.
+
+Measured after the merge (expanded Python 3.12, isolated HOME):
+
+- Native full verifier: **511 passed, 0 failed, 0 skipped**; post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/ra1-native/20261101T000352-b74eebc-full`.
+- Forced NumPy: **505 passed, 0 failed, 6 skipped** (the six known native-only
+  checks, all PASS in the native run). Evidence:
+  `/tmp/opencode/ra1-numpy/20261101T000905-b74eebc-full`.
+- The native extension was the existing ignored build (SHA-256 prefix
+  `944b5832c317b418`), copied into the worktree and not rebuilt.
+- Fixtures, goldens and runtime code outside the merged files are unchanged.
+  Pytest, MDAnalysis and HPC were not run. Not pushed; merge still needs
+  maintainer approval.
+
 ## Next bounded target
 
 REV-ANALYSIS-2 remains open: an explicit charge/OR region must not silently
