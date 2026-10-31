@@ -1,6 +1,7 @@
 # REV-SESSION-2 — spin analysis vs. the active species map
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #40](https://github.com/dhwan0112/lammpkeeper/pull/40).
 
 ## Problem
 With explicit canonical ACE input and `set types 1=Fe_down 2=Fe_up 3=O`, the
