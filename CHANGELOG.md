@@ -63,6 +63,15 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 - A failed shell retry clears only the attempted charge result, and one-shot
   CLI analyses return failure for invalid selected charge input.
 
+### Explicit charge-region integrity (REV-ANALYSIS-2)
+
+- Charge evolution and oxidation fraction reject an explicit `z_range` without
+  a `z` column before iterating frames, checking geometry or returning for
+  absent charge data. A requested region no longer silently becomes global.
+- Unrestricted scalar calculations still need neither z nor a box; valid
+  inclusive regions, type unions, threshold comparisons and empty selections
+  retain their previous results.
+
 ### Job result copyback safety (REV-PREP-1)
 
 - Preflight every matching result path before any `cp -a` copyback; refuse
