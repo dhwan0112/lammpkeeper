@@ -1,6 +1,6 @@
 # REV-TEST-2 — load-tolerant overall job timeout test
 
-Status: implemented; full verification in progress.
+Status: implemented and fully verified; publication in progress.
 Branch: `fix/rev-test-2-job-timeout-flake`, from main `f44f043` (PR #26 merged).
 Requested by the maintainer on 2026-11-01: record the flaky test, then fix it.
 
@@ -63,7 +63,17 @@ The test now takes about 5 s instead of about 0.6 s.
 - Per-phase-deadline mutant: **killed**
   (`AssertionError: ('execution', 3.0, 4.896...)`); original test: survived.
 
-Full verifier results are recorded below when complete.
+Full verifier on `97201ae` (expanded Python 3.12, isolated HOME). Both runs
+were started at the same time on purpose, so the timeout test ran under load:
+
+- Native: **511 passed, 0 failed, 0 skipped**; post analyses/real plots and prep
+  artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/rt2-native/20261101T002845-97201ae-full`.
+- Forced NumPy: **505 passed, 0 failed, 6 skipped**; the six are the known
+  native-only checks, all PASS in the native run. Evidence:
+  `/tmp/opencode/rt2-numpy/20261101T002847-97201ae-full`.
+- Native extension: existing ignored build (SHA-256 prefix `944b5832c317b418`),
+  not rebuilt. Pytest, MDAnalysis and HPC were not run.
 
 ## Limits
 
