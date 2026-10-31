@@ -170,6 +170,21 @@ def _require_finite_charges(charges, frame, analysis):
                          'selected charges contain nonfinite values (NaN/Inf)')
 
 
+def _require_finite_z(z, frame, analysis):
+    """Reject nonfinite z of atoms that contribute to an analysis.
+
+    A NaN/Inf coordinate has an unknown location, so the atom is neither inside
+    nor outside any slab, band or histogram range; dropping it would silently
+    dilute fractions or lose counts. Callers pass only the selected population,
+    so unrelated species and empty selections stay valid.
+    """
+    bad = int(np.size(z) - np.count_nonzero(np.isfinite(z)))
+    if bad:
+        raise ValueError(f"{analysis} timestep {frame.get('timestep', 'unknown')}: "
+                         f'{bad} selected z coordinate(s) are nonfinite (NaN/Inf); '
+                         'the analysis requires finite z')
+
+
 def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E,
                              fe_type=1):
     """
@@ -190,7 +205,8 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
     before consuming frames, even when charge data are absent.
     Slab endpoints are inclusive; charges equal to q_thr are not oxidized.
     Without a z restriction neither a Box nor orthogonality is required.
-    Nonfinite charges in the selected type/slab population raise ValueError.
+    Nonfinite charges in the selected type/slab population raise ValueError, as
+    does nonfinite z of a selected-type atom when z_range is given.
 
     Args:
         frames:  list[dict] — Parsed trajectory frames from parse_dump
@@ -232,6 +248,9 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
         # Optionally restrict to a z-slab (e.g., surface region only)
         if z_range is not None and zi is not None:
             z = atoms[:, zi]
+            # Slab membership of a metal with nonfinite z is unknown: validate
+            # before filtering so it cannot silently shrink the denominator.
+            _require_finite_z(z[fe_mask], fr, 'Charge evolution')
             fe_mask &= (z >= z_range[0]) & (z <= z_range[1])
         qs = atoms[fe_mask, qi]  # Charges of selected Fe atoms
         _require_finite_charges(qs, fr, 'Charge evolution')
@@ -272,6 +291,7 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     If type selections overlap, the metal branch takes precedence for counts.
     Nonfinite metal charges in valid bins raise ValueError; charges of count-only
     species and atoms outside the bins do not contribute and are not validated.
+    Nonfinite z of any metal or count-only selected atom raises ValueError.
 
     Args:
         frame:   dict — A single frame from parse_dump output
@@ -308,6 +328,10 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     z_all = atoms[:, zi]
     types = atoms[:, ti].astype(int)
     charges = atoms[:, qi]
+    # Metal and count-only species both consume z (digitize would send NaN past
+    # the last bin and silently drop the atom).
+    _require_finite_z(z_all[np.isin(types, list(fe_types) + list(o_types))],
+                      frame, 'Charge z profile')
     bin_idx = np.digitize(z_all, bins) - 1
     valid = (bin_idx >= 0) & (bin_idx < z_bins)
     _require_finite_charges(charges[valid & np.isin(types, list(fe_types))],
@@ -587,6 +611,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
     instantaneous population fraction, not a time derivative or reaction flux.
     The fixed surface and instantaneous selected population define the metric;
     an empty population returns zero. No boundary wrapping or bond test is used.
+    Nonfinite z of a selected atom raises ValueError rather than diluting the fraction.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -613,6 +638,7 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
         types = atoms[:, ti].astype(int)
         o_mask = np.isin(types, list(o_types))
         o_z = atoms[o_mask, zi]
+        _require_finite_z(o_z, fr, 'OAR')
         n_o = len(o_z)
         n_below = int(np.sum(o_z < z_surf))
 
@@ -640,7 +666,8 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
     data. Slab endpoints are inclusive; the charge threshold is strict.
     Without that restriction this is a pure scalar-charge population fraction,
     independent of box shape; only the z-restricted variant requires a slab.
-    Nonfinite charges in the selected type/slab population raise ValueError.
+    Nonfinite charges in the selected type/slab population raise ValueError, as
+    does nonfinite z of a selected-type atom when z_range is given.
 
     Args:
         frames:  list[dict] — Trajectory frames
@@ -676,6 +703,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
         fe_mask = np.isin(atoms[:, ti], list(fe_types))
         if z_range is not None and zi is not None:
             z = atoms[:, zi]
+            _require_finite_z(z[fe_mask], fr, 'Oxidation rate')
             fe_mask &= (z >= z_range[0]) & (z <= z_range[1])
         qs = atoms[fe_mask, qi]
         _require_finite_charges(qs, fr, 'Oxidation rate')
@@ -704,6 +732,7 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     remaining in the total-population denominator.
     The shared lower band edge belongs to near-surface, while its upper edge
     is excluded. A minimum z above the surface is retained, not clipped.
+    Nonfinite z of a selected atom raises ValueError rather than diluting fractions.
 
     Args:
         frames:    list[dict] — Trajectory frames
@@ -733,6 +762,7 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
         atoms = fr['atoms']
         o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
+        _require_finite_z(o_z, fr, 'Penetration')
 
         if len(o_z) == 0:
             time.append(fr['timestep'] * dt_fs / 1000)
@@ -775,7 +805,8 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
     Here adsorption means strictly below surface_z, unlike the deeper offset
     band in analyze_penetration(). Depth is clipped at zero when all selected
     atoms are above the surface. Statistics describe each instantaneous
-    population, not fixed atom identities. Smoothing averages frame samples,
+    population, not fixed atom identities. Nonfinite z of a selected atom raises
+    ValueError. Smoothing averages frame samples,
     not physical-duration intervals, and propagates NaNs across its window.
 
     Args:
@@ -813,6 +844,7 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
         atoms = fr['atoms']
         o_mask = np.isin(atoms[:, ti], list(o_types))
         o_z = atoms[o_mask, zi]
+        _require_finite_z(o_z, fr, 'Penetration trend')
         time_arr.append(fr['timestep'] * dt_fs / 1000)
         if len(o_z) == 0:
             ads_ratio.append(np.nan)
@@ -927,7 +959,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     supply a usable range for an empty trajectory. Invalid options raise
     ValueError before any frame is read: n_bins must be an integer >= 1, an
     explicit z_range two finite numbers with zlo < zhi, and an automatic range
-    must also have positive, finite thickness.
+    must also have positive, finite thickness. Nonfinite z of any selected atom
+    raises ValueError: it is not an "outside the range" atom.
 
     Args:
         frames:       list[dict] — Trajectory frames
@@ -984,6 +1017,9 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
             z_coords = atoms[mask, zi]
         else:
             z_coords = atoms[:, zi]
+        # np.histogram drops NaN and out-of-range values silently; a nonfinite
+        # z is not a legitimate "outside the range" atom, so reject it first.
+        _require_finite_z(z_coords, fr, 'Density profile')
 
         Lx = fr['box'][0][1] - fr['box'][0][0]
         Ly = fr['box'][1][1] - fr['box'][1][0]
