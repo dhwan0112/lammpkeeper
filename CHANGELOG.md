@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Dump '#' tokens (REV-IO-4)
+
+- The NumPy dump fallback no longer treats `#` in atom rows as a comment. A
+  corrupted numeric token such as `3#CORRUPTED` now raises on every path instead
+  of being read as `3`, and element labels containing `#` parse the same on the
+  native and NumPy readers. Data, log and input file comments are unchanged.
+
 ### RDF float32 backend parity (REV-ANALYSIS-4)
 
 - `compute_rdf` evaluates selected positions in float64 at their represented

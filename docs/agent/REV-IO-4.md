@@ -30,3 +30,15 @@ Native-dependent tests skip visibly when the module is not built.
 - Before fix: native 1 passed / 3 failed; `LKPR_NO_NATIVE=1` 0 passed / 3 failed / 1 skipped.
 - After fix, 8 requested modules, `LKPR_SLOW=1`: native 79 passed 0 failed 0 skipped;
   `LKPR_NO_NATIVE=1` 70 passed 0 failed 9 skipped (native-only tests).
+
+## Parent integration (2026-11-01, measured)
+
+- Rebased (unpublished, no force-push) onto main `73215fe` (PR #41). Registered
+  `test_dump_comment_tokens`; BACKLOG and CHANGELOG updated.
+- Failing-first reproduced by the parent against main's `parsers.py`: native
+  **1 passed, 3 failed**; `LKPR_NO_NATIVE=1` **0 passed, 3 failed, 1 skipped**.
+  With the fix: native **4 passed**; `LKPR_NO_NATIVE=1` **1 passed, 3 skipped**.
+  In NumPy-only mode the three tests run their NumPy assertions first and then
+  skip visibly because the native half could not be compared; they are not
+  silent passes.
+- Full verifier results follow (started after this commit).
