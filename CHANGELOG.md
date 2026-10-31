@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Load-tolerant job timeout test (REV-TEST-2)
+
+- The overall-timeout lifecycle test no longer assumes two Python startups fit in
+  0.3 s. Budgets leave over a second for startup, a missing phase sentinel reports
+  the budget instead of `FileNotFoundError`, and the execution case now also
+  rejects a per-phase deadline. Test-only; `lammpkeeper/jobs.py` is unchanged.
+
 ### Portable agent workflow (AGENT-1)
 
 - Add a canonical LammpKeeper Skill for capability discovery, explicit Python

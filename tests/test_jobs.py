@@ -418,19 +418,36 @@ def test_timeout_validation_and_wait_limit_does_not_cancel():
 
 
 def test_overall_timeout_includes_handshake_and_execution_and_reaps():
-    """Use one monotonic job deadline across both subprocess phases."""
+    """Use one monotonic job deadline across both subprocess phases.
+
+    REV-TEST-2: reaching the execution child needs two interpreter startups
+    (measured 0.25-0.30 s unloaded), so the former fixed 0.3 s budget sometimes
+    expired during handshake and the execution case never started. Budgets now
+    leave over a second for startup. The execution case spends most of its
+    budget in a slow handshake: one shared deadline stops near ``timeout``,
+    while a fresh per-phase timer could not stop before handshake delay plus
+    ``timeout``, which exceeds the elapsed bound.
+    """
     from lammpkeeper.jobs import start_job
-    for phase in ('handshake', 'execution'):
+    cases = (('handshake', 1.5, {'handshake': 'signal.pause()'}, 3.5),
+             ('execution', 3.0, {'handshake': 'time.sleep(1.5)',
+                                 'execution': 'signal.pause()'}, 4.4))
+    for phase, timeout, code, bound in cases:
         with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
             root = Path(tmp)
-            fake = _fake(root, **{phase: 'signal.pause()'})
+            fake = _fake(root, **code)
             started = time.monotonic()
-            snapshot = start_job(_request(), python=fake, timeout=0.3).wait(5)
+            snapshot = start_job(_request(), python=fake, timeout=timeout).wait(10)
+            elapsed = time.monotonic() - started
             assert snapshot['state'] == 'timed_out', snapshot
             assert snapshot['error']['code'] == 'timed_out'
             assert snapshot['backend_response'] is None
-            assert time.monotonic() - started < 3
-            _assert_stopped(int((root / (phase + '.started')).read_text()))
+            sentinel = root / (phase + '.started')
+            # A missing sentinel means the budget ended before this phase began:
+            # report the startup budget, not a misleading FileNotFoundError.
+            assert sentinel.exists(), f'{phase} never started within {timeout} s'
+            assert timeout <= elapsed < bound, (phase, timeout, elapsed)
+            _assert_stopped(int(sentinel.read_text()))
 
 
 def test_cancel_both_phases_idempotence_and_terminal_snapshot_immutability():
