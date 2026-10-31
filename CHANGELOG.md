@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### RDF float32 backend parity (REV-ANALYSIS-4)
+
+- `compute_rdf` evaluates selected positions in float64 at their represented
+  values, so the SciPy candidate path and the row-wise fallback agree at the
+  cutoff edge for float32 input. Previously the fallback could count a pair
+  beyond `r_max`. Float64 results are unchanged (byte-identical).
+
 ### Spin analysis species guard (REV-SESSION-2)
 
 - `analyze spin` (and `plot spin` through its cache path) fails with an error
