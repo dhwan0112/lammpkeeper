@@ -1,6 +1,6 @@
 # REV-IO-4 — '#' is ordinary text in dump atom rows
 
-Status: implemented, parent verification pending.
+Status: implemented and fully verified by the parent; publication in progress.
 
 ## Defect (measured)
 The NumPy fallback in `DumpReader._parse_block` called `np.loadtxt` with its
@@ -41,4 +41,11 @@ Native-dependent tests skip visibly when the module is not built.
   In NumPy-only mode the three tests run their NumPy assertions first and then
   skip visibly because the native half could not be compared; they are not
   silent passes.
-- Full verifier results follow (started after this commit).
+- Full verifier on `d8384b6`: native **568 passed, 0 failed, 0 skipped**;
+  forced NumPy **559 passed, 0 failed, 9 skipped**. The nine are the six known
+  native-only checks plus three new `test_dump_comment_tokens` tests whose native
+  comparison cannot run without the native module (their NumPy assertions ran
+  first; all nine PASS natively). Post analyses/real plots and prep passed.
+  Evidence: `/tmp/opencode/io4-native/20261101T020645-d8384b6-full`,
+  `/tmp/opencode/io4-numpy/20261101T020647-d8384b6-full`. Native extension not
+  rebuilt; pytest, MDAnalysis and HPC not run.
