@@ -49,4 +49,22 @@ all pass.
   directory (`No module named lammps_post`). The same test fails the same way on
   unmodified main code from `tests/`, and passes from the documented repo-root
   invocation. Pre-existing working-directory assumption, not caused by this item.
-- Full verifier results follow (started only after this commit).
+- **First full verifier on `0ea021e` failed (2 tests, both paths):**
+  native **556 passed, 2 failed**, NumPy **550 passed, 2 failed, 6 skipped**.
+  Evidence: `/tmp/opencode/rs2-native/20261101T014757-0ea021e-full`,
+  `/tmp/opencode/rs2-numpy/20261101T014759-0ea021e-full`. Failures:
+  `test_slab_reference.test_slab_shell_load_orders_and_shared_reads_preserve_analytic_answers`
+  and `test_slab_reference.test_slab_one_shot_batch_exports_current_time_and_results`.
+  The TEST-3 slab is dump-only with labels Fe/O and a guessed ACE force field,
+  so `analyze all` scheduled spin; the new guard then raised inside the shared
+  job runner and failed the whole command. Before this item, that spin job
+  silently counted type 2 (O) as Fe_down.
+- **Parent fix:** extracted the check into `_spin_channel_mismatch()`. Explicit
+  `analyze spin` still raises. `analyze all` now schedules spin only for a
+  canonical map and otherwise prints `Skipping spin: <reason>`, matching the
+  existing surface-z skip notice. New test
+  `test_analyze_all_skips_noncanonical_spin_visibly_and_keeps_canonical` fails on
+  `0ea021e` and passes now (8 tests in the module). Targeted rerun with
+  `LKPR_SLOW=1` of spin/slab/species-session/audit-workflow/numeric modules:
+  **59 passed, 0 failed, 0 skipped**.
+- Final full verifier results follow (started only after the fix commit).

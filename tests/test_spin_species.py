@@ -135,6 +135,34 @@ def test_fixture_session_result_matches_kernel_directly():
         assert got['n_up'][0] == 64 and got['n_down'][0] == 128
 
 
+def test_analyze_all_skips_noncanonical_spin_visibly_and_keeps_canonical():
+    """'analyze all' skips spin with a notice on a noncanonical map; canonical runs it.
+
+    Found by the parent's full verifier: the TEST-3 slab reference (dump-only,
+    labels Fe/O, guessed ACE) previously ran spin on fixed type channels, counting
+    O as Fe_down. An explicit 'analyze spin' fails; the batch-wide command skips.
+    """
+    _util.require_numpy()
+    with tempfile.TemporaryDirectory() as tmp:
+        # Plain Fe/O labels (as in the slab reference) keep the other analyses
+        # meaningful while leaving no Fe_up/Fe_down selections for spin.
+        shell = _shell(tmp, 'set types 1=Fe 2=Fe 3=O')
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            shell.onecmd('set surface_z 11')
+            shell.onecmd('analyze all')
+        text = out.getvalue()
+        assert shell.last_command_ok is True, text
+        assert 'spin' not in shell.state.cache, text
+        assert 'Skipping spin' in text and 'canonical' in text, text
+    with tempfile.TemporaryDirectory() as tmp:
+        shell = _shell(tmp)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            shell.onecmd('set surface_z 11')
+            shell.onecmd('analyze all')
+        assert shell.last_command_ok is True, out.getvalue()
+        assert shell.state.cache['spin']['n_up'].tolist() == [2, 2]
+
+
 def _cli(tmp, extra):
     """Run the real one-shot/batch CLI with an isolated HOME."""
     root = Path(tmp)

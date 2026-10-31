@@ -18,7 +18,8 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   naming the active and canonical selections when the active Fe_up/Fe_down
   differ from the canonical ACE type channels (Fe_up = type 1, Fe_down = type 2),
   for example after `set types 1=Fe_down 2=Fe_up`. Previously it counted fixed
-  type channels under the overridden labels. Canonical results are unchanged.
+  type channels under the overridden labels. `analyze all` skips spin with a
+  visible notice in that case. Canonical results are unchanged.
 
 ### Physical shell settings validation (REV-SESSION-1)
 
