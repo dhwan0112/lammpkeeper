@@ -1,6 +1,6 @@
 # REV-ANALYSIS-5 — selected nonfinite z integrity
 
-Status: implemented on `fix/rev-analysis-5-nonfinite-z` (based on
+Status: implemented and fully verified by the parent; publication in progress.
 `fix/rev-analysis-3-density-options` @ `7066061`); parent verification pending.
 
 ## Problem (measured)
@@ -63,4 +63,11 @@ results are unchanged. Shared helper: `_require_finite_z` (analysis.py).
 - CLI path checked by the parent (`/tmp/opencode/ra5-shell-probe.sh`): a dump
   with one selected oxygen at `z = nan` makes `python -m lammps_post --dump ...
   --analyze oar|penetration|density` exit **1** with the nonfinite-z diagnostic.
-- Full verifier results follow.
+- Native full verifier: **545 passed, 0 failed, 0 skipped**; post analyses/real
+  plots and prep artifacts/script syntax passed. Evidence:
+  `/tmp/opencode/ra5-native/20261101T013542-f4dddf2-full`.
+- Forced NumPy: **539 passed, 0 failed, 6 skipped** (known native-only checks).
+  Evidence: `/tmp/opencode/ra5-numpy/20261101T013543-f4dddf2-full`.
+- Native extension: existing ignored build, not rebuilt. Pytest, MDAnalysis and
+  HPC were not run. `analyze_structure` still reports a NaN extent for a type
+  with NaN z (visible, not a dropped count); left as a possible follow-up.
