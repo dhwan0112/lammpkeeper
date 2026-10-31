@@ -1,6 +1,6 @@
 # REV-TEST-2 — load-tolerant overall job timeout test
 
-Status: implemented and fully verified; publication in progress.
+Status: implemented and fully verified; [PR #34](https://github.com/dhwan0112/lammpkeeper/pull/34).
 Branch: `fix/rev-test-2-job-timeout-flake`, from main `f44f043` (PR #26 merged).
 Requested by the maintainer on 2026-11-01: record the flaky test, then fix it.
 
