@@ -1,6 +1,7 @@
 # REV-ANALYSIS-4 — float32 positions in RDF cutoff
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #41](https://github.com/dhwan0112/lammpkeeper/pull/41).
 
 ## Defect (measured)
 Two atoms (types 4 and 9), float32 x = -49.95 and 49.15 (represented
