@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Physical shell settings validation (REV-SESSION-1)
+
+- `set surface_z` rejects NaN/Inf; `set dt` and `set mass` reject NaN/Inf and
+  values ≤ 0. A rejected value keeps the previous setting and cached results,
+  counts as a command failure, and makes batch and one-shot runs exit nonzero.
+  Previously `set surface_z nan` or `set dt -1` produced successful OAR/MSD
+  results with meaningless planes or time axes.
+
 ### Nonfinite selected coordinates (REV-ANALYSIS-5)
 
 - OAR, penetration summary/trend, density profiles, charge-z profiles and

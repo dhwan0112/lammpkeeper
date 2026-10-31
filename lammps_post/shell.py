@@ -19,6 +19,7 @@ The shell provides:
 
 import cmd
 import io
+import math
 import os
 import sys
 import shlex
@@ -351,6 +352,19 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                   + (", spin" if self.state.ff == 'ace' else ""))
         return False
 
+    @staticmethod
+    def _finite_value(name, text, positive=False):
+        """Parse a physical setting; reject NaN/inf (and non-positive when required).
+
+        Raises ValueError before any caller publishes state or invalidates caches.
+        """
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError(f'{name} must be a finite number, got {text!r}')
+        if positive and value <= 0.0:
+            raise ValueError(f'{name} must be strictly positive, got {text!r}')
+        return value
+
     def _require_surface_z(self):
         """Require an Angstrom surface plane, preserving automatic/manual ownership.
 
@@ -372,7 +386,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             print(C.err("  Could not auto-detect surface z."))
             return False
         try:
-            self.state.surface_z = float(val)
+            # Validate before publishing so a rejected prompt value changes nothing.
+            self.state.surface_z = self._finite_value('surface_z', val)
             self.state.surface_z_manual = True
             progress_msg(f"Surface z set to: {self.state.surface_z:.1f} A")
             return True
@@ -1214,12 +1229,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.output_dir = val
             progress_msg(f"Output directory: {val}")
         elif key == 'surface_z':
-            s.surface_z = float(val)
+            s.surface_z = self._finite_value('surface_z', val)
             s.surface_z_manual = True
             s.clear_cache()  # Penetration and OAR depend on surface_z
             progress_msg(f"Surface z: {s.surface_z} A")
         elif key == 'dt':
-            s.ff_info['dt_fs'] = float(val)
+            s.ff_info['dt_fs'] = self._finite_value('dt', val, positive=True)
             s.clear_cache()  # Time axes change with timestep
             progress_msg(f"Timestep: {s.dt_fs} fs")
         elif key == 'forcefield':
@@ -1356,7 +1371,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             else:
                 raise ValueError('Usage: set pressure_unit bar|gpa')
         elif key == 'mass':
-            s.total_mass_amu = float(val)
+            s.total_mass_amu = self._finite_value('mass', val, positive=True)
             progress_msg(f"Total mass: {s.total_mass_amu:.2f} amu (manual override)")
         elif key == 'theme':
             valid_themes = ['default', 'publication', 'presentation']
