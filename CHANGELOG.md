@@ -12,6 +12,17 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Optional Rust CLI `lkpr-rs` (UI-1)
+
+- Add `rust/lkpr-rs`, a separate binary that drives the Python backend through
+  `python -m lammpkeeper exec --capabilities` (`doctor`) and `lkpr run`
+  (`thermo-summary`). It prints a readable table or, with `--json`, the backend
+  snapshot byte-for-byte. Python environment must be explicit (`--python` or
+  `LKPR_PYTHON`). Ctrl-C is forwarded once as a cancellation (exit 130); an
+  unresponsive backend is stopped and reported as `supervisor_unresponsive`,
+  never as cancelled. The Python `lkpr` command and Python-only installs are
+  unchanged; Rust is not required. Linux only, as tested.
+
 ### Stale cached results (REV-SESSION-3)
 
 - `plot` and `export` no longer publish cached results after the loaded dump

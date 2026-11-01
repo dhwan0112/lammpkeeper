@@ -17,7 +17,7 @@ ARCH-1 설계 승인 [완료]
       └─ EXEC-2 Python 환경 선택 / 로컬 작업 수명주기 [완료]
           ├─ AGENT-1 공통 Skill [완료: 호스트별 미검증 범위 별도]
           │   └─ AGENT-2 선택적 MCP [미착수]
-          └─ UI-1 Rust CLI [다음 단계: 무결성 묶음 완료]
+          └─ UI-1 Rust CLI [완료: lkpr-rs doctor/thermo-summary]
               └─ UI-2 Rust TUI [미착수]
 ```
 
@@ -31,7 +31,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-1 | 구현·검증·머지 | PR #29, `ed41c1f` | 다른 과학 작업은 개별 확장 |
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
-| UI-1 | 미착수, 다음 구현(무결성 묶음 완료, PR #37–#44) | 아래 7절 | Rust CLI 전체 |
+| UI-1 | 구현·검증 (`lkpr-rs`, docs/agent/UI-1.md) | 아래 7절 | 새 backend operation 추가 시 확장, Linux 외 미검증 |
 | UI-2 | 미착수 | 아래 8절 | Rust TUI 전체 |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
@@ -129,7 +129,7 @@ Python 3.9 런타임·비POSIX lifecycle·MDAnalysis는 미검증이다. 지원 
 제공하지 않는다. OS가 정리를 허용하지 않는 경우 실패/불완전 정리를 정직하게 보고한다.
 현재 작업은 과학 파일을 만들지 않으므로 partial artifact 정리는 향후 생산 작업에서 검증한다.
 
-## 7. UI-1 — additive Rust CLI [다음 구현]
+## 7. UI-1 — additive Rust CLI [완료: 2026-11-01, docs/agent/UI-1.md]
 
 **선행 조건:** EXEC-1/2 완료. 기존 Python `lkpr`를 덮어쓰지 않는다.
 
@@ -267,7 +267,8 @@ REV-ANALYSIS-4 → REV-IO-4 → REV-IO-6 → REV-SESSION-3 순서로 항목별 �
 
 **완료(2026-11-01):** 위 8개 항목이 모두 병합됐다(PR #37–#44, 각 항목 실패 재현 후 수정,
 native·NumPy 전체 검증). 작업 중 발견한 REV-ANALYSIS-6(P3)은 기록만 했다.
-다음은 UI-1이다.
+이어서 UI-1(`lkpr-rs`)도 구현·검증했다. 다음은 GEN-2(ADR-0005) 승인 검토와
+UI-2(Rust TUI) 중 우선순위를 정하는 것이다.
 
 1. UI-1 설계 노트에서 실행 파일·crate·배포 대상·중단 소유권을 확정한다.
 2. 승인된 구조 안에서 가장 작은 capability/thermo.summary Rust client를 구현한다.

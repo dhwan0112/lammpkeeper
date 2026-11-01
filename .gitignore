@@ -10,6 +10,8 @@ venv/
 
 # Native parser build (native/build.sh)
 native/target/
+# Rust CLI build (UI-1); Cargo.lock is versioned, build output is not.
+rust/lkpr-rs/target/
 lammps_post/*.so
 
 # LAMMPS run outputs the tool generates (never in the repo tree, but just in case)
