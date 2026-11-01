@@ -390,11 +390,16 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
         if is_periodic:
             for w in (wa, wb):
                 w[:, dim] %= L[dim]
-                w[w[:, dim] >= L[dim], dim] = 0.0   # x % L can round up to L
+                # cKDTree needs periodic coordinates in [0, L); float x % L
+                # can round up to exactly L, which is the same point as 0.
+                w[w[:, dim] >= L[dim], dim] = 0.0
         else:
             lower = min(wa[:, dim].min(), wb[:, dim].min())
             wa[:, dim] -= lower
             wb[:, dim] -= lower
+            # Not a physical box: padding wider than the data span plus 2*r_max
+            # makes the tree's periodic wrap unable to pair atoms across this
+            # non-periodic axis.
             boxsize[dim] = max(wa[:, dim].max(), wb[:, dim].max()) + 2 * r_max + 1.0
 
     radius = r_max * (1 + 1e-6) + 1e-6

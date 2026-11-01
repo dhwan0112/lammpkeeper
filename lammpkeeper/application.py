@@ -116,6 +116,8 @@ def summarize_thermo(log_data):
         arrays[key] = values
     statistics = {}
     for key, values in arrays.items():
+        # Silence NumPy overflow warnings; the finiteness check below reports
+        # overflow as an explicit error instead.
         with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
             stats = {'min': float(values.min()), 'max': float(values.max()),
                      'mean': float(values.mean()), 'std': float(values.std(ddof=0))}
@@ -158,17 +160,27 @@ def summarize_thermo_file(path, diagnostics=None, provenance=None):
     source = Path(path).absolute()
     before = _fingerprint(source)
     provenance['input_fingerprint'] = before
+    # catch_warnings is process-global and not thread-safe: this function is
+    # single-threaded by design. Warnings are copied in the outer `finally` so a
+    # failure response keeps them.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
         try:
             try:
                 data = parse_log(source)
+                # Set before validation on purpose (REV-EXEC-3 notes the
+                # trade-off): a failure response still shows where units came
+                # from; success overwrites it with the validated source.
                 if isinstance(data, dict) and data.get('unit_system') in ('metal', 'real'):
                     provenance['unit_source'] = 'log.unit_system'
                 result = summarize_thermo(data)
                 provenance['unit_source'] = ('log.unit_system'
                                              if result['unit_system'] else 'unresolved')
             finally:
+                # Runs on failure too: a changed or vanished file replaces any
+                # parse error with InputChangedError, because results from a
+                # changing file are not trustworthy (stat identity, not a hash;
+                # REV-EXEC-3 tracks keeping the original error as the cause).
                 try:
                     after = _fingerprint(source)
                 except OSError as exc:

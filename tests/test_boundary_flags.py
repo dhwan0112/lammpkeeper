@@ -49,6 +49,7 @@ def _raises(fn, *needles):
 
 
 def test_parse_boundary_flags_rejects_invalid_tokens():
+    """Malformed BOX BOUNDS flags raise; absent flags give None, not a guess."""
     from lammps_post.parsers import parse_boundary_flags
     for bad in INVALID:
         _raises(lambda b=bad: parse_boundary_flags(f'ITEM: BOX BOUNDS {b}'))
@@ -58,6 +59,7 @@ def test_parse_boundary_flags_rejects_invalid_tokens():
 
 
 def test_dump_reader_rejects_invalid_flags_all_access_modes():
+    """Invalid first-frame flags fail at reader construction, with and without the box model."""
     if not have_numpy():
         skip('numpy unavailable')
     from lammps_post.parsers import DumpReader
@@ -72,6 +74,7 @@ def test_dump_reader_rejects_invalid_flags_all_access_modes():
 
 
 def test_dump_reader_rejects_invalid_flags_in_later_frame():
+    """An invalid flag in a later frame fails both streaming and indexed access, naming the file."""
     if not have_numpy():
         skip('numpy unavailable')
     from lammps_post.parsers import DumpReader
@@ -95,6 +98,7 @@ def test_dump_reader_rejects_invalid_flags_in_later_frame():
 
 
 def test_valid_flags_publish_exact_pbc_streaming_and_indexed():
+    """Valid flags give the exact per-axis PBC through iteration, index and Box cells alike."""
     if not have_numpy():
         skip('numpy unavailable')
     from lammps_post.parsers import DumpReader, pbc_from_boundary
@@ -117,6 +121,7 @@ def test_valid_flags_publish_exact_pbc_streaming_and_indexed():
 
 
 def test_dump_without_flags_keeps_working():
+    """Older dumps without BOX BOUNDS flags still load; boundary stays None (unknown)."""
     if not have_numpy():
         skip('numpy unavailable')
     from lammps_post.parsers import DumpReader
@@ -139,6 +144,7 @@ def _input(line):
 
 
 def test_input_boundary_valid_words_unchanged():
+    """Valid input `boundary` lines keep their per-axis words exactly."""
     from lammps_post.parsers import parse_input
     for line, words in [('boundary p p f', ['p', 'p', 'f']),
                         ('boundary pp pp fs', ['pp', 'pp', 'fs']),
@@ -151,6 +157,7 @@ def test_input_boundary_valid_words_unchanged():
 
 
 def test_input_boundary_invalid_words_rejected_with_path():
+    """Invalid or wrong-length input `boundary` lines raise and name the file."""
     from lammps_post.parsers import parse_input
     for line in ['boundary pp potato f', 'boundary pf p p', 'boundary p p',
                  'boundary p p f f', 'boundary p p x', 'boundary p p sp']:

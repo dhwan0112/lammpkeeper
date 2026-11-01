@@ -340,6 +340,9 @@ class LocalJob:
             for key in ('request_id', 'operation', 'operation_version'):
                 self._data[key] = self._request[key]
             source, requested = _python_choice(python, self._env)
+            # Provisional record, replaced on success just below: if
+            # _select_python raises, the failure snapshot still shows which
+            # interpreter was requested and from where.
             self._data['interpreter'] = {'source': source,
                                          'requested': (requested[:execution.MAX_PATH]
                                                        if isinstance(requested, str) else None),
@@ -382,6 +385,9 @@ class LocalJob:
         with self._lock:
             if self._done.is_set():
                 return
+            # 'cleanup_failed' is meant as a local code from _cleanup_child.
+            # Known gap (REV-EXEC-1): a backend envelope may also carry it and
+            # would then be recorded as a cleanup failure.
             if error is not None and error.get('code') == 'cleanup_failed':
                 self._data['cleanup'] = {'status': 'failed', 'reaped': False,
                                          'error': {'code': 'cleanup_failed',
@@ -499,8 +505,11 @@ class LocalJob:
                         try:
                             offset += os.write(stream.fileno(), raw[offset:offset + 16384])
                         except BrokenPipeError:
+                            # The child closed stdin early; stop writing and let
+                            # its exit status and output decide the outcome.
                             offset = len(raw)
                         except BlockingIOError:
+                            # Pipe full: retry on the next writable event.
                             continue
                         if offset == len(raw):
                             selector.unregister(stream)
@@ -511,6 +520,7 @@ class LocalJob:
                         except BlockingIOError:
                             continue
                         if not chunk:
+                            # An empty read is EOF on this stream.
                             selector.unregister(stream)
                             continue
                         if len(outputs[name]) + len(chunk) > MAX_STREAM_BYTES:
@@ -521,6 +531,9 @@ class LocalJob:
                     cleanup_attempted = True
                     self._cleanup_child(process)
                     cleaned = True
+                    # Bounded drain after exit so a grandchild holding the pipe
+                    # cannot hang the job. Output still unread when it expires
+                    # is lost and surfaces as invalid backend JSON (REV-EXEC-3).
                     drain_deadline = time.monotonic() + TERMINATE_GRACE
                 if cleaned and (not selector.get_map() or time.monotonic() >= drain_deadline):
                     break
@@ -542,6 +555,8 @@ class LocalJob:
                         self._data['cleanup'] = previous_cleanup
                     self._data['diagnostics'][phase] = outputs['stderr'].decode(
                         'utf-8', errors='replace')[:execution.MAX_DIAGNOSTIC]
+        # Re-check after cleanup: a cancellation or deadline that arrived while
+        # cleaning up still takes precedence over the child's own result.
         self._interrupt()
         if process.returncode < 0:
             raise _JobError('child_crash', f'{phase} child terminated by signal {-process.returncode}')
@@ -677,7 +692,10 @@ def main(argv=None):
             finally:
                 signal.signal(signal.SIGINT, previous)
     except (ValueError, OSError, UnicodeError, RecursionError) as exc:
+        # Known gap (REV-EXEC-2): this also catches errors raised after the job
+        # started, which then reports a submission failure without cancelling.
         snapshot = _submission_failure('invalid_request', exc)
+    # `options` is unbound when argument parsing itself failed.
     if job is not None and 'options' in locals() and options.events:
         for event in snapshot['events'][emitted:]:
             print(json.dumps(event, allow_nan=False, separators=(',', ':')),
@@ -688,6 +706,8 @@ def main(argv=None):
 
 def _submission_failure(code, message, state='failed'):
     """Build the same snapshot schema for failures before a request can be read."""
+    # Bypasses __init__ (no request to parse); the fields below must stay in
+    # sync with the schema that LocalJob.__init__ builds.
     job = LocalJob.__new__(LocalJob)
     job._lock = threading.RLock()
     job._done = threading.Event()

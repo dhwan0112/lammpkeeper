@@ -96,6 +96,8 @@ def execute_request(request):
             result, _, _ = summarize_thermo_file(request['input']['log'], diagnostics,
                                                  response['provenance'])
         response.update(status='succeeded', result=result)
+    # Order matters: InputChangedError subclasses ValueError and must be caught
+    # before it; UnicodeError is also a ValueError and maps to invalid_input.
     except RequestError as exc:
         _fail(response, exc.code, exc)
     except InputChangedError as exc:
@@ -107,6 +109,8 @@ def execute_request(request):
     except Exception as exc:
         _fail(response, 'internal_error', f'{type(exc).__name__}: {exc}')
     response['warnings'] = [str(item)[:MAX_DIAGNOSTIC] for item in diagnostics[:MAX_WARNINGS]]
+    # Bound the response size. Known gap (REV-EXEC-3): the notice replaces the
+    # last kept warning and does not say how many were dropped.
     if len(diagnostics) > MAX_WARNINGS:
         response['warnings'][-1] = 'Additional warnings omitted (warning count bound reached)'
     return response
