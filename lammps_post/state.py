@@ -68,6 +68,13 @@ class SessionState:
         self._species_list_identity = None
         self._dump_type_ids = frozenset()
         self._metadata_transaction = False
+        # Evidence-only RunMetadata for the trajectory (ADR-0005), set by the
+        # shell's metadata publication step; None until something is published.
+        self.run_metadata = None
+        # Manual `set dt` / `set forcefield` records, kept apart from source
+        # evidence. Treated as immutable: replaced, never mutated, so a failed
+        # load transaction can restore the old mapping by rebinding it.
+        self.manual_overrides = {}
 
         # ── Auto-detected force field properties ──
         # Detection supplies initial values, not authoritative run metadata;
@@ -133,8 +140,117 @@ class SessionState:
 
     @property
     def dt_fs(self):
-        """Return the session timestep in fs, not the raw native LAMMPS time unit."""
+        """Return the session timestep in fs, not the raw native LAMMPS time unit.
+
+        Raises ValueError when the timestep is unresolved (ADR-0005). Every
+        time-dependent consumer reads this property, so an unresolved value
+        cannot silently become a number; time-independent analyses never read
+        it. Use ``dt_fs_or_none`` for display.
+        """
+        value = self.ff_info['dt_fs']
+        if value is None:
+            md = self.run_metadata
+            reason = md.dt_fs.note if md is not None and md.dt_fs.note else 'no timestep evidence'
+            raise ValueError("timestep unresolved: load an input with units and timestep, "
+                             f"or 'set dt <fs>' ({reason})")
+        return value
+
+    @property
+    def dt_fs_or_none(self):
+        """Return the session timestep in fs, or None when unresolved (display only)."""
         return self.ff_info['dt_fs']
+
+    def effective_metadata(self, with_overrides=True):
+        """Resolve trajectory metadata from the loaded input and dump heuristic.
+
+        Returns ``(RunMetadata, values)``. The metadata object records evidence
+        only (explicit / guessed / unresolved with sources); ``values`` holds
+        the legacy ``forcefield``, ``unit_system`` and ``dt_fs`` that feed
+        ``ff_info``, with manual overrides applied when ``with_overrides``.
+
+        Rules (ADR-0005): fields come from the loaded input first. An explicit
+        pair_style always replaces the heuristic force field, including
+        'generic'. The legacy guessed dt is allowed only when the input
+        declares none of pair_style/units/timestep; any partial explicit
+        declaration leaves dt unresolved unless units and timestep give it.
+        Guessed units never turn an explicit timestep into femtoseconds.
+        """
+        from lammpkeeper.io.metadata import (EXPLICIT, GUESSED, MetadataField,
+                                             RunMetadata)
+        from lammps_post.parsers import classify_pair_style
+
+        config = self.input_config
+        explicit = None
+        if config is not None:
+            explicit = config.get('metadata')
+            if explicit is None:
+                # Programmatic/legacy config dicts without a metadata record:
+                # rebuild from the commands they do carry.
+                pair = config.get('pair_style') or None
+                explicit = RunMetadata.from_explicit(
+                    self.input_path or 'input_config', pair_style=pair,
+                    ff_family=classify_pair_style(pair), atom_style=config.get('atom_style'),
+                    units=config.get('units'), timestep=self._legacy_timestep(config))
+        guess = self._dump_ff_info
+        legacy = RunMetadata.from_guess(guess, 'dump heuristic') if guess else None
+        none = RunMetadata.from_explicit('none')   # all-unresolved template
+        base = explicit if explicit is not None else none
+        declared = any(getattr(base, n).status == EXPLICIT
+                       for n in ('pair_style', 'units', 'timestep'))
+
+        def session_default(value):
+            """Guessed field for the legacy no-trajectory session default."""
+            return MetadataField(value, value, GUESSED, 'legacy session default',
+                                 'no trajectory metadata loaded')
+
+        ff_family = base.ff_family
+        if ff_family.status != EXPLICIT:
+            ff_family = (legacy.ff_family if legacy is not None and legacy.ff_family.value
+                         not in (None, 'unknown') else base.ff_family)
+        units = base.units
+        if units.status != EXPLICIT:
+            units = legacy.units if legacy is not None else (
+                base.units if declared else session_default('metal'))
+        dt_fs = base.dt_fs
+        if dt_fs.status != EXPLICIT:
+            if not declared:
+                dt_fs = legacy.dt_fs if legacy is not None else session_default(1.0)
+            else:
+                dt_fs = MetadataField(
+                    None, None, 'unresolved', None,
+                    f"{base.dt_fs.note}; the legacy guessed timestep is not used "
+                    "when the input declares pair_style, units or timestep")
+        metadata = RunMetadata(pair_style=base.pair_style, ff_family=ff_family,
+                               atom_style=base.atom_style, units=units,
+                               timestep=base.timestep, dt_fs=dt_fs)
+        values = {'forcefield': ff_family.value or 'unknown',
+                  # None when the input declares other fields but not units:
+                  # consumers must report it, never assume metal (ADR-0005).
+                  'unit_system': units.value,
+                  'dt_fs': dt_fs.value}
+        if with_overrides:
+            for key, record in self.manual_overrides.items():
+                values['dt_fs' if key == 'dt' else key] = record['value']
+        return metadata, values
+
+    @staticmethod
+    def _legacy_timestep(config):
+        """Native timestep of a metadata-less config dict, honoring its legacy dt_fs key."""
+        step = config.get('timestep')
+        if step is None and config.get('dt_fs') and config.get('units') in ('metal', 'real'):
+            step = config['dt_fs'] / (1000.0 if config['units'] == 'metal' else 1.0)
+        return step
+
+    def describe_metadata(self):
+        """Return status lines for each metadata field plus active manual overrides."""
+        md = self.run_metadata
+        lines = md.describe().splitlines() if md is not None else ['metadata: none resolved']
+        for key in sorted(self.manual_overrides):
+            record = self.manual_overrides[key]
+            unit = ' fs' if key == 'dt' else ''
+            lines.append(f"manual override {key}: {record['value']!r}{unit} [manual]"
+                         f" (evidence: {record['evidence']})")
+        return lines
 
     @property
     def atom_types(self):
@@ -187,10 +303,10 @@ class SessionState:
     def _analysis_species(self, raw):
         """Adapt only established matching preset slots, preserving raw evidence."""
         from lammpkeeper.common.mapping import element_to_type, type_to_label
-        config = self.input_config or {}
-        ff = config.get('forcefield')
-        if not ff or ff == 'unknown':
-            ff = self.ff
+        # The effective label already carries explicit input evidence and any
+        # manual override, so a generic/overridden family never reuses a stale
+        # preset from the parsed input.
+        ff = self.ff
         try:
             canonical = {t: element for element, t in element_to_type(ff).items()}
             labels = type_to_label(ff)
@@ -270,9 +386,12 @@ class SessionState:
     def refresh_species(self):
         """Rebuild managed labels from surviving raw sources and validate groups."""
         raw = self._combined_species()
+        # A generic force field gets no preset labels: the heuristic's Fe/O
+        # atom_types are a domain guess, so only explicit labels may name types.
+        heuristic = {} if self.ff == 'generic' else dict(
+            (self._dump_ff_info or {}).get('atom_types', {}))
         labels = (dict(self._species_override) if self._species_override is not None
-                  else self._analysis_species(raw) if raw else dict(
-                      (self._dump_ff_info or {}).get('atom_types', {})))
+                  else self._analysis_species(raw) if raw else heuristic)
         self._validate_species(labels, allow_pending=True)
         self.ff_info['atom_types'] = labels
 

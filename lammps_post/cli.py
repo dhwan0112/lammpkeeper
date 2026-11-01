@@ -7,7 +7,7 @@ Handles command-line argument parsing and launches either:
   - Batch mode (--batch): reads commands from a script file
   - One-shot mode (--analyze/--plot): run without entering interactive shell
 
-Files can be pre-loaded via --dump, --log, --data flags to skip
+Files can be pre-loaded via --input, --dump, --log, --data flags to skip
 the manual 'load' step. Example:
   python -m lammps_post --dump traj.lammpstrj --log log.lammps
   python -m lammps_post --log log.lammps --plot thermo --theme publication
@@ -28,7 +28,7 @@ def main(argv=None):
     Supports four modes of operation:
     1. Interactive (default): Launches the cmd.Cmd shell with a prompt.
        User types commands interactively with tab completion and history.
-    2. Pre-loaded: Use --dump/--log/--data flags to automatically load
+    2. Pre-loaded: Use --input/--dump/--log/--data flags to automatically load
        files before entering the interactive prompt.
     3. Batch: Use --batch <file> to execute a series of commands from
        a script file (one command per line, '#' for comments).
@@ -47,6 +47,8 @@ def main(argv=None):
     parser.add_argument('--dump', help='Pre-load a dump/trajectory file (.dump or .lammpstrj)')
     parser.add_argument('--log', help='Pre-load a LAMMPS log file')
     parser.add_argument('--data', help='Pre-load a LAMMPS data file (final structure)')
+    parser.add_argument('--input', help='Pre-load a LAMMPS input script for explicit run metadata '
+                        '(pair_style, units, timestep, boundary); loaded before the other files')
     parser.add_argument('--output', default='./lammps-post_output',
                         help='Output directory for plots and exports (default: ./lammps-post_output)')
     parser.add_argument('--max-frames', type=int, default=None,
@@ -103,6 +105,10 @@ def main(argv=None):
     max_arg = f' --max {args.max_frames}' if args.max_frames is not None else ''
     # The shell tokenizes command strings again: preserve each filename as one
     # token, including spaces and quotes, rather than interpolating raw paths.
+    # The input goes first so explicit metadata is in place when the trajectory
+    # loads; the result is identical for the opposite order.
+    if args.input:
+        shell.onecmd(f'load input {shlex.quote(args.input)}')
     if args.dump:
         shell.onecmd(f'load dump {shlex.quote(args.dump)}{max_arg}')
     if args.log:

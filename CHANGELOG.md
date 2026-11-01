@@ -12,6 +12,27 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Session uses explicit run metadata (GEN-2b; ADR-0005)
+
+- An explicit `pair_style` replaces the dump force-field guess. EAM, LJ, hybrid
+  and unrecognized styles are `generic`: no Fe/O labels, no spin analysis, no
+  force-field timestep default. The legacy `parse_input()['forcefield']` key now
+  uses the same exact-token classifier (hybrid/EAM inputs report `generic`).
+- When an input declares only part of `pair_style`/`units`/`timestep`, the
+  timestep stays unresolved: time-dependent analyses fail with an actionable
+  error and `set dt <fs>` resolves it. Time-independent analyses still run.
+  Units the input does not declare are shown as unresolved (or guessed from a
+  loaded dump), never silently assumed `metal`.
+- `set dt` and `set forcefield` (now also `generic`) are manual overrides shown
+  in `info`; they expire with a warning on input/data/dump load or unload and are
+  cleared by `unload all`. `info` lists each metadata field as explicit, guessed
+  or unresolved with its source.
+- `lammps_post --input PATH` preloads a LAMMPS input before other files.
+- `parse_input()` rejects contradictory repeated `pair_style` or `atom_style`.
+  Log/input unit and timestep conflicts name both sources and values.
+- Fe-O sessions from prep-style ACE/ReaxFF inputs and the committed fixture give
+  identical metadata and analysis numbers to before; no golden changed.
+
 ### Explicit run metadata model (GEN-2a; ADR-0005)
 
 - Add `lammpkeeper.io.RunMetadata`/`MetadataField`: pair style, force-field

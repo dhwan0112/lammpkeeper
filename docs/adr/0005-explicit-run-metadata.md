@@ -60,6 +60,10 @@ the library behind `hdnnp`), so they classify as `generic`. An input using n2p2'
 older external `nnp` style is therefore `generic` (no domain defaults), which is
 the safe direction; add it explicitly if such inputs must be recognized.
 
+GEN-2b: with neither a dump nor an input loaded, the legacy session default
+(force field unknown, metal units, 1.0 fs) is kept for log-only workflows and is
+labelled guessed ("legacy session default"), never explicit.
+
 ## Options
 
 1. **Do nothing:** retain warned shape heuristics. Lowest immediate migration
