@@ -1,0 +1,23 @@
+# UI-1 (ADR-0004): additive Rust CLI. Python stays the scientific backend; this
+# binary only drives `python -m lammpkeeper run|exec` and formats their output.
+# It is built from source and never replaces the Python-owned `lkpr` command.
+[package]
+name = "lkpr-rs"
+version = "0.1.0"
+edition = "2021"
+# Only toolchains actually tested are claimed (see docs/agent/UI-1.md).
+rust-version = "1.98"
+publish = false
+description = "Additive Rust CLI for LammpKeeper; delegates science to the Python backend"
+
+[[bin]]
+name = "lkpr-rs"
+path = "src/main.rs"
+
+[dependencies]
+# arbitrary_precision keeps every JSON number as its original text, so values
+# such as exact integers are printed without float re-rounding; preserve_order
+# keeps the backend column order (adds indexmap transitively).
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+# Signal handling and process-group signalling (POSIX only, as measured).
+libc = "0.2"
