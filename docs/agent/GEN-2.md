@@ -67,8 +67,10 @@ After the integrity batch (#37–#44) and UI-1 (#46), the roadmap order puts the
 ADR-0005 approval review next. The unpublished proposal (`e273ce0`) was carried
 onto main `f752337` as a fresh branch `gen/gen-2-adr-0005` (content of the ADR's
 decision sections unchanged). A "Changes on main since drafting" subsection
-records how REV-SESSION-1/2, REV-IO-6 and EXEC/UI-1 relate to it. Status remains
-**proposed**; implementation waits for explicit maintainer acceptance.
+records how REV-SESSION-1/2, REV-IO-6 and EXEC/UI-1 relate to it.
+
+**Accepted 2026-11-01:** the maintainer approved ADR-0005 as written and asked to
+proceed with implementation in the ADR's order.
 
 ## Renumbering note (2026-10-31)
 

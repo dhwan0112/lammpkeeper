@@ -1,6 +1,6 @@
 # ADR-0005: Explicit run metadata and conservative force-field classification
 
-- **Status:** proposed — not accepted; no implementation authorized yet
+- **Status:** accepted (2026-11-01, maintainer approved in session; PR #47)
 - **Date:** 2026-10-28
 - **Deciders:** 김동환 (maintainer)
 - **Backlog:** GEN-2
@@ -62,7 +62,7 @@ The proposal text below is unchanged except where noted here. Relevant merged wo
    analyses along with classification. Higher coupling and reproducibility risk;
    combines GEN-2/4/7/9 and generated-input gates. Defer.
 
-## Proposed decision (requires approval)
+## Decision (accepted 2026-11-01)
 
 ### Ownership and additive layout
 
@@ -200,4 +200,4 @@ Approve the additive metadata module and bounded in-place classifier, explicit-f
 rollback policy, conservative generic/no-domain-default behavior, bounded
 metal/real time conversion with visible LJ limitations, separate log provenance,
 manual override lifetimes and additive `--input`.
-This document remains **proposed** until the maintainer explicitly accepts it.
+Accepted by the maintainer on 2026-11-01 with the decisions as written.

@@ -819,7 +819,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   Python 3.9/docstrings. Full evidence, review findings and limits:
   `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
-### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `awaiting ADR-0005 approval (gen/gen-2-adr-0005)`
+### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `in-progress (ADR-0005 accepted 2026-11-01, PR #47)`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
 - **Target:** read `pair_style` / `units` / `atom_style` / timestep from LAMMPS
   input metadata. Per accepted ADR-0001, the optional manifest does not duplicate
