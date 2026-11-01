@@ -1,10 +1,13 @@
 # GEN-2b — session routing of explicit run metadata
 
-Status: implemented, reviewed and fully verified by the parent;
+Status: implemented, reviewed and fully verified by the parent at commit
+`c6c3c2a` (the earlier `c5d6afb` run is not valid evidence; see Verification);
 [PR #49](https://github.com/dhwan0112/lammpkeeper/pull/49).
 Branch: `gen/gen-2b-session-metadata` (base main `5dce7f0`, contains GEN-2a).
-ADR-0005 steps 3–4. Tests: `tests/test_session_metadata.py` (24 tests, **not yet
-registered in `tests/run.py`**, parent-owned).
+ADR-0005 steps 3–4. Tests: `tests/test_session_metadata.py` (24 tests at worker
+hand-off, 26 at merge, registered in `tests/run.py`; the 2026-11-01 audit added
+a 27th for thermo plots honouring `set dt`). Overrides expire on typed input,
+data and dump load/unload; `manifest` and `log` loads leave them in place.
 
 ## Behavior changes
 

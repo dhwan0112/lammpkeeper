@@ -19,7 +19,9 @@ publish nothing), `do_export` (csv, latex, summary) and `_ensure_cache`.
 On a changed **or deleted/unreadable** (`OSError`) source it clears the whole
 cache (every family derives from the trajectory) and raises `ValueError` telling
 the user to `load dump <file>` again. `onecmd` records the failure, so
-batch/one-shot exit 1; no artifact is written. Unchanged sources are unaffected.
+batch/one-shot exit 1; no artifact is written. (This exit-1 path covers the
+stale-source failure only; other export failures such as "no cached data"
+still print and exit 0, tracked as REV-UI-3 since the 2026-11-01 audit.) Unchanged sources are unaffected.
 
 Out of scope (listed, not handled): log- and data-derived results (thermo,
 data-file masses/atoms). Those loaders keep no source signature, so a comparable

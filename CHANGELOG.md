@@ -12,6 +12,25 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Whole-code audit fixes (AUDIT-20261101)
+
+- Thermo plots without a log-declared timestep now use a manual `set dt` before
+  the input's timestep, like every other time axis. A log that declares its own
+  timestep keeps it.
+- `parse_input()` expands `${var}` in `units`, `atom_style` and `pair_style`;
+  an unresolvable substitution raises. Before, `pair_style ${ff}` was recorded
+  as an explicit `generic` force field.
+- `lkpr-rs` reports `output_too_large` even when the backend exits in the poll
+  in which it overflowed (it was reported as invalid output), stores nothing
+  after the first dropped chunk, exits 1 with `output_write_failed` when `--json`
+  output cannot be written, and `doctor` exits 130 after Ctrl-C.
+- `/verify-lkpr` full mode records a named SKIP for plots when matplotlib is
+  missing (they were omitted silently).
+- `tests/test_rust_cli.py` finds the binary through cargo, so a custom
+  `CARGO_TARGET_DIR` works.
+- The `lkpr run` Ctrl-C test no longer fails when the test runner was started
+  as a background job, which ignores SIGINT (REV-TEST-3).
+
 ### Session uses explicit run metadata (GEN-2b; ADR-0005)
 
 - An explicit `pair_style` replaces the dump force-field guess. EAM, LJ, hybrid

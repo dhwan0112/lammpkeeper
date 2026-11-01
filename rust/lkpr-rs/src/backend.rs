@@ -31,6 +31,7 @@ const POLL: Duration = Duration::from_millis(20);
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
+/// SIGINT handler: record the interrupt for the supervision loop to forward.
 extern "C" fn on_sigint(_: libc::c_int) {
     // Async-signal-safe: only an atomic store. The supervisor loop acts on it.
     INTERRUPTED.store(true, Ordering::SeqCst);
@@ -108,6 +109,7 @@ pub fn spawn(program: &str, args: &[String], stdin: Option<&[u8]>) -> std::io::R
     Ok(child)
 }
 
+/// Send `sig` to the backend's whole process group (it was started as leader).
 fn signal_group(pid: u32, sig: libc::c_int) {
     // SAFETY: plain kill(2) on the child's own process group (negative pid).
     unsafe {
@@ -163,9 +165,11 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
             match pipe.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if kept.len() + n > MAX_STDOUT {
+                    if flag.load(Ordering::SeqCst) || kept.len() + n > MAX_STDOUT {
                         flag.store(true, Ordering::SeqCst);
-                        // Keep draining so the writer is not blocked, but store nothing more.
+                        // Keep draining so the writer is not blocked, but store
+                        // nothing more: a later small chunk must not be appended
+                        // after a dropped one and leave a hole in the stream.
                         continue;
                     }
                     kept.extend_from_slice(&buf[..n]);
@@ -178,6 +182,9 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
     let mut forwarded = false;
     let mut cancel_deadline = deadline;
     let mut forced = None;
+    // Order of checks: exit first (a finished backend needs no signal), then
+    // Ctrl-C forwarding, then output overflow, then the deadline. Overflow that
+    // happens in the same poll as the exit is caught after the loop.
     let status = loop {
         if let Ok(Some(status)) = child.try_wait() {
             break Some(status);
@@ -207,6 +214,11 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
         Ok(bytes) => (bytes, false),
         Err(_) => (Vec::new(), true),
     };
+    // The backend may exit in the same poll in which it overflowed; the reader
+    // has then finished, so this final check sees every dropped chunk.
+    if forced.is_none() && overflow.load(Ordering::SeqCst) {
+        forced = Some(Forced::OutputTooLarge);
+    }
     Outcome {
         status,
         stdout,

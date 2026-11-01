@@ -49,6 +49,7 @@ if REPO_ROOT not in sys.path:
 # ── small helpers ──────────────────────────────────────────────────────────
 
 def _git(*args):
+    """Run git in the repository; return stripped stdout or a placeholder on failure."""
     try:
         return subprocess.run(['git', *args], cwd=REPO_ROOT, capture_output=True,
                               text=True, timeout=20).stdout.strip()
@@ -57,6 +58,7 @@ def _git(*args):
 
 
 def _have(module):
+    """True if `module` imports; any import-time error counts as missing."""
     try:
         __import__(module)
         return True
@@ -86,6 +88,7 @@ def _load_fixture_state():
 
 
 def _frame(rows, step=0, box=((0, 10), (0, 10), (0, 30))):
+    """Hand-built dump frame: rows of (id, type, x, y, z) in an orthogonal box."""
     import numpy as np
     return {'atoms': np.asarray(rows, dtype=float).reshape((-1, 5)),
             'box': np.asarray(box, dtype=float), 'timestep': step}
@@ -97,6 +100,7 @@ COL = {'id': 0, 'type': 1, 'x': 2, 'y': 3, 'z': 4}
 # ── compute functions: one per check id, return {key: measured value} ─────
 
 def compute_fixture_ace_bulk():
+    """Composition, box, PBC, timestep range and spin counts of the ACE fixture."""
     import numpy as np
     from lammps_post import analysis as A
     from lammps_post.parsers import pbc_from_boundary
@@ -127,6 +131,7 @@ def compute_fixture_ace_bulk():
 
 
 def compute_reference_crystal_fe3o4():
+    """Fe3O4 lattice, Fe-O distances by direct image enumeration, and its reference RDF."""
     import itertools
     import numpy as np
     from lammps_post.references import CRYSTAL_DB, compute_reference_rdf
@@ -154,6 +159,7 @@ def compute_reference_crystal_fe3o4():
 
 
 def compute_analytic_msd():
+    """MSD of hand-built frames with exactly known displacements (shift, type swap, PBC, variable box)."""
     from lammps_post.analysis import analyze_msd
     out = {}
     # Every atom shifts by (1, 2, 2): MSD is exactly 9 on the second frame.
@@ -181,6 +187,7 @@ def compute_analytic_msd():
 
 
 def compute_analytic_rdf_pair():
+    """RDF peak position and bin count of one isolated pair, unwrapped and split across a face."""
     import numpy as np
     from lammps_post.analysis import compute_rdf
     out = {}
@@ -201,6 +208,7 @@ def compute_analytic_rdf_pair():
 
 
 def compute_box_geometry():
+    """Volume and lengths of orthogonal and tilted boxes built from enclosing dump bounds."""
     from lammpkeeper.io import Box
     # from_dump_bounds takes LAMMPS *enclosing* dump bounds: for a tilt xy = 2
     # the physical x length is (xhi_bound - xlo_bound) - xy. Bounds (0, 12) with
@@ -271,7 +279,11 @@ def spec_errors(spec):
 # ── comparison ─────────────────────────────────────────────────────────────
 
 def _compare(measured, reference, tol):
-    """Return (ok, detail). Numbers use abs/rel tolerance; others must be equal."""
+    """Return (ok, detail). Numbers use abs/rel tolerance; others must be equal.
+
+    One key's tolerance applies to every value nested inside it (dict values
+    and array elements alike).
+    """
     import numpy as np
     atol = float(tol.get('abs', 0.0)); rtol = float(tol.get('rel', 0.0))
     if isinstance(reference, bool) or reference is None or isinstance(reference, str):
@@ -294,6 +306,7 @@ def _compare(measured, reference, tol):
 
 
 def run_check(spec):
+    """Measure one check and compare every reference key; returns a PASS/FAIL/ERROR record."""
     cid = spec['id']
     fn = COMPUTE.get(cid)
     if fn is None:
@@ -331,6 +344,7 @@ def run_check(spec):
 # ── doctor ─────────────────────────────────────────────────────────────────
 
 def doctor():
+    """Report environment, fixture and reference files; ok is False if a hard prerequisite is missing."""
     lines = [f'repo: {REPO_ROOT}',
              f'git: {_git("rev-parse", "--abbrev-ref", "HEAD")} @ {_git("rev-parse", "--short", "HEAD")}',
              f'dirty files: {len([l for l in _git("status", "--porcelain").splitlines() if l])}',
@@ -355,6 +369,7 @@ def doctor():
 # ── main ───────────────────────────────────────────────────────────────────
 
 def main(argv=None):
+    """CLI entry point: doctor, then run the checks; exit 0 pass, 1 fail/error, 2 setup problem."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--only', action='append', default=[], help='run only this check id (repeatable)')
     ap.add_argument('--doctor', action='store_true', help='print the doctor report and exit')

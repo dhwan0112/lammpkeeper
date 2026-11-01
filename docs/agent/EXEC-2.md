@@ -51,9 +51,9 @@ same request ID. The supervisor thread owns child processes and bounded I/O.
   `cancelled` / `timed_out`. Failure, timeout or cancellation can occur before
   `running`. Exactly one terminal transition is committed under synchronization.
 - A cancellation accepted before terminal publication prevents success from
-  being published; a completed terminal decision is immutable. The child is
-  cleanup attempt finishes before terminal state is exposed; unsuccessful cleanup
-  must remain explicitly visible in the snapshot. Failed/timed-out/cancelled jobs
+  being published; a completed terminal decision is immutable. The child
+  cleanup attempt finishes before the terminal state is exposed; unsuccessful
+  cleanup must remain explicitly visible in the snapshot. Failed/timed-out/cancelled jobs
   cannot expose a previously received success as a current scientific result.
 
 Accept cancellation only before the overall deadline; such an accepted request

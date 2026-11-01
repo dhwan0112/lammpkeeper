@@ -4,6 +4,13 @@ Status: implemented and fully verified by the parent;
 [PR #48](https://github.com/dhwan0112/lammpkeeper/pull/48).
 Branch: `gen/gen-2a-run-metadata` (base main `7192e64`). ADR-0005 steps 1–2 only.
 
+> **Superseded in part by GEN-2b** (PR #49, `docs/agent/GEN-2b.md`; noted in
+> the 2026-11-01 audit). This file records the GEN-2a stage. Since GEN-2b the
+> legacy `forcefield` key uses the exact classifier (no substring match), and
+> contradictory repeated `atom_style` / `pair_style` declarations raise. The
+> "Unchanged on purpose" and "Decisions to review" sections below describe
+> GEN-2a only.
+
 ## What changed
 
 - `lammpkeeper/io/metadata.py` (new): frozen `MetadataField(value, raw, status,

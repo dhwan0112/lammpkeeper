@@ -429,3 +429,32 @@ def test_repeated_timestep_via_variables_compared_after_resolution():
         os.remove(path)
     assert config['timestep'] == 0.5 and config['dt_fs'] == 0.5
     assert math.isfinite(config['metadata'].dt_fs.value)
+
+
+def test_style_declarations_resolve_substitutions_or_raise():
+    """`units`, `atom_style` and `pair_style` expand `${var}` like other commands.
+
+    Found in the 2026-11-01 audit: `pair_style ${ff}` was stored raw, so the
+    classifier saw the literal `${ff}` and published an EXPLICIT 'generic'
+    family, and `atom_style ${a}` became an explicit field with value '${a}'.
+    A resolvable variable must give the real style; an unresolvable one must
+    raise, never become an invented explicit value (ADR-0005).
+    """
+    path = _write('variable u string metal\nvariable a string atomic\nvariable ff string pace\n'
+                  'units ${u}\natom_style ${a}\npair_style ${ff}\npair_coeff * * x.yace A B\n'
+                  'timestep 0.001\n')
+    try:
+        config = parse_input(path)
+    finally:
+        os.remove(path)
+    md = config['metadata']
+    assert (config['units'], config['atom_style'], config['pair_style']) == ('metal', 'atomic', 'pace')
+    assert md.ff_family.value == 'ace' and md.ff_family.status == 'explicit'
+    assert md.atom_style.value == 'atomic' and md.units.value == 'metal'
+    assert config['element_map'] == {1: 'A', 2: 'B'}
+    for line in ('pair_style ${ff}\n', 'atom_style ${a}\n', 'units ${u}\n'):
+        path = _write('timestep 0.001\n' + line)
+        try:
+            _raises(lambda: parse_input(path), path, 'cannot resolve')
+        finally:
+            os.remove(path)

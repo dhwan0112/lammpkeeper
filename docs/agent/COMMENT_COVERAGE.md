@@ -69,6 +69,20 @@ Python 3.9 grammar; the new Bash predicate has explicit safety/lifecycle comment
 Runtime tests, trusted-path limits and the separate early logging hazard are
 recorded in [`REV-PREP-1.md`](REV-PREP-1.md), not an annotation-only change.
 
+### Whole-code audit (2026-11-01)
+
+Measured on the audit branch (base main `15da399`), see
+[`AUDIT-20261101.md`](AUDIT-20261101.md): **97 tracked Python files / 1437
+definitions, 0 without a docstring** (before the audit, 18 lacked one: 11 in
+`.claude/skills/verify/scripts/verify_refs.py`, 7 tests in
+`tests/test_boundary_flags.py`). Rust: every `fn` in `rust/lkpr-rs/src/*.rs`
+(28), `rust/lkpr-rs/tests/cli.rs` (25) and `native/src/lib.rs` (3) now has a
+`//`/`///` comment (before: 31 lacked one). Inline comments were added where
+reviewers found non-obvious lifecycle, rollback or numerical logic without one
+(`jobs.py`, `execution.py`, `application.py`, `shell.py`, `analysis.py`,
+`verify.sh`). The one Korean string in Python sources
+(`tests/test_display.py`) is test data for display width, not a comment.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather
