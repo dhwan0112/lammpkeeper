@@ -1,7 +1,7 @@
 # UI-1 — additive Rust CLI
 
 Status: design approved by the maintainer on 2026-11-01 (all decisions below,
-unchanged); implementation in progress. Branch: `gen/ui-1-rust-cli` from main `28e6532`.
+unchanged); implemented, reviewed and fully verified; publication in progress. Branch: `gen/ui-1-rust-cli` from main `28e6532`.
 
 ADR-0004 (accepted) sets the direction: Rust owns terminal interaction, Python
 owns scientific execution, and the Rust prototype ships under a distinct,
@@ -141,7 +141,15 @@ unresponsive test hung until killed at 60 s. With the fixes all pass.
   --locked` into a temporary root, lammpkeeper wheel installed into a venv in a
   spaced path, run from outside the checkout with no PYTHONPATH: `doctor` ok,
   table printed, `--json` backend response identical to the venv's `lkpr exec`.
-- Full Python verifier: recorded below.
+- Full Python verifier (expanded Python 3.12, isolated HOME), which includes
+  `tests/test_rust_cli.py`:
+  - pre-review `ab0884e`: native **589/0/0**, forced NumPy **580/0/9**;
+  - final `154770d`: native **589 passed, 0 failed, 0 skipped**, forced NumPy
+    **580 passed, 0 failed, 9 skipped** (six known native-only checks plus three
+    REV-IO-4 native-comparison tests). Post analyses/real plots and prep passed.
+    Evidence: `/tmp/opencode/ui1b-native/20261101T113120-154770d-full`,
+    `/tmp/opencode/ui1b-numpy/20261101T113121-154770d-full`.
+- Installed check rerun on the final code: passed.
 
 Not tested: other OSes, older Rust toolchains, Python 3.9 runtime, MDAnalysis,
 pytest, real HPC.

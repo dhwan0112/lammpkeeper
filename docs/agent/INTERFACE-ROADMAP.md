@@ -17,7 +17,7 @@ ARCH-1 설계 승인 [완료]
       └─ EXEC-2 Python 환경 선택 / 로컬 작업 수명주기 [완료]
           ├─ AGENT-1 공통 Skill [완료: 호스트별 미검증 범위 별도]
           │   └─ AGENT-2 선택적 MCP [미착수]
-          └─ UI-1 Rust CLI [다음 단계: 무결성 묶음 완료]
+          └─ UI-1 Rust CLI [완료: lkpr-rs doctor/thermo-summary]
               └─ UI-2 Rust TUI [미착수]
 ```
 
@@ -31,7 +31,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-1 | 구현·검증·머지 | PR #29, `ed41c1f` | 다른 과학 작업은 개별 확장 |
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
-| UI-1 | 미착수, 다음 구현(무결성 묶음 완료, PR #37–#44) | 아래 7절 | Rust CLI 전체 |
+| UI-1 | 구현·검증 (`lkpr-rs`, docs/agent/UI-1.md) | 아래 7절 | Rust CLI 전체 |
 | UI-2 | 미착수 | 아래 8절 | Rust TUI 전체 |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
