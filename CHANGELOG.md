@@ -21,6 +21,8 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 - When an input declares only part of `pair_style`/`units`/`timestep`, the
   timestep stays unresolved: time-dependent analyses fail with an actionable
   error and `set dt <fs>` resolves it. Time-independent analyses still run.
+  Units the input does not declare are shown as unresolved (or guessed from a
+  loaded dump), never silently assumed `metal`.
 - `set dt` and `set forcefield` (now also `generic`) are manual overrides shown
   in `info`; they expire with a warning on input/data/dump load or unload and are
   cleared by `unload all`. `info` lists each metadata field as explicit, guessed

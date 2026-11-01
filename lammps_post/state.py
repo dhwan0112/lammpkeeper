@@ -224,7 +224,9 @@ class SessionState:
                                atom_style=base.atom_style, units=units,
                                timestep=base.timestep, dt_fs=dt_fs)
         values = {'forcefield': ff_family.value or 'unknown',
-                  'unit_system': units.value or 'metal',
+                  # None when the input declares other fields but not units:
+                  # consumers must report it, never assume metal (ADR-0005).
+                  'unit_system': units.value,
                   'dt_fs': dt_fs.value}
         if with_overrides:
             for key, record in self.manual_overrides.items():

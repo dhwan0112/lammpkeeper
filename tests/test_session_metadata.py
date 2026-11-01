@@ -759,3 +759,50 @@ def test_feo_prep_style_and_fixture_sessions_match_main():
         s = shell.state
         assert (s.ff, s.ff_info['unit_system'], s.dt_fs) == ('ace', 'metal', 1.0), order
         assert s.run_metadata.ff_family.status == 'explicit'
+
+
+# ───────────── parent review follow-ups (2026-11-01) ─────────────
+
+def test_undeclared_units_stay_unresolved_and_never_become_metal():
+    """An input with pair_style/timestep but no units leaves units unresolved.
+
+    Found by the GEN-2b review: with no trajectory loaded, units used to fall
+    back to 'metal' silently. Status now shows 'unresolved' and a thermo plot
+    without log units fails instead of assuming metal. With a dump loaded the
+    heuristic unit is used but labelled guessed, never explicit.
+    """
+    _util.require_numpy()
+    with tempfile.TemporaryDirectory(prefix='lk-g2b-') as tmp:
+        shell, dump, inp = _session(tmp, units=None)
+        _load(shell, 'input', inp)
+        s = shell.state
+        assert s.ff_info['unit_system'] is None
+        assert s.run_metadata.units.status == 'unresolved'
+        info = _run(shell, 'info')
+        assert any('Units' in line and 'unresolved' in line for line in info.splitlines()), info
+        log = Path(tmp) / 'log.lammps'
+        log.write_text('Step Temp\n0 300\n10 301\nLoop time of 1 on 1 procs for 10 steps with 6 atoms\n')
+        _load(shell, 'log', log)
+        _raises(shell._thermo_plot_metadata, 'units')
+        _load(shell, 'dump', dump)
+        assert s.run_metadata.units.status == 'guessed' and s.ff_info['unit_system'] == 'metal'
+
+
+def test_failed_manual_dt_publication_leaves_no_override():
+    """If publishing a manual dt fails, the override and published values roll back."""
+    _util.require_numpy()
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix='lk-g2b-') as tmp:
+        shell, dump, inp = _session(tmp)
+        _load(shell, 'input', inp)
+        _load(shell, 'dump', dump)
+        before = _view(shell)
+        with patch.object(type(shell), '_publish_metadata', side_effect=RuntimeError('boom')):
+            try:
+                _quiet(lambda: shell.do_set('dt 0.5'))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('publication failure was swallowed')
+        assert _view(shell) == before
+        assert 'dt' not in shell.state.manual_overrides

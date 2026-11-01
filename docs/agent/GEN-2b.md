@@ -94,4 +94,13 @@ key "until GEN-2b": `test_legacy_parse_input_values_unchanged` (eam etc. now
   not load in post (`round(...)` in a variable) on main and on this branch.
   Recorded as **REV-IO-7**; not part of GEN-2b.
 - Registered `test_session_metadata`; BACKLOG, CHANGELOG and ADR-0005 updated.
-- Full verifier results follow (started after this commit).
+- Independent read-only review (parent-commissioned) found, among minor notes:
+  (1) units fell back to `'metal'` silently when the input declared other fields
+  but not units and no dump was loaded; (2) `set dt` recorded its override before
+  publication without rollback. Both fixed: `unit_system` is now `None` (shown
+  "unresolved"; thermo plots without log units fail) and the dt path rolls back
+  like `set forcefield`. Two new tests fail on `c5d6afb` and pass now. With a
+  dump loaded, an undeclared unit is the heuristic's, labelled guessed.
+  Also noted: thermo plots in partial-input sessions now raise on unresolved dt
+  instead of assuming 1 fs — intended by ADR-0005 and covered by the CHANGELOG.
+- Full verifier results follow (started after the review-fix commit).

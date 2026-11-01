@@ -778,7 +778,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                        else f"{ff_info['dt_fs']} fs [{md.dt_fs.status}]")
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
                          f"[{md.ff_family.status}] "
-                         f"({ff_info['unit_system']} units, dt={dt_text})")
+                         f"({ff_info['unit_system'] or 'unresolved'} units, dt={dt_text})")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
             est_mb = frames.estimated_bytes / 1024 ** 2
             if frames.fits_in_cache:
@@ -1057,7 +1057,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         dt_value = s.dt_fs_or_none
         pairs = [
             ('Force Field', f"{s.ff.upper()} ({ff_status})"),
-            ('Units', s.ff_info['unit_system']),
+            ('Units', s.ff_info['unit_system'] or 'unresolved'),
             ('Timestep', 'unresolved' if dt_value is None else f"{dt_value} fs ({dt_status})"),
         ]
         # Evidence status/source for every metadata field, then manual overrides.
@@ -1266,8 +1266,19 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                               RuntimeWarning, stacklevel=3)
         else:
             text = f"unresolved ({evidence.dt_fs.note})"
-        s.manual_overrides = dict(s.manual_overrides, dt={'value': value, 'evidence': text})
-        self._publish_metadata()
+        previous = s.manual_overrides
+        previous_published = {k: s.ff_info[k] for k in ('forcefield', 'unit_system', 'dt_fs')}
+        previous_metadata = s.run_metadata
+        s.manual_overrides = dict(previous, dt={'value': value, 'evidence': text})
+        try:
+            self._publish_metadata()
+        except Exception:
+            # Same rollback as `set forcefield`: a failed publication must not
+            # leave an override recorded against stale published values.
+            s.manual_overrides = previous
+            s.ff_info.update(previous_published)
+            s.run_metadata = previous_metadata
+            raise
         s.clear_cache()  # Time axes change with timestep
         progress_msg(f"Timestep: {s.dt_fs} fs [manual]")
 
@@ -2799,6 +2810,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             units = input_units
         elif s.dump_frames:
             units = s.ff_info['unit_system']
+            if units is None:
+                # Explicit input metadata without `units`: do not fall back to metal.
+                raise ValueError('Native units are unresolved: neither the log nor the input '
+                                 'declares units; load an input or log with explicit units')
             warnings.warn('Native log units are unconfirmed; using trajectory metadata for thermo plots',
                           RuntimeWarning, stacklevel=2)
         else:
@@ -3742,7 +3757,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         lines.append("LAMMPS-POST Analysis Summary")
         lines.append("=" * 60)
         lines.append(f"Force Field: {s.ff.upper()}")
-        lines.append(f"Units: {s.ff_info['unit_system']}")
+        lines.append(f"Units: {s.ff_info['unit_system'] or 'unresolved'}")
         lines.append(f"Timestep: {s.dt_fs_or_none if s.dt_fs_or_none is not None else 'unresolved'} fs")
 
         if s.dump_path:
