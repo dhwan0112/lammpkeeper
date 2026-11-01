@@ -283,11 +283,13 @@ fn unresponsive_backend_after_ctrl_c_is_forced_and_not_called_cancelled() {
     let dir = tempdir("unresponsive");
     let pid_file = dir.join("pid");
     let grandchild = dir.join("grandchild");
-    // Ignores SIGINT and keeps a grandchild in its process group.
+    // Ignores SIGINT, exits at once on SIGTERM, and leaves a grandchild that
+    // ignores SIGTERM and holds the stdout pipe: only a group SIGKILL stops it.
     let py = fake(
         &dir,
         &format!(
-            "cat >/dev/null\ntrap '' INT\nsleep 300 & echo $! > {g:?}\necho $$ > {p:?}\nwait",
+            "cat >/dev/null\ntrap '' INT\ntrap 'exit 0' TERM\n\
+             bash -c 'trap \"\" TERM; exec sleep 300' & echo $! > {g:?}\necho $$ > {p:?}\nwait",
             g = grandchild,
             p = pid_file,
         ),
@@ -349,4 +351,84 @@ fn backend_that_outlives_its_deadline_is_forced() {
         .parse()
         .unwrap();
     assert!(wait_gone(pid));
+}
+
+/// Wait for a process with a hard limit, killing it on timeout (test guard).
+fn wait_bounded(mut child: std::process::Child, limit: Duration) -> Output {
+    let until = Instant::now() + limit;
+    while Instant::now() < until {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    panic!("lkpr-rs did not finish within {limit:?}");
+}
+
+#[test]
+fn ctrl_c_works_while_the_backend_never_reads_a_large_request() {
+    let dir = tempdir("stdin");
+    let pid_file = dir.join("pid");
+    // Never reads stdin; a request larger than a pipe buffer must not block lkpr-rs.
+    let py = fake(
+        &dir,
+        &format!(
+            "trap 'echo \"{{\\\"job_schema_version\\\":1,\\\"state\\\":\\\"cancelled\\\"}}\"; exit 130' INT\n\
+             echo $$ > {pid_file:?}\nwhile true; do sleep 0.05; done"
+        ),
+    );
+    // Below the 128 KiB single-argument limit, above the 64 KiB pipe buffer.
+    let long_log = "x".repeat(100_000);
+    let child = Command::new(bin())
+        .args([
+            "thermo-summary",
+            "--python",
+            py.to_str().unwrap(),
+            "--log",
+            &long_log,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    await_pid(&pid_file);
+    // SAFETY: SIGINT to the lkpr-rs process we started.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    let o = wait_bounded(child, Duration::from_secs(20));
+    assert_eq!(o.status.code(), Some(130), "{}", stderr(&o));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("cancelled"));
+}
+
+#[test]
+fn stdout_held_open_after_exit_is_reported_not_waited_forever() {
+    let dir = tempdir("heldopen");
+    // Prints a complete snapshot, then leaves a background process holding stdout.
+    let py = fake(
+        &dir,
+        "cat >/dev/null\necho '{\"job_schema_version\":1,\"state\":\"succeeded\"}'\n(sleep 30) 2>/dev/null &\nexit 0",
+    );
+    let child = Command::new(bin())
+        .args([
+            "thermo-summary",
+            "--python",
+            py.to_str().unwrap(),
+            "--log",
+            "a",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let o = wait_bounded(child, Duration::from_secs(20));
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("backend_stdout_held_open"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(start.elapsed() < Duration::from_secs(10));
 }

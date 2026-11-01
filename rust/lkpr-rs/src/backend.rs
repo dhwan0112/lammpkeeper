@@ -10,6 +10,7 @@ use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,6 +23,10 @@ pub const MAX_STDOUT: usize = 16 * 1024 * 1024;
 pub const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 /// Wait between SIGTERM and SIGKILL when the backend must be stopped by force.
 pub const KILL_GRACE: Duration = Duration::from_secs(2);
+/// After the backend exits, wait this long for its stdout pipe to close. Only
+/// a stray process still holding the pipe could delay it (EXEC-2 gives its own
+/// children separate pipes), so a timeout is reported, never waited out.
+pub const STDOUT_CLOSE_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(20);
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -69,6 +74,8 @@ pub struct Outcome {
     pub interrupted: bool,
     /// Set when this supervisor terminated the backend by force.
     pub forced: Option<Forced>,
+    /// The backend exited but something kept its stdout open; `stdout` is empty.
+    pub stdout_held_open: bool,
 }
 
 /// Start `program args...` in a new process group with stdout captured and
@@ -90,9 +97,13 @@ pub fn spawn(program: &str, args: &[String], stdin: Option<&[u8]>) -> std::io::R
         .process_group(0);
     let mut child = command.spawn()?;
     if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        // A backend that exits early closes the pipe; that failure is reported
-        // through its exit status and output, so a write error is not fatal here.
-        let _ = pipe.write_all(bytes);
+        // Write on a thread: a backend that never reads stdin must not block us
+        // before the supervision loop (deadline, Ctrl-C) starts. A backend that
+        // exits early closes the pipe; that shows up in its status and output.
+        let bytes = bytes.to_vec();
+        thread::spawn(move || {
+            let _ = pipe.write_all(&bytes);
+        });
     }
     Ok(child)
 }
@@ -104,15 +115,31 @@ fn signal_group(pid: u32, sig: libc::c_int) {
     }
 }
 
-/// Stop the backend by force: SIGTERM its group, then SIGKILL after a grace.
+/// True once the child has exited, without reaping it (waitid WNOWAIT). While
+/// unreaped, its pid and process-group id cannot be reused by another process.
+fn exited_unreaped(pid: u32) -> bool {
+    // SAFETY: waitid on our own child with WNOHANG|WNOWAIT only inspects state.
+    unsafe {
+        let mut info: libc::siginfo_t = std::mem::zeroed();
+        let rc = libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        );
+        rc == 0 && info.si_pid() != 0
+    }
+}
+
+/// Stop the backend by force: SIGTERM its group, wait up to a grace, then
+/// SIGKILL the whole group before reaping the leader. Killing the group even
+/// after the leader exited stops members that could hold the stdout pipe; the
+/// unreaped leader keeps the group id from being reused meanwhile.
 fn terminate(child: &mut Child) -> Option<ExitStatus> {
     let pid = child.id();
     signal_group(pid, libc::SIGTERM);
     let until = Instant::now() + KILL_GRACE;
-    while Instant::now() < until {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
+    while Instant::now() < until && !exited_unreaped(pid) {
         thread::sleep(POLL);
     }
     signal_group(pid, libc::SIGKILL);
@@ -127,8 +154,9 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
     let overflow = Arc::new(AtomicBool::new(false));
     let mut pipe = child.stdout.take().expect("stdout is piped");
     let flag = Arc::clone(&overflow);
+    let (sender, receiver) = mpsc::channel();
     // Read on a thread so a full pipe can never block the child or this loop.
-    let reader = thread::spawn(move || {
+    thread::spawn(move || {
         let mut kept = Vec::new();
         let mut buf = [0u8; 65536];
         loop {
@@ -144,7 +172,7 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
                 }
             }
         }
-        kept
+        let _ = sender.send(kept);
     });
 
     let mut forwarded = false;
@@ -174,11 +202,16 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
         }
         thread::sleep(POLL);
     };
-    let stdout = reader.join().unwrap_or_default();
+    // Bounded: a stray process holding the pipe must not hang the CLI.
+    let (stdout, stdout_held_open) = match receiver.recv_timeout(STDOUT_CLOSE_WAIT) {
+        Ok(bytes) => (bytes, false),
+        Err(_) => (Vec::new(), true),
+    };
     Outcome {
         status,
         stdout,
         interrupted: forwarded,
         forced,
+        stdout_held_open,
     }
 }

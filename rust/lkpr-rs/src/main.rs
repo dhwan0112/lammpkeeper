@@ -105,6 +105,10 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
                         "--timeout must be finite and positive, got {text:?}"
                     )));
                 }
+                // The supervisor deadline must be representable (no overflow panic).
+                if deadline_after(seconds).is_none() {
+                    return Err(usage_error(format!("--timeout is too large, got {text:?}")));
+                }
                 options.timeout = Some(seconds);
             }
             other => {
@@ -115,6 +119,12 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
         }
     }
     Ok(options)
+}
+
+/// Supervisor deadline for a backend timeout, or None if it cannot be represented.
+fn deadline_after(seconds: f64) -> Option<Instant> {
+    let backend = Duration::try_from_secs_f64(seconds).ok()?;
+    Instant::now().checked_add(backend.checked_add(DEADLINE_SLACK)?)
 }
 
 /// Explicit environment only: --python, then LKPR_PYTHON. No PATH guessing.
@@ -163,6 +173,12 @@ fn run_backend(
             )))
         }
         None => {}
+    }
+    if outcome.stdout_held_open {
+        return Err(failure(
+            "backend_stdout_held_open: the backend exited but another process kept its \
+             output open; no result was read",
+        ));
     }
     match serde_json::from_slice::<Value>(&outcome.stdout) {
         Ok(value) if value.is_object() => Ok((value, outcome)),
@@ -384,7 +400,7 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
         "--timeout".to_string(),
         timeout.to_string(),
     ];
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout) + DEADLINE_SLACK;
+    let deadline = deadline_after(timeout).ok_or_else(|| usage_error("--timeout is too large"))?;
     let (snapshot, outcome) = run_backend(python, args, Some(&body), deadline)?;
     if snapshot["job_schema_version"] != 1 || !snapshot["state"].is_string() {
         return Err(failure("invalid_backend_output: the backend did not return a job snapshot (job_schema_version 1)"));
@@ -475,6 +491,8 @@ mod tests {
             &["thermo-summary", "--timeout", "nan"],
             &["thermo-summary", "--timeout", "inf"],
             &["thermo-summary", "--timeout", "x"],
+            &["thermo-summary", "--timeout", "1e30"],
+            &["thermo-summary", "--timeout", "1e300"],
             &["thermo-summary", "--log", "a", "--log", "b"],
             &["doctor", "--log", "a"],
             &["doctor", "--frobnicate"],

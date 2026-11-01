@@ -84,14 +84,45 @@ Choices made during implementation, within the approved design:
   HOME is isolated, because rustup finds its toolchains through HOME.
 
 Known limits: SIGTERM/SIGKILL sent to `lkpr-rs` itself is not forwarded; the
-backend then stops at its own timeout. Running from inside the checkout lets any
+backend then stops at its own timeout. A Ctrl-C in the first moments, before
+Python has installed its SIGINT handling, can end `lkpr run` with a traceback
+instead of a snapshot; `lkpr-rs` then reports `invalid_backend_output` and still
+exits 130. Running from inside the checkout lets any
 Python import `lammpkeeper` from the working directory, so `doctor` there does not
 prove the package is installed; the installed-binary check below runs outside it.
 
+## Independent review and fixes
+
+A read-only review of `main.rs`/`backend.rs` (no other files) found four issues;
+the parent fixed three and documented the fourth (early Ctrl-C, above):
+
+1. `--timeout 1e30` panicked (exit 101) in `Duration::from_secs_f64`. Now
+   `Duration::try_from_secs_f64` + `checked_add`; too large is a usage error
+   (exit 2). Unit test extended with `1e30` and `1e300`.
+2. The request was written to stdin before the supervision loop, so a backend
+   that never reads stdin could block `lkpr-rs` forever with no deadline and no
+   Ctrl-C forwarding. Now written from a thread. New test
+   `ctrl_c_works_while_the_backend_never_reads_a_large_request` (100 KB request,
+   above the 64 KiB pipe buffer).
+3. After a forced stop, a group member that survived SIGTERM could keep stdout
+   open and hang the reader join. `terminate` now detects leader exit with
+   `waitid(WNOWAIT)` (the unreaped leader keeps the group id reserved) and always
+   SIGKILLs the group before reaping; the stdout wait after exit is bounded (5 s)
+   and reported as `backend_stdout_held_open`. New test
+   `stdout_held_open_after_exit_is_reported_not_waited_forever`; the
+   unresponsive-backend test now uses a grandchild that ignores SIGTERM.
+   (EXEC-2's own children use separate pipes — `jobs.py` `stdout=PIPE` — so this
+   only matters for broken or foreign backends.)
+
+Fail-before evidence with the pre-review `backend.rs` (`468cac9`): the two new
+tests failed (lkpr-rs still running after the 20 s guard) and the updated
+unresponsive test hung until killed at 60 s. With the fixes all pass.
+
 ## Verification (measured)
 
-- `cargo test` (debug, rustc 1.98.1, Linux x86_64): unit **4 passed**,
-  process tests **11 passed** (~15 s; includes the 15 s deadline case).
+- `cargo test` (debug, rustc 1.98.1, Linux x86_64), after the review fixes:
+  unit **4 passed**, process tests **13 passed** (~15 s; includes the 15 s
+  deadline case).
   `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean.
 - Mutation check: with SIGINT forwarding disabled,
   `ctrl_c_is_forwarded_once_and_reports_interruption` fails.
