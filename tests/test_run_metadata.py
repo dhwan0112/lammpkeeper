@@ -370,19 +370,34 @@ def test_made_up_labels_and_sparse_types_do_not_affect_classification():
     assert config['element_map'] == {1: 'X', 2: 'Q'}
 
 
+# GEN-2b (ADR-0005, accepted 2026-11-01) deliberately derives the legacy
+# 'forcefield' key from the exact-token classifier instead of substrings. LEGACY
+# above stays the literal record of main 7192e64; these are the only intended
+# differences (explicit non-Fe-O and hybrid styles are 'generic', not 'unknown'
+# or a substring-matched 'ace'). Every other legacy key is unchanged.
+GEN2B_FORCEFIELD = {'eam': 'generic', 'filename_trap': 'generic', 'hybrid': 'generic'}
+
+
 def test_legacy_parse_input_values_unchanged():
-    """Existing parse_input keys keep the exact values main produced."""
+    """parse_input keys keep main's values, except the ADR-0005 forcefield changes."""
     for name, expected in LEGACY.items():
         config, _ = _parse(name)
         for key in LEGACY_KEYS:
-            assert config[key] == expected[key], (name, key, config[key], expected[key])
-            assert type(config[key]) is type(expected[key]), (name, key)
+            want = expected[key]
+            if key == 'forcefield' and name in GEN2B_FORCEFIELD:
+                want = GEN2B_FORCEFIELD[name]
+            assert config[key] == want, (name, key, config[key], want)
+            assert type(config[key]) is type(want), (name, key)
 
 
-def test_legacy_forcefield_still_substring_based_until_gen2b():
-    """The legacy 'forcefield' key is untouched; only 'metadata' is generic-aware."""
+def test_legacy_forcefield_key_is_exact_token_generic_aware():
+    """Since GEN-2b the legacy 'forcefield' key agrees with the exact classifier.
+
+    Before GEN-2b a hybrid line containing 'pace' was reported as 'ace' by
+    substring matching; ADR-0005 makes hybrid styles 'generic'.
+    """
     config, _ = _parse('hybrid')
-    assert config['forcefield'] == 'ace'
+    assert config['forcefield'] == 'generic'
     assert config['metadata'].ff_family.value == 'generic'
 
 

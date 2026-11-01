@@ -228,6 +228,31 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     # ─── Output directory suggestion after first load ───
 
+    def _publish_metadata(self):
+        """Recompute effective run metadata and publish it into the legacy ff_info view.
+
+        Resolution (explicit input, labelled guess, manual overrides) is owned
+        by SessionState.effective_metadata; this only stores the result so
+        existing readers of ff_info/ff/dt_fs keep working. An unresolved
+        timestep becomes None, which makes SessionState.dt_fs raise for
+        time-dependent consumers. Callers decide when cached results are stale.
+        """
+        s = self.state
+        metadata, values = s.effective_metadata()
+        s.run_metadata = metadata
+        s.ff_info['forcefield'] = values['forcefield']
+        s.ff_info['unit_system'] = values['unit_system']
+        s.ff_info['dt_fs'] = values['dt_fs']
+
+    def _expire_manual_overrides(self):
+        """Drop `set dt`/`set forcefield` records because typed evidence is changing.
+
+        Rebinds rather than mutates so a failed load/unload transaction restores
+        the previous records. The visible warning is issued by the transaction
+        wrapper after success, mirroring the manual species override.
+        """
+        self.state.manual_overrides = {}
+
     def _apply_input_config(self):
         """
         Apply parsed input file configuration to enhance/override ff_info.
@@ -243,22 +268,19 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if config is None:
             return
 
-        # Override ff_info with authoritative data from input file
-        if config['forcefield'] != 'unknown':
-            s.ff_info['forcefield'] = config['forcefield']
-        if config.get('units'):
-            s.ff_info['unit_system'] = config['units']
-        if config.get('dt_fs'):
-            s.ff_info['dt_fs'] = config['dt_fs']
+        # Publish resolved metadata (explicit input evidence, then the labelled
+        # legacy guess) before species, since the force-field family decides
+        # which preset labels may apply.
+        self._publish_metadata()
         s.species_sources = dict(s.species_sources,
                                  input=dict(config.get('element_map', {})))
         s.refresh_species()
         if not s.dump_frames and config.get('pair_coeff') and config['pair_coeff'].get('elements'):
-            s.ff_info['has_charge'] = config['forcefield'] == 'reaxff'
+            s.ff_info['has_charge'] = s.ff == 'reaxff'
 
         self._invalidate_metadata()
 
-        progress_msg(f"Applied input config: {config['forcefield'].upper()}, "
+        progress_msg(f"Applied input config: {s.ff.upper()}, "
                      f"types={config['element_map']}")
 
     def _suggest_output_dir(self, loaded_path):
@@ -496,6 +518,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if original['_species_override'] is not None and s._species_override is None:
                 warnings.warn('Manual species override cleared by typed source load; '
                               'restored automatic source metadata', RuntimeWarning, stacklevel=2)
+            if original['manual_overrides'] and not s.manual_overrides:
+                warnings.warn(f"Manual overrides {sorted(original['manual_overrides'])} cleared by "
+                              'typed source load; restored resolved source metadata',
+                              RuntimeWarning, stacklevel=2)
             if isinstance(s.dump_frames, LazyFrames):
                 # Frames parsed for load-time inspection must be checked again
                 # under the committed identity map before numerical analysis.
@@ -588,6 +614,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         if ftype == 'dump':
             self.state._species_override = None
+            self._expire_manual_overrides()
             progress_msg(f"Loading dump: {fpath} ...")
             try:
                 reader = DumpReader(fpath,
@@ -632,7 +659,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 # read as Fe_down by every type-based analysis.
                 elem_to_type = None
                 lookup = None   # full mapping, so elements absent from frame 0 still resolve
-                for ff_name in ('ace', 'reaxff'):
+                # An explicit generic pair style gets no Fe-O preset numbering.
+                explicit_generic = (self.state.input_config or {}).get('forcefield') == 'generic'
+                for ff_name in (() if explicit_generic else ('ace', 'reaxff')):
                     canonical = ff_element_to_type(ff_name)
                     if set(unique_elems) <= set(canonical):
                         elem_to_type = {e: canonical[e] for e in unique_elems}
@@ -684,6 +713,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.species_sources = dict(self.state.species_sources,
                                               dump=dict(reader.type_labels))
             self.state._dump_type_ids = reader.type_ids
+
+            # Resolve metadata (input evidence, else the labelled heuristic)
+            # before species so the family decides which presets may apply.
+            self._publish_metadata()
 
             # Authoritative species must precede surface detection in both
             # load orders, not merely overwrite labels after deriving geometry.
@@ -740,8 +773,12 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if skipped:
                 progress_msg(f"Not loaded (unused by analyses): {', '.join(skipped)} "
                              f"(--all-columns keeps them)")
+            md = self.state.run_metadata
+            dt_text = ('unresolved' if ff_info['dt_fs'] is None
+                       else f"{ff_info['dt_fs']} fs [{md.dt_fs.status}]")
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
-                         f"({ff_info['unit_system']} units, dt={ff_info['dt_fs']} fs)")
+                         f"[{md.ff_family.status}] "
+                         f"({ff_info['unit_system']} units, dt={dt_text})")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
             est_mb = frames.estimated_bytes / 1024 ** 2
             if frames.fits_in_cache:
@@ -781,6 +818,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         elif ftype == 'data':
             self.state._species_override = None
+            self._expire_manual_overrides()
+            self._publish_metadata()
             # Static structure mass belongs to this file's counts and Masses;
             # incomplete masses must not leave an old total available.
             progress_msg(f"Loading data file: {fpath} ...")
@@ -817,6 +856,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Masses: {mass_str}")
         elif ftype == 'input':
             self.state._species_override = None
+            self._expire_manual_overrides()
             # Re-seed from the current dump/defaults before overlaying the new
             # input, preventing metadata from an older input from leaking in.
             progress_msg(f"Loading input: {fpath} ...")
@@ -838,6 +878,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 progress_msg(f"Type mapping: {C.info(type_str)}")
             if config.get('dt_fs'):
                 progress_msg(f"Timestep: {config['dt_fs']} fs")
+            elif config['metadata'].dt_fs.note:
+                progress_msg(f"Timestep unresolved: {config['metadata'].dt_fs.note}")
             if config.get('temperature'):
                 progress_msg(f"Temperature: {config['temperature']} K")
             if config['reaction_type'] != 'unknown':
@@ -894,6 +936,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if arg.strip().lower() == 'all':
             for source in ('dump', 'log', 'data', 'input', 'manifest'):
                 self.do_unload(source)
+            # Each typed unload already expires the records; clear again so
+            # 'all' is unconditional even if the session shape changes.
+            self.state.manual_overrides = {}
+            self._publish_metadata()
             return
         s = self.state
         original = dict(s.__dict__)
@@ -906,6 +952,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if original['_species_override'] is not None and s._species_override is None:
                 warnings.warn('Manual species override cleared by typed source unload; '
                               'restored automatic source metadata', RuntimeWarning, stacklevel=2)
+            if original['manual_overrides'] and not s.manual_overrides:
+                warnings.warn(f"Manual overrides {sorted(original['manual_overrides'])} cleared by "
+                              'typed source unload; restored resolved source metadata',
+                              RuntimeWarning, stacklevel=2)
             if isinstance(s.dump_frames, LazyFrames):
                 s.dump_frames.set_transform(s.dump_frames._store.transform)
         except Exception:
@@ -926,6 +976,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         ftype = arg.strip().lower()
         if ftype in ('dump', 'data', 'input'):
             self.state._species_override = None
+            self._expire_manual_overrides()
         if ftype == 'dump':
             self.state.dump_path = None
             self.state.dump_frames = None
@@ -942,6 +993,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.surface_z = None
             self.state.surface_z_manual = False
             self.state.z_focus = None
+            self._publish_metadata()
             if self.state.input_config:
                 self._apply_input_config()
             else:
@@ -961,6 +1013,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.total_mass_amu = None
             self.state.species_sources = {key: value for key, value in
                                           self.state.species_sources.items() if key != 'data'}
+            self._publish_metadata()
             self.state.refresh_species()
             self._invalidate_metadata()
             progress_msg("Data file unloaded.")
@@ -971,6 +1024,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.species_sources = {key: value for key, value in s.species_sources.items()
                                  if key != 'input'}
             s.ff_info = dict(s._dump_ff_info or SessionState().ff_info)
+            self._publish_metadata()
             s.refresh_species()
             self._invalidate_metadata()
             progress_msg("Input file unloaded.")
@@ -995,11 +1049,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         a complete provenance record for later input or manual overrides.
         """
         s = self.state
+        md = s.run_metadata
+        ff_status = 'manual' if 'forcefield' in s.manual_overrides else (
+            md.ff_family.status if md is not None else 'unresolved')
+        dt_status = 'manual' if 'dt' in s.manual_overrides else (
+            md.dt_fs.status if md is not None else 'unresolved')
+        dt_value = s.dt_fs_or_none
         pairs = [
-            ('Force Field', f"{s.ff.upper()} ({'auto' if s.dump_frames else 'N/A'})"),
+            ('Force Field', f"{s.ff.upper()} ({ff_status})"),
             ('Units', s.ff_info['unit_system']),
-            ('Timestep', f"{s.dt_fs} fs"),
+            ('Timestep', 'unresolved' if dt_value is None else f"{dt_value} fs ({dt_status})"),
         ]
+        # Evidence status/source for every metadata field, then manual overrides.
+        for index, line in enumerate(s.describe_metadata()):
+            pairs.append(('Run metadata' if index == 0 else '', line))
 
         if s.dump_path:
             pairs.append(('Dump', os.path.basename(s.dump_path)))
@@ -1183,6 +1246,69 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     # ─── SETTINGS ───
 
+    def _set_manual_dt(self, value):
+        """Store a validated `set dt` override (fs) separately from source evidence.
+
+        Rejected before any state change when the resolved units are known and
+        unsupported (e.g. lj): no conversion is invented for them. A value that
+        differs from resolved evidence is accepted with a warning; the record
+        shows as manual in status and expires on typed source changes.
+        """
+        s = self.state
+        evidence, _ = s.effective_metadata(with_overrides=False)
+        if evidence.units.value not in (None, 'metal', 'real'):
+            raise ValueError(f"set dt cannot create a conversion for units "
+                             f"{evidence.units.value!r}; only metal and real are supported")
+        if evidence.dt_fs.value is not None:
+            text = f"{evidence.dt_fs.value!r} fs [{evidence.dt_fs.status}]"
+            if not np.isclose(value, evidence.dt_fs.value):
+                warnings.warn(f"Manual dt {value!r} fs differs from resolved evidence {text}",
+                              RuntimeWarning, stacklevel=3)
+        else:
+            text = f"unresolved ({evidence.dt_fs.note})"
+        s.manual_overrides = dict(s.manual_overrides, dt={'value': value, 'evidence': text})
+        self._publish_metadata()
+        s.clear_cache()  # Time axes change with timestep
+        progress_msg(f"Timestep: {s.dt_fs} fs [manual]")
+
+    def _set_manual_forcefield(self, family):
+        """Store a `set forcefield` override separately, rolling back if labels reject it.
+
+        The family decides which preset labels apply, so species are rebuilt
+        under it; a validation failure restores the previous override record,
+        labels and published metadata before re-raising.
+        """
+        s = self.state
+        evidence, _ = s.effective_metadata(with_overrides=False)
+        text = f"{evidence.ff_family.value!r} [{evidence.ff_family.status}]"
+        previous = s.manual_overrides
+        previous_types = s.ff_info['atom_types']
+        previous_published = {k: s.ff_info[k] for k in ('forcefield', 'unit_system', 'dt_fs')}
+        previous_metadata = s.run_metadata
+        s.manual_overrides = dict(previous, forcefield={'value': family, 'evidence': text})
+        try:
+            previous_family = s.ff
+            self._publish_metadata()
+            # Legacy check: the new family must not contradict existing labels
+            # or manifest unions. Labels are rebuilt only when generic is
+            # entered or left, because only that changes which presets apply.
+            s._validate_species(s.atom_types, allow_pending=True)
+            if 'generic' in (family, previous_family):
+                s.refresh_species()
+        except Exception:
+            # Restore the exact earlier published values (not a recomputation),
+            # so hand-set or legacy ff_info content survives a rejected change.
+            s.manual_overrides = previous
+            s.ff_info.update(previous_published)
+            s.ff_info['atom_types'] = previous_types
+            s.run_metadata = previous_metadata
+            raise
+        if evidence.ff_family.value is not None and evidence.ff_family.value != family:
+            warnings.warn(f"Manual force field {family!r} differs from resolved evidence {text}",
+                          RuntimeWarning, stacklevel=3)
+        self._invalidate_metadata()
+        progress_msg(f"Force field: {family.upper()} [manual]")
+
     def do_set(self, arg):
         """
         Set a parameter. Configures analysis, output, and plot style settings.
@@ -1196,7 +1322,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             set output <dir>                    — Output directory for plots/exports
             set surface_z <float>               — Fe surface z-coordinate (Angstroms)
             set dt <float>                      — Override timestep (femtoseconds)
-            set forcefield reaxff|ace|hdnnp      — Override auto-detected force field
+            set forcefield reaxff|ace|hdnnp|generic — Manual force-field override
             set types 1=Fe 2=O 3=Cr             — Override atom type name mapping
             set dpi <int>                       — Plot resolution (dots per inch)
             set normalize on|off                — Show ratios instead of raw counts
@@ -1234,21 +1360,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.clear_cache()  # Penetration and OAR depend on surface_z
             progress_msg(f"Surface z: {s.surface_z} A")
         elif key == 'dt':
-            s.ff_info['dt_fs'] = self._finite_value('dt', val, positive=True)
-            s.clear_cache()  # Time axes change with timestep
-            progress_msg(f"Timestep: {s.dt_fs} fs")
+            self._set_manual_dt(self._finite_value('dt', val, positive=True))
         elif key == 'forcefield':
-            valid = ['reaxff', 'ace', 'hdnnp']
+            valid = ['reaxff', 'ace', 'hdnnp', 'generic']
             if val.lower() in valid:
-                previous_ff = s.ff_info['forcefield']
-                s.ff_info['forcefield'] = val.lower()
-                try:
-                    s._validate_species(s.atom_types, allow_pending=True)
-                except Exception:
-                    s.ff_info['forcefield'] = previous_ff
-                    raise
-                self._invalidate_metadata()
-                progress_msg(f"Force field: {val.upper()}")
+                self._set_manual_forcefield(val.lower())
             else:
                 raise ValueError(f"Invalid force field. Choose from: {', '.join(valid)}")
         elif key == 'types':
@@ -2665,10 +2781,16 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """
         s = self.state
         log = s.log_data or {}
-        input_units = (s.input_config or {}).get('units')
+        # Resolve fresh: programmatic input_config changes need not have been
+        # published, and this consumer must see the explicit evidence itself.
+        md, _ = s.effective_metadata()
+        explicit_units = md is not None and md.units.status == 'explicit'
+        input_units = md.units.value if explicit_units else None
         units = log.get('unit_system')
         if units and input_units and units != input_units:
-            raise ValueError('Conflicting explicit log/input units; load matching run metadata')
+            raise ValueError(f"Conflicting explicit units: log {s.log_path} declares {units!r}, "
+                             f"input {md.units.source} declares {input_units!r}; "
+                             'load matching run metadata')
         if units:
             if s.dump_frames and units != s.ff_info.get('unit_system'):
                 warnings.warn('Log and trajectory unit metadata differ; using explicit log units '
@@ -2682,9 +2804,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         else:
             raise ValueError('Native log units are unknown; load an input script with explicit units')
         dt_fs = log.get('dt_fs')
-        input_dt = (s.input_config or {}).get('dt_fs')
+        input_dt = md.dt_fs.value if md is not None and md.dt_fs.status == 'explicit' else None
         if dt_fs is not None and input_dt is not None and not np.isclose(dt_fs, input_dt):
-            raise ValueError('Conflicting explicit log/input timesteps; load matching run metadata')
+            raise ValueError(f"Conflicting explicit timesteps: log {s.log_path} declares {dt_fs!r} fs, "
+                             f"input {md.dt_fs.source} declares {input_dt!r} fs; "
+                             'load matching run metadata')
         if dt_fs is None:
             dt_fs = input_dt if input_dt is not None else s.dt_fs
             if input_dt is None:
@@ -3619,7 +3743,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         lines.append("=" * 60)
         lines.append(f"Force Field: {s.ff.upper()}")
         lines.append(f"Units: {s.ff_info['unit_system']}")
-        lines.append(f"Timestep: {s.dt_fs} fs")
+        lines.append(f"Timestep: {s.dt_fs_or_none if s.dt_fs_or_none is not None else 'unresolved'} fs")
 
         if s.dump_path:
             lines.append(f"\nDump: {s.dump_path}")
@@ -3951,7 +4075,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
   set output <dir>                          Output directory
   set surface_z <float>                     Fe surface z coordinate (A)
   set dt <float>                            Override timestep (fs)
-  set forcefield reaxff|ace|hdnnp           Override force field
+  set forcefield reaxff|ace|hdnnp|generic  Manual force-field override
   set types 1=Fe 2=O ...                    Override type mapping
   set dpi <int>                             Plot resolution
   set normalize on|off                      Show ratios instead of raw counts

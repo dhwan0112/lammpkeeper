@@ -1719,7 +1719,8 @@ def parse_input(filepath):
             'pair_style'   : str or None  — Full pair_style string
             'pair_coeff'   : dict or None — {'potential_file': str, 'elements': list[str]}
             'element_map'  : dict         — {1: 'Fe', 2: 'O', ...} from pair_coeff
-            'forcefield'   : str          — 'reaxff', 'ace', or 'unknown'
+            'forcefield'   : str          — 'reaxff', 'ace', 'hdnnp', 'generic' (any other
+                             or hybrid pair_style) or 'unknown' (no pair_style)
             'timestep'     : float or None
             'dt_fs'        : float or None — Timestep in femtoseconds
             'read_data'    : str or None  — Data file path
@@ -1741,8 +1742,8 @@ def parse_input(filepath):
             'metadata'     : RunMetadata  — Immutable explicit pair_style/family/units/
                              timestep/dt_fs with per-field provenance (ADR-0005)
 
-    Raises ValueError if the input repeats `timestep` with differing values;
-    equal repeats are accepted.
+    Raises ValueError if the input repeats `timestep`, `pair_style` or
+    `atom_style` with differing values; equal repeats are accepted.
     """
     # Static extraction is deliberately not a LAMMPS interpreter: no loops,
     # jumps, functions or simulation-dependent equal-variable evaluation run.
@@ -1888,6 +1889,11 @@ def parse_input(filepath):
             if config['units'] not in ('metal', 'real'):
                 raise ValueError(f"{filepath}: unsupported units style {config['units']!r}; supported: metal, real")
         elif cmd == 'atom_style' and len(parts) >= 2:
+            # A contradictory repeat would make one trajectory-wide atom style a
+            # guess (ADR-0005); equal repeats are harmless.
+            if config['atom_style'] is not None and config['atom_style'] != parts[1]:
+                raise ValueError(f"{filepath}: atom_style declared twice with different values "
+                                 f"{config['atom_style']!r} and {parts[1]!r}; one input must use one atom_style")
             config['atom_style'] = parts[1]
         elif cmd == 'boundary':
             words = parse_input_boundary(parts[1:], where=f"{filepath}: boundary command")
@@ -1895,7 +1901,12 @@ def parse_input(filepath):
                 raise ValueError(f"{filepath}: changing boundary requires separate trajectories/configuration")
             config['boundary'] = words
         elif cmd == 'pair_style':
-            config['pair_style'] = ' '.join(parts[1:])
+            declared = ' '.join(parts[1:])
+            # Same rule as timestep/atom_style: one input, one pair style.
+            if config['pair_style'] is not None and config['pair_style'] != declared:
+                raise ValueError(f"{filepath}: pair_style declared twice with different values "
+                                 f"{config['pair_style']!r} and {declared!r}; one input must use one pair_style")
+            config['pair_style'] = declared
             mappings.clear()
             config['element_map'] = {}
             config['pair_coeff'] = None
@@ -2061,16 +2072,10 @@ def parse_input(filepath):
             except ValueError:
                 pass
 
-    # Legacy substring classification, kept unchanged for the shell until GEN-2b
-    # routes callers to config['metadata'] (exact-token, generic-aware); see
-    # ADR-0005. Do not rely on this key for non-Fe-O styles.
-    ps = (config['pair_style'] or '').lower()
-    if 'reaxff' in ps or 'reax/c' in ps:
-        config['forcefield'] = 'reaxff'
-    elif 'pace' in ps or 'ace' in ps:
-        config['forcefield'] = 'ace'
-    elif 'hdnnp' in ps or 'n2p2' in ps:
-        config['forcefield'] = 'hdnnp'
+    # Legacy key derived from the exact-token classifier (ADR-0005): 'unknown'
+    # only when the input has no pair_style; an unrecognized or hybrid style is
+    # 'generic' rather than a substring guess at an Fe-O family.
+    config['forcefield'] = classify_pair_style(config['pair_style']) or 'unknown'
 
     # Compute dt_fs from units + timestep
     if config['timestep'] is not None:
