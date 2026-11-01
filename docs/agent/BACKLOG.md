@@ -819,15 +819,19 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   Python 3.9/docstrings. Full evidence, review findings and limits:
   `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
-### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `open (proposal unpublished; see 2026-10-31 checkpoint)`
+### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `awaiting ADR-0005 approval (gen/gen-2-adr-0005)`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
 - **Target:** read `pair_style` / `units` / `atom_style` / timestep from LAMMPS
-  input metadata. Per accepted ADR-0001 the optional manifest does not duplicate
-  these physics facts. The heuristic stays only as a last resort and prints what
-  it guessed.
+  input metadata. Per accepted ADR-0001, the optional manifest does not duplicate
+  these physics facts; its groups/domain/provenance remain separate. The heuristic
+  stays only as a last resort and prints what it guessed.
   Unknown FFs get `generic` with no domain defaults.
 - **Done when:** a LJ or EAM trajectory is reported as such (or as `generic`), never
   as ACE/ReaxFF/HDNNP.
+- **Progress:** 2026-10-28 architecture review and proposed ADR (renumbered
+  ADR-0005 on 2026-10-31). 2026-11-01: refreshed against main after #37–#46 and
+  published for the maintainer's approval review. See `docs/agent/GEN-2.md` and
+  `docs/adr/0005-explicit-run-metadata.md`.
 
 ### GEN-3 · Box model with triclinic + PBC — `done (PR #20; ADR-0003 accepted)` (builds on PARSE-1)
 - **Target:** `io.Box(lo, hi, tilt, pbc)`. Fractional transforms plus exact periodic
