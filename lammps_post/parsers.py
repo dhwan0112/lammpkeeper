@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 
 from lammpkeeper.common.mapping import FORCE_FIELDS, type_to_label
+from lammpkeeper.io.metadata import RunMetadata
 
 # Legacy dump/data APIs are orthogonal only. The typed opt-in accepts restricted
 # triclinic cells, but does not convert scaled/unwrapped dump coordinate families.
@@ -1660,6 +1661,41 @@ def parse_run_manifest(filepath):
     return payload
 
 
+# Exact first-token aliases of LAMMPS pair styles, grouped by family (ADR-0005).
+# Verified against docs.lammps.org (2026-11-01): pace, pace/extrapolation, their
+# /kk variants, the APIP-package variants pace/apip, pace/fast/apip and
+# pace/precise/apip; reaxff with /kk and /omp; hdnnp. The historical names
+# reax/c (/kk, /omp) are assumed aliases that the current manual no longer
+# lists. 'ace' and 'n2p2' are deliberately absent: neither is a LAMMPS pair
+# style name (n2p2 is the library behind hdnnp).
+_PAIR_STYLE_FAMILIES = {
+    'ace': ('pace', 'pace/kk', 'pace/extrapolation', 'pace/extrapolation/kk',
+            'pace/apip', 'pace/fast/apip', 'pace/precise/apip'),
+    'reaxff': ('reaxff', 'reaxff/kk', 'reaxff/omp', 'reax/c', 'reax/c/kk', 'reax/c/omp'),
+    'hdnnp': ('hdnnp',),
+}
+_PAIR_STYLE_ALIASES = {alias: family for family, aliases in _PAIR_STYLE_FAMILIES.items()
+                       for alias in aliases}
+
+
+def classify_pair_style(text):
+    """
+    Classify a pair_style command's arguments by its FIRST token only.
+
+    The token must equal an enumerated alias exactly (case-sensitive, as in
+    LAMMPS); substrings of later arguments or filenames never count. hybrid,
+    hybrid/overlay, hybrid/scaled and every unlisted style are 'generic'.
+
+    Returns:
+        'ace', 'reaxff', 'hdnnp' or 'generic'; None when text is empty or
+        None (no evidence, which is not the same as generic).
+    """
+    words = (text or '').split()
+    if not words:
+        return None
+    return _PAIR_STYLE_ALIASES.get(words[0], 'generic')
+
+
 def parse_input(filepath):
     """
     Parse a LAMMPS input (.in) file to extract simulation configuration.
@@ -1702,6 +1738,11 @@ def parse_input(filepath):
             'runs'         : list[dict]   — [{'steps': int, 'stage': str}]
             'reaction_type': str          — Inferred reaction description
             'z_variables'  : dict         — {name: float} for z-coordinate variables
+            'metadata'     : RunMetadata  — Immutable explicit pair_style/family/units/
+                             timestep/dt_fs with per-field provenance (ADR-0005)
+
+    Raises ValueError if the input repeats `timestep` with differing values;
+    equal repeats are accepted.
     """
     # Static extraction is deliberately not a LAMMPS interpreter: no loops,
     # jumps, functions or simulation-dependent equal-variable evaluation run.
@@ -1772,6 +1813,7 @@ def parse_input(filepath):
             raise ValueError(f"{fpath}: unterminated line continuation")
 
     current_stage = 'init'
+    timestep_raw = None
     mappings = {}
     reference = re.compile(r'\$\{(\w+)\}|\$(\w)')
     arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
@@ -1897,9 +1939,16 @@ def parse_input(filepath):
                             raise ValueError(f"{filepath}: conflicting hybrid species for type {tid}")
                         config['element_map'][tid] = elem
         elif cmd == 'timestep' and len(parts) >= 2:
-            config['timestep'] = _resolve_numeric(parts[1])
-            if config['timestep'] <= 0:
+            step = _resolve_numeric(parts[1])
+            if step <= 0:
                 raise ValueError(f"{filepath}: timestep must be positive")
+            # Differing repeats would make one trajectory-wide interval a guess
+            # (ADR-0005); equal repeats are harmless.
+            if config['timestep'] is not None and step != config['timestep']:
+                raise ValueError(f"{filepath}: timestep declared twice with different values "
+                                 f"{config['timestep']!r} and {step!r}; one input must use one timestep")
+            config['timestep'] = step
+            timestep_raw = parts[1]
         elif cmd == 'read_data' and len(parts) >= 2:
             config['read_data'] = _resolve_string(parts[1])
         elif cmd == 'group' and len(parts) >= 3:
@@ -2012,7 +2061,9 @@ def parse_input(filepath):
             except ValueError:
                 pass
 
-    # Derive forcefield from pair_style
+    # Legacy substring classification, kept unchanged for the shell until GEN-2b
+    # routes callers to config['metadata'] (exact-token, generic-aware); see
+    # ADR-0005. Do not rely on this key for non-Fe-O styles.
     ps = (config['pair_style'] or '').lower()
     if 'reaxff' in ps or 'reax/c' in ps:
         config['forcefield'] = 'reaxff'
@@ -2031,6 +2082,19 @@ def parse_input(filepath):
             config['dt_fs'] = config['timestep']
         else:
             warnings.warn(f"{filepath}: timestep present without explicit units; dt_fs remains unknown", RuntimeWarning)
+
+    # Additive explicit-evidence record. Only commands the input declared fill
+    # fields, so `units` without `timestep` (or the reverse) leaves dt_fs
+    # unresolved even though the legacy dt_fs key above keeps its old value.
+    config['metadata'] = RunMetadata.from_explicit(
+        filepath,
+        pair_style=config['pair_style'] or None,
+        ff_family=classify_pair_style(config['pair_style']),
+        atom_style=config['atom_style'],
+        units=config['units'],
+        timestep=config['timestep'],
+        timestep_raw=timestep_raw,
+    )
 
     # Infer reaction type
     stages_text = ' '.join(config['stages']).lower()
