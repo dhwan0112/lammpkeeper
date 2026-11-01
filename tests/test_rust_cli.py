@@ -46,12 +46,18 @@ def _binary():
         env.setdefault('CARGO_HOME', str(cargo_home))
         if (cargo_home.parent / '.rustup').is_dir():
             env['RUSTUP_HOME'] = str(cargo_home.parent / '.rustup')
-    build = subprocess.run([cargo, 'build', '--quiet', '--manifest-path', str(CRATE / 'Cargo.toml')],
+    # Ask cargo where it put the binary: CARGO_TARGET_DIR or a configured
+    # build.target-dir moves it away from rust/lkpr-rs/target/debug.
+    build = subprocess.run([cargo, 'build', '--quiet', '--message-format=json',
+                            '--manifest-path', str(CRATE / 'Cargo.toml')],
                            capture_output=True, text=True, timeout=600, env=env)
     assert build.returncode == 0, build.stderr
-    path = str(CRATE / 'target' / 'debug' / 'lkpr-rs')
-    _BIN.append(path)
-    return path
+    paths = [msg['executable'] for msg in map(json.loads, build.stdout.splitlines())
+             if msg.get('reason') == 'compiler-artifact' and msg.get('executable')
+             and msg['target']['name'] == 'lkpr-rs']
+    assert len(paths) == 1, f"cargo reported {len(paths)} lkpr-rs executables: {paths}"
+    _BIN.append(paths[0])
+    return paths[0]
 
 
 @contextlib.contextmanager

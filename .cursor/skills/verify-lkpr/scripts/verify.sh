@@ -69,10 +69,19 @@ done < <(grep '^SKIP ' "$EVID/tests.log" || true)
 
 # ── Drive: post one-shot + persisted analysis evidence on the fixture ────
 if [ -f "$FIXTURE" ]; then
-  PLOT=(); [ "$MODE" = full ] && have matplotlib && PLOT=(--plot all)
+  # Full mode checks every expected plot; without matplotlib that check is a
+  # named SKIP, never a silent omission.
+  PLOT=()
+  if [ "$MODE" = full ]; then
+    if have matplotlib; then
+      PLOT=(--plot all)
+    else
+      record SKIP plots "matplotlib not installed; plot all not run"
+    fi
+  fi
   post_bad=0
   if ! (cd "$WORK" && HOME="$TMPHOME" "$PY" -m lammpkeeper post --dump "$FIXTURE" \
-        --analyze all "${PLOT[@]}" --output "$WORK/post_out" < /dev/null) > "$EVID/post.log" 2>&1; then
+        --analyze all ${PLOT[@]+"${PLOT[@]}"} --output "$WORK/post_out" < /dev/null) > "$EVID/post.log" 2>&1; then
     post_bad=1
   fi
   # Quick mode also needs persisted proof that every expected analysis ran.
@@ -121,6 +130,8 @@ if [ "$MODE" = full ]; then
       for required in ace_oxidation.in lammps_ace.data regions_ace.inc structure.xyz run.sh; do
         [ -s "$WORK/prep_out/$required" ] || { echo "Missing/empty artifact: $required" >> "$EVID/prep.log"; bad=1; }
       done
+      # Text heuristic: any 'Error:'/'failed' in the log fails the step. Benign
+      # wording can false-fail, which is the safe direction for a gate.
       if [ "$bad" = 0 ] && [ "$n" -gt 0 ] \
          && ! grep -qiE 'Traceback|Error:|failed' "$EVID/prep.log"; then
         record PASS prep "$n job script(s) pass bash -n; required artifacts present"
