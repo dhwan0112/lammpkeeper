@@ -340,6 +340,66 @@ def minimum_image(displacements, cell):
     return _finite_result(result)
 
 
+def unique_image_radius(cell):
+    """Return half the shortest nonzero periodic lattice vector (inf if none periodic).
+
+    Below this radius every atom has at most one periodic image of any other
+    atom, so a nearest-image distance list misses no pair: two images both
+    closer than r differ by a lattice vector shorter than 2r. Analyses that
+    count pairs up to a cutoff (RDF) are complete only for cutoff <= this value.
+
+    Orthogonal cells give exactly ``min(L[i] / 2)`` over periodic axes. Skew
+    cells use an exact Fincke-Pohst enumeration of integer combinations of the
+    periodic rows inside the sphere of the shortest basis row (Cholesky of the
+    Gram matrix), not the conservative plane-spacing bound, which would reject
+    valid cutoffs in tilted cells. The same condition and node limits as
+    minimum_image apply and raise instead of approximating.
+    """
+    _cell(cell, periodic=True)
+    mask = np.asarray(cell.pbc, dtype=bool)
+    if not np.any(mask):
+        return float('inf')
+    if cell.is_orthogonal:
+        return float(np.min(cell.lengths[mask])) / 2.0
+    basis = cell.matrix[mask]
+    _condition(basis)
+    gram = basis @ basis.T
+    upper = np.linalg.cholesky(gram).T          # gram = upper.T @ upper
+    best = float(np.min(np.diag(gram)))         # a basis row is an upper bound
+    # Outward padding only admits extra candidates; each is scored exactly below.
+    bound = best * (1.0 + 1.0e-9)
+    size = len(basis)
+    coeffs = [0] * size
+    visited = 0
+
+    def search(level, remaining):
+        """Enumerate coefficient level `level` given the higher levels already fixed."""
+        nonlocal best, visited
+        visited += 1
+        if visited > _MAX_SEARCH_NODES:
+            raise ValueError('shortest-vector search exceeds the geometry node limit')
+        diag = upper[level, level]
+        center = -sum(upper[level, j] * coeffs[j] for j in range(level + 1, size)) / diag
+        spread = np.sqrt(max(remaining, 0.0)) / diag
+        for value in range(int(np.ceil(center - spread)), int(np.floor(center + spread)) + 1):
+            coeffs[level] = value
+            partial = upper[level, level] * value + sum(upper[level, j] * coeffs[j]
+                                                        for j in range(level + 1, size))
+            rest = remaining - partial * partial
+            if rest < -bound * 1.0e-9:
+                continue
+            if level == 0:
+                if any(coeffs):
+                    vector = np.asarray(coeffs, dtype=np.float64) @ basis
+                    best = min(best, float(vector @ vector))
+            else:
+                search(level - 1, rest)
+        coeffs[level] = 0
+
+    search(size - 1, bound)
+    return float(np.sqrt(best)) / 2.0
+
+
 def unwrap_step(previous_wrapped, current_wrapped, previous_unwrapped, cell):
     """Advance a constant-cell image walk using the exact minimum-image step.
 

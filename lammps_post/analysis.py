@@ -30,7 +30,7 @@ import numpy as np
 
 from lammpkeeper.common.mapping import label_to_type
 from lammpkeeper.io import Box
-from lammpkeeper.core.geometry import minimum_image, to_fractional
+from lammpkeeper.core.geometry import minimum_image, to_fractional, unique_image_radius
 from lammps_post import (Q_OXIDIZED_E, SURFACE_OFFSET_A, NEAR_SURFACE_A,
                          O2_BOND_CUTOFF_A)
 
@@ -449,8 +449,12 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     Typed triclinic cells use exact nearest-lattice MIC and complete row-wise
     NumPy pairs, without a triclinic cKDTree backend. The distance is the nearest
     cell image, not a sum over repeated images. The caller must choose a cutoff
-    suitable for the periodic cell;
-    full spherical shells cease to be represented beyond its inscribed radius.
+    suitable for the periodic cell. The count is complete only below
+    ``r_complete``, half the shortest nonzero periodic lattice vector (min L/2
+    over periodic axes for orthogonal cells): beyond it a second image within
+    the cutoff is missed and g(r) is undercounted. A cutoff above r_complete
+    is kept (ADR-0003 estimator) but warns, and the result reports r_complete
+    so plots and exports can mark the incomplete range (REV-ANALYSIS-7).
     Exactly coincident pairs and r == r_max are excluded in both paths.
     Empty species frames warn and do not enter the average; if none contribute,
     the returned g array is zero and n_frames is zero. Overlapping, unequal
@@ -489,6 +493,11 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
                                     when the trajectory was truncated to its
                                     last max_frames frames, 'all' otherwise).
                                     describe_frame_window() renders it.
+            'r_max'    : float    — The cutoff used.
+            'r_complete' : float  — Smallest nearest-image limit over the
+                                    contributing frames (inf without a
+                                    periodic axis, None with no frame); g is
+                                    complete only for r below it.
     """
     types_a, types_b = _type_ids(type_a, 'type_a'), _type_ids(type_b, 'type_b')
     try:
@@ -507,6 +516,7 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
     dr = r_max / n_bins       # Bin width in Angstroms
     g_total = np.zeros(n_bins)
     n_frames_used = 0         # Number of frames contributing to the average
+    r_complete, limit_step = None, None   # Tightest nearest-image limit seen
     bins_edge = np.linspace(0, r_max, n_bins + 1)
     r_centers = (bins_edge[:-1] + bins_edge[1:]) / 2
     shell_vol = (4 / 3) * np.pi * np.diff(bins_edge ** 3)
@@ -552,6 +562,16 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
                           'frame excluded from RDF average', RuntimeWarning, stacklevel=2)
             continue
 
+        # Nearest-image counting is complete only below half the shortest
+        # periodic lattice vector; track the tightest limit over used frames.
+        if triclinic:
+            frame_limit = unique_image_radius(cell)
+        else:
+            periodic_lengths = [L[dim] for dim, wrap in enumerate(frame_periodic) if wrap]
+            frame_limit = float(min(periodic_lengths)) / 2.0 if periodic_lengths else float('inf')
+        if r_complete is None or frame_limit < r_complete:
+            r_complete, limit_step = frame_limit, fr['timestep']
+
         pairs = (None if triclinic else
                  _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
                                       same_species=same_species, pbc=frame_periodic))
@@ -589,8 +609,29 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         n_frames_used += 1
 
     g = g_total / n_frames_used if n_frames_used else g_total
+    if r_complete is not None and r_max > r_complete:
+        warnings.warn(f'RDF {label_a}-{label_b}: r_max {r_max:g} Å exceeds r_complete '
+                      f'{r_complete:g} Å (half the shortest periodic lattice vector, '
+                      f'timestep {limit_step}); g(r) beyond {r_complete:g} Å counts nearest '
+                      f'images only and undercounts pairs. Use r_max <= {r_complete:g} Å '
+                      'for a complete RDF.', RuntimeWarning, stacklevel=2)
     return {'r': r_centers, 'g': g, 'label': f'{label_a}-{label_b}',
-            'n_frames': n_frames_used, 'frame_window': frame_window}
+            'n_frames': n_frames_used, 'frame_window': frame_window,
+            'r_max': float(r_max), 'r_complete': r_complete}
+
+
+def rdf_incomplete_from(data):
+    """Return r_complete when it is below the RDF's r_max, else None.
+
+    Older cached results without r_max/r_complete, and results whose count is
+    complete (r_max <= r_complete, or no periodic axis), return None.
+    """
+    if not isinstance(data, dict):
+        return None
+    limit, r_max = data.get('r_complete'), data.get('r_max')
+    if limit is None or r_max is None or not np.isfinite(limit):
+        return None
+    return float(limit) if r_max > limit else None
 
 
 def describe_frame_window(window):

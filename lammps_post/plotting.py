@@ -826,6 +826,20 @@ def _rdf_md_label(data):
     return f'MD ({data["n_frames"]} frames)'
 
 
+def _mark_rdf_incomplete(ax, data):
+    """Shade r beyond r_complete, where nearest-image g(r) is undercounted.
+
+    Draws nothing when the count is complete (REV-ANALYSIS-7).
+    """
+    from lammps_post.analysis import rdf_incomplete_from
+    limit = rdf_incomplete_from(data)
+    if limit is None:
+        return
+    ax.axvline(limit, color='black', ls='-.', lw=1.0,
+               label=f'r_complete {limit:g} Å (undercounted beyond)')
+    ax.axvspan(limit, data['r_max'], color='grey', alpha=0.15, lw=0)
+
+
 def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
     """
     Plot radial distribution function g(r).
@@ -912,6 +926,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
             ax.text(1.76, (n_curves - 1) * offset_step + 1.1, 'amorph.\nFeO',
                     color='grey', fontsize=7, ha='center', va='bottom', style='italic')
 
+        _mark_rdf_incomplete(ax, data)
         # Remove y-axis ticks (offsets are arbitrary)
         ax.set_yticks([])
         ax.set_ylabel('Intensity (a.u.)')
@@ -933,6 +948,7 @@ def plot_rdf(data, output_dir, dpi=150, figsize=None, ref_rdfs=None):
             for name, pos, c in refs:
                 ax.axvline(pos, color=c, ls='--', alpha=0.5, label=f'{name} ({pos} Å)')
 
+        _mark_rdf_incomplete(ax, data)
         ax.set(xlabel=r'$r$ (Å)', ylabel=r'$g(r)$',
                title=f'{label} RDF', xlim=(0, None))
         ax.legend()
