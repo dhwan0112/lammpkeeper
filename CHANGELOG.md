@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Backend error codes cannot fake a cleanup failure (REV-EXEC-1)
+
+- `lkpr run` reported a cleanup failure, and dropped the backend response,
+  whenever the backend's own error code was `cleanup_failed`. Cleanup status
+  now comes only from the supervisor's own cleanup step.
+
 ### Post loads prep-written inputs (REV-IO-7)
 
 - `parse_input()` evaluates the LAMMPS math functions `round` (half up, as in
