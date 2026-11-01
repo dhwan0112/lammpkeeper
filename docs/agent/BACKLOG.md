@@ -210,6 +210,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-PREP-5 | P2; parent-reproduced in prior review, early logging symlink | After separate generated-script approval, prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Parent measured target append with exit 0 and scratch removed. Not a copyback-preflight bypass. |
 | REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
+| REV-TEST-3 · done (AUDIT-20261101 PR) | P2; Ctrl-C CLI test depends on inherited SIGINT disposition | `test_jobs.test_cli_ctrl_c_cancels_owned_job_and_emits_final_snapshot` timed out whenever the runner inherited SIGINT=SIG_IGN (verifier launched as a background job of a non-interactive shell): Python keeps the inherited ignore, so `lkpr run` never saw the signal. Production behaviour is correct (`nohup` semantics). The test now starts the CLI with SIG_DFL: before, 1/1 failures with the runner set to SIG_IGN; after, 0/5. See `docs/agent/AUDIT-20261101.md`. |
 | REV-EXEC-1 | P2; AUDIT-20261101, backend can forge cleanup failure | `LocalJob._finish` treats any error with code `cleanup_failed` as a local cleanup failure, and `_validate_envelope` accepts that code from a backend envelope, so a backend can rewrite `cleanup` and drop its response. Mark cleanup failure only from `_cleanup_child` (or reserve the code); fault-injected backend envelope keeps cleanup honest. |
 | REV-EXEC-2 | P2; AUDIT-20261101, CLI error after job start | `lkpr run`'s final `except (ValueError, OSError, ...)` also catches errors raised after the job started (event JSON, stderr write) and prints an `invalid_request` submission failure without cancelling the live job. Cancel an existing job and report its real state; regression with an injected post-start failure. |
 | REV-EXEC-3 | P2/P3; AUDIT-20261101, execution diagnostics | (a) `summarize_thermo_file`: `input_changed` replaces the original parse error (keep it as the cause); `unit_source` is set before validation. (b) `execute`: above 64 warnings the notice overwrites the 64th real warning and gives no dropped count. (c) `jobs.py` 0.15 s post-exit drain can truncate a large legal response, reported as invalid JSON. Each visible and tested. |
@@ -301,7 +302,9 @@ timestep; `${var}` in `units`/`atom_style`/`pair_style` became explicit raw
 metadata; `lkpr-rs` missed an overflow in the poll where the backend exited and
 exited 0 when `--json` output could not be written. Recorded, not fixed:
 REV-EXEC-1/2/3, REV-ANALYSIS-7/8/9, REV-IO-8/9, REV-UI-4, VERIFY-REF-2, plus
-additions to REV-UI-3 and REV-PLOT-2. Review table: **14 done, 35 open**.
+additions to REV-UI-3 and REV-PLOT-2. Also found and fixed: REV-TEST-3, a Ctrl-C
+test that failed whenever the runner inherited SIGINT=SIG_IGN. Review table:
+**15 done, 35 open**.
 Next is unchanged: REV-IO-7.
 
 **Next (per the decision above, superseded by the update):** UI-1 (Rust CLI, `thermo.summary` client first;

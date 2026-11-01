@@ -28,6 +28,8 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   missing (they were omitted silently).
 - `tests/test_rust_cli.py` finds the binary through cargo, so a custom
   `CARGO_TARGET_DIR` works.
+- The `lkpr run` Ctrl-C test no longer fails when the test runner was started
+  as a background job, which ignores SIGINT (REV-TEST-3).
 
 ### Session uses explicit run metadata (GEN-2b; ADR-0005)
 
