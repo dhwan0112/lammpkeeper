@@ -1,7 +1,7 @@
 # REV-IO-7: post can load prep-written inputs (LAMMPS math in `parse_input`)
 
 Status: fixed; verification below.
-Branch: `fix/rev-io-7-prep-input-load`, based on REV-PREP-7, whose template change it needs.
+Branch: `fix/rev-io-7-prep-input-load` from main `84db3b4` (after REV-PREP-7, PR #52).
 Approval: on 2026-11-01 the maintainer approved the plan: REV-PREP-7 first, then this parser change in its own PR.
 
 ## Problem (measured)
