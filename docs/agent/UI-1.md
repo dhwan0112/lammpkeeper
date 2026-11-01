@@ -1,7 +1,8 @@
 # UI-1 — additive Rust CLI
 
 Status: design approved by the maintainer on 2026-11-01 (all decisions below,
-unchanged); implemented, reviewed and fully verified; publication in progress. Branch: `gen/ui-1-rust-cli` from main `28e6532`.
+unchanged); implemented, reviewed and fully verified;
+[PR #46](https://github.com/dhwan0112/lammpkeeper/pull/46). Branch: `gen/ui-1-rust-cli` from main `28e6532`.
 
 ADR-0004 (accepted) sets the direction: Rust owns terminal interaction, Python
 owns scientific execution, and the Rust prototype ships under a distinct,
