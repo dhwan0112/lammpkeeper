@@ -1,6 +1,7 @@
 # GEN-2b — session routing of explicit run metadata
 
-Status: implemented, reviewed and fully verified by the parent; publication in progress.
+Status: implemented, reviewed and fully verified by the parent;
+[PR #49](https://github.com/dhwan0112/lammpkeeper/pull/49).
 Branch: `gen/gen-2b-session-metadata` (base main `5dce7f0`, contains GEN-2a).
 ADR-0005 steps 3–4. Tests: `tests/test_session_metadata.py` (24 tests, **not yet
 registered in `tests/run.py`**, parent-owned).

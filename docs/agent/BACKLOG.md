@@ -820,7 +820,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   Python 3.9/docstrings. Full evidence, review findings and limits:
   `docs/agent/GEN-1.md`. Real LAMMPS/HPC, MDAnalysis and pytest remain unverified.
 
-### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `in-progress (ADR-0005 accepted 2026-11-01, PR #47)`
+### GEN-2 · Explicit FF/system metadata instead of `detect_forcefield` heuristics — `done (ADR-0005 #47; GEN-2a #48; GEN-2b #49)`
 - **Now:** a charge column → ReaxFF; ≥ 3 types → ACE; 2 types → HDNNP.
 - **Target:** read `pair_style` / `units` / `atom_style` / timestep from LAMMPS
   input metadata. Per accepted ADR-0001, the optional manifest does not duplicate
@@ -838,7 +838,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   explicit/guessed/unresolved), exact first-token `classify_pair_style`, additive
   `parse_input()['metadata']`; differing repeated `timestep` now rejected. Legacy
   keys unchanged; shell not yet routed. 23 new tests. See `docs/agent/GEN-2a.md`.
-- **GEN-2b (2026-11-01, `gen/gen-2b-session-metadata`):** ADR-0005 steps 3–5.
+- **GEN-2b — done (PR #49; native 638/0/0, NumPy 629/0/9):** ADR-0005 steps 3–5.
   Session resolves trajectory metadata from the input (explicit) or dump
   heuristic (guessed); explicit `pair_style` always wins, EAM/LJ/hybrid/unknown
   are `generic` (no Fe/O labels, spin or FF dt). Guessed dt only when the input
