@@ -71,7 +71,7 @@ variable ox_remain    equal ternary(${ox_steps}-${ox_dense}>0,${ox_steps}-${ox_d
 | Run | Tests | post | prep | Evidence |
 | --- | --- | --- | --- | --- |
 | Native full verifier | 641 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/p7-native/20261101T204244-30d138d-full` |
-| Forced-NumPy full verifier | 631 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/p7-numpy/20261101T204244-30d138d-full` |
+| Forced-NumPy full verifier | 632 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/p7-numpy/20261101T204244-30d138d-full` |
 
 - The 9 skips in the forced-NumPy run are the named native-parity tests.
 - The prep smoke step regenerates the ACE input with the new template.
