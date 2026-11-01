@@ -1,6 +1,6 @@
 # GEN-2b — session routing of explicit run metadata
 
-Status: implemented, parent verification pending.
+Status: implemented, reviewed and fully verified by the parent; publication in progress.
 Branch: `gen/gen-2b-session-metadata` (base main `5dce7f0`, contains GEN-2a).
 ADR-0005 steps 3–4. Tests: `tests/test_session_metadata.py` (24 tests, **not yet
 registered in `tests/run.py`**, parent-owned).
@@ -103,4 +103,14 @@ key "until GEN-2b": `test_legacy_parse_input_values_unchanged` (eam etc. now
   dump loaded, an undeclared unit is the heuristic's, labelled guessed.
   Also noted: thermo plots in partial-input sessions now raise on unresolved dt
   instead of assuming 1 fs — intended by ADR-0005 and covered by the CHANGELOG.
-- Full verifier results follow (started after the review-fix commit).
+- Full verifier on `c5d6afb` is **not valid evidence**: the parent edited the
+  worktree (review-fix tests and code) while it ran, so it imported a mixed
+  tree; its two failures were the new review tests against unfixed code.
+  Evidence kept for the record: `/tmp/opencode/g2b-native/20261101T125625-c5d6afb-full`.
+- Final full verifier on `c6c3c2a`, worktree untouched during the runs:
+  native **638 passed, 0 failed, 0 skipped**; forced NumPy **629 passed, 0 failed,
+  9 skipped** (six known native-only checks plus three REV-IO-4 native-comparison
+  tests). Post analyses/real plots and prep passed. Evidence:
+  `/tmp/opencode/g2b2-native/20261101T130212-c6c3c2a-full`,
+  `/tmp/opencode/g2b2-numpy/20261101T130214-c6c3c2a-full`. Native extension not
+  rebuilt; pytest, MDAnalysis, Python 3.9 runtime and HPC not run.
