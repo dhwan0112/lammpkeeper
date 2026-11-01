@@ -1,6 +1,7 @@
 # GEN-2a — run metadata model, pair-style classifier, additive parser output
 
-Status: implemented and fully verified by the parent; publication in progress.
+Status: implemented and fully verified by the parent;
+[PR #48](https://github.com/dhwan0112/lammpkeeper/pull/48).
 Branch: `gen/gen-2a-run-metadata` (base main `7192e64`). ADR-0005 steps 1–2 only.
 
 ## What changed

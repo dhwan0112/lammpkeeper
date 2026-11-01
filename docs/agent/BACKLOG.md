@@ -832,7 +832,7 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   ADR-0005 on 2026-10-31). 2026-11-01: refreshed against main after #37–#46 and
   published for the maintainer's approval review. See `docs/agent/GEN-2.md` and
   `docs/adr/0005-explicit-run-metadata.md`.
-- **GEN-2a (2026-11-01, `gen/gen-2a-run-metadata`):** ADR-0005 steps 1–2.
+- **GEN-2a — done (PR #48; native 612/0/0, NumPy 603/0/9):** ADR-0005 steps 1–2.
   `lammpkeeper/io/metadata.py` (`RunMetadata`/`MetadataField`, provenance
   explicit/guessed/unresolved), exact first-token `classify_pair_style`, additive
   `parse_input()['metadata']`; differing repeated `timestep` now rejected. Legacy
