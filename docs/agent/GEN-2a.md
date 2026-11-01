@@ -1,6 +1,6 @@
 # GEN-2a — run metadata model, pair-style classifier, additive parser output
 
-Status: implemented, parent verification pending.
+Status: implemented and fully verified by the parent; publication in progress.
 Branch: `gen/gen-2a-run-metadata` (base main `7192e64`). ADR-0005 steps 1–2 only.
 
 ## What changed
@@ -91,4 +91,9 @@ anyway, add them to `_PAIR_STYLE_FAMILIES` and flip two test rows.
   **23 passed**. (Worker's per-test count with only `metadata.py` present:
   6 passed, 17 failed.)
 - Registered `test_run_metadata` in `tests/run.py`; BACKLOG and CHANGELOG updated.
-- Full verifier results follow (started after this commit).
+- Full verifier on `dfd3227`: native **612 passed, 0 failed, 0 skipped**; forced
+  NumPy **603 passed, 0 failed, 9 skipped** (six known native-only checks plus
+  three REV-IO-4 native-comparison tests). Post analyses/real plots and prep
+  passed. Evidence: `/tmp/opencode/g2a-native/20261101T121256-dfd3227-full`,
+  `/tmp/opencode/g2a-numpy/20261101T121258-dfd3227-full`. Native extension not
+  rebuilt; pytest, MDAnalysis, Python 3.9 runtime and HPC not run.
