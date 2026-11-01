@@ -385,13 +385,9 @@ class LocalJob:
         with self._lock:
             if self._done.is_set():
                 return
-            # 'cleanup_failed' is meant as a local code from _cleanup_child.
-            # Known gap (REV-EXEC-1): a backend envelope may also carry it and
-            # would then be recorded as a cleanup failure.
-            if error is not None and error.get('code') == 'cleanup_failed':
-                self._data['cleanup'] = {'status': 'failed', 'reaped': False,
-                                         'error': {'code': 'cleanup_failed',
-                                                   'message': str(error['message'])[:execution.MAX_DIAGNOSTIC]}}
+            # Cleanup failure is recorded only by _cleanup_child, before any
+            # _finish call. The error code is never used to infer it: a backend
+            # envelope may carry any bounded string, including 'cleanup_failed'.
             if self._data['cleanup']['error'] is not None:
                 # Cleanup health is independent of the outcome race below.
                 # Never attach even a valid backend response to uncertain cleanup.

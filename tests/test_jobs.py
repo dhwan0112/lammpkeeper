@@ -314,6 +314,22 @@ def test_genuine_failed_backend_envelope_and_error_are_preserved():
         assert snapshot['error']['code'] == 'invalid_input'
 
 
+def test_backend_error_code_cleanup_failed_does_not_forge_cleanup_failure():
+    """Report a backend 'cleanup_failed' code as the backend's error; cleanup stays complete (REV-EXEC-1)."""
+    from lammpkeeper.jobs import start_job
+    with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
+        root = Path(tmp)
+        code = "response.update(status='failed', result=None, error={'code': 'cleanup_failed', 'message': 'backend-side text'})"
+        snapshot = start_job(_request(), python=_fake(root, execution=code)).wait(5)
+        assert snapshot['state'] == 'failed', snapshot
+        # The child was really reaped, so the supervisor's own record must say so.
+        assert snapshot['cleanup'] == {'status': 'complete', 'reaped': True, 'error': None}, snapshot
+        # The valid backend response is kept and its error is reported unchanged.
+        assert snapshot['backend_response'] is not None, snapshot
+        assert snapshot['error'] == snapshot['backend_response']['error']
+        assert snapshot['error'] == {'code': 'cleanup_failed', 'message': 'backend-side text'}
+
+
 def test_child_crash_and_non_executable_import_failure_are_visible():
     """Map sudden process death and interpreter import failure to local failure."""
     from lammpkeeper.jobs import start_job
