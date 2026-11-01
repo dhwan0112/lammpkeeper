@@ -1,6 +1,6 @@
 # REV-IO-7: post can load prep-written inputs (LAMMPS math in `parse_input`)
 
-Status: fixed; verification below.
+Status: fixed and verified at `97d30ad` (see Verification).
 Branch: `fix/rev-io-7-prep-input-load` from main `84db3b4` (after REV-PREP-7, PR #52).
 Approval: on 2026-11-01 the maintainer approved the plan: REV-PREP-7 first, then this parser change in its own PR.
 
@@ -60,3 +60,13 @@ Related modules also pass (measured): 94 tests across `test_input_math`, `test_a
 
 - `run ${var}` lines are still recorded in `config['runs']` only when they are literal integers. `runs` has no consumer.
 - LAMMPS logical operators (`&&`, `||`, `!`) and the other math functions remain unsupported. They raise visibly.
+
+## Verification (measured, `97d30ad`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 645 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io7-native/20261101T204852-97d30ad-full` |
+| Forced-NumPy full verifier | 636 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/io7-numpy/20261101T204852-97d30ad-full` |
+
+- The 9 skips in the forced-NumPy run are the named native-parity tests.
+- Each run has 4 more tests than REV-PREP-7's runs: the new `test_input_math` module.
