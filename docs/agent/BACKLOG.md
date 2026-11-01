@@ -279,7 +279,11 @@ full verifier after #44 (`37e077b`, native): **582 passed, 0 failed, 0 skipped**
 post/plots and prep passed. Evidence:
 `/tmp/opencode/main-after-batch/20261101T022348-37e077b-full`.
 
-**Next (per the decision above):** UI-1 (Rust CLI, `thermo.summary` client first;
+**Update 2026-11-01 (later):** UI-1 done (#46); ADR-0005 accepted (#47) and GEN-2
+done (#48 model/classifier, #49 session routing). Next by the integrity-first rule:
+REV-IO-7 (prep's own ACE input cannot be loaded by post), then GEN-4 or UI-2.
+
+**Next (per the decision above, superseded by the update):** UI-1 (Rust CLI, `thermo.summary` client first;
 needs its design note on executable/crate/packaging/cancel ownership), then the
 GEN-2 ADR-0005 approval review. Remaining P2 review items (REV-IO-2/3/5,
 REV-REF-2/3/4, REV-PREP-2/3, REV-PLOT-1/2, REV-UI-1/3, REV-VERIFY-1/3, REV-PREP-5)

@@ -246,7 +246,7 @@ PR #26/#27은 아직 열려 있는 charge 관련 수정이다. 현재 thermo.sum
 | Phase 1 테스트·물리 교정 | 기존 주요 항목 완료, 후속 REV 일부 미해결 | 관련 실패 재현 → 수정 → 독립 oracle/회귀 → 리뷰 순서; open REV를 완료로 표시하지 않음 |
 | GEN-1 species model | 완료, PR #19 | system-owned species/group 계약을 새 operation에서도 사용 |
 | GEN-3 box/PBC | 완료, PR #20 | 지원되는 triclinic/PBC는 검증된 geometry 재사용; 미지원 소비자는 명시적 거절 |
-| GEN-2 명시적 metadata | open, 설계안 미게시(로컬 ADR-0005, `e273ce0`)·승인 필요 | LAMMPS input에서 FF·units·atom_style·timestep 해석(ADR-0001: manifest는 이 값을 중복 저장하지 않음) → 충돌 검증 → heuristic 최후 수단 경고 → LJ/EAM을 Fe 전용 모델로 오인하지 않는 시험 |
+| GEN-2 명시적 metadata | 완료 (ADR-0005 #47, GEN-2a #48, GEN-2b #49) | LJ/EAM/hybrid는 generic, 부분 시간 정보는 미확인, 명시·추정·미확인 출처 표시. 남은 일: REV-IO-7(prep input의 `round()` 해석), 새 operation 공개 시 메타데이터 출처 보고 |
 | GEN-4 domain 분리 | open, GEN-2 이후 | Fe/O 전용 분석·상수를 domain pack으로 이동 → 기존 import shim → generic 경로의 원소 하드코딩 점검 → Fe-O 회귀 |
 | GEN-5 molecule/bond | open | generic per-pair cutoff·PBC pairing → O2 preset 연결 → 기존 결과 및 A–B 합성 분자 검증 |
 | GEN-6 HPC site profiles | deferred | 사이트 설정과 run logic 분리 → 기존 NUS 출력 보존 → local/Slurm 문법·실패 주입; 실제 HPC는 별도 사용자 승인 후 |
@@ -267,8 +267,9 @@ REV-ANALYSIS-4 → REV-IO-4 → REV-IO-6 → REV-SESSION-3 순서로 항목별 �
 
 **완료(2026-11-01):** 위 8개 항목이 모두 병합됐다(PR #37–#44, 각 항목 실패 재현 후 수정,
 native·NumPy 전체 검증). 작업 중 발견한 REV-ANALYSIS-6(P3)은 기록만 했다.
-이어서 UI-1(`lkpr-rs`)도 구현·검증했다. 다음은 GEN-2(ADR-0005) 승인 검토와
-UI-2(Rust TUI) 중 우선순위를 정하는 것이다.
+이어서 UI-1(`lkpr-rs`, #46)과 GEN-2(ADR-0005 승인 #47, 구현 #48·#49)도 완료했다.
+다음 후보: REV-IO-7(prep이 만든 ACE input을 post가 읽지 못함, P2), GEN-4(domain 분리),
+UI-2(Rust TUI). 무결성 우선 원칙에 따라 REV-IO-7을 먼저 진행한다.
 
 1. UI-1 설계 노트에서 실행 파일·crate·배포 대상·중단 소유권을 확정한다.
 2. 승인된 구조 안에서 가장 작은 capability/thermo.summary Rust client를 구현한다.

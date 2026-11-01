@@ -17,8 +17,10 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
   the full ADR-0001 package layout is a target, not the current module layout.
 - Step C completed deterministic canonical ACE type resolution and explicit dump
   element labels. GEN-1 adds the system-owned `core.SpeciesMap` under the approved
-  ADR-0002 contract; its integration/evidence is recorded below. Force-field,
-  units and timestep inference still has warned paths tracked under GEN-2.
+  ADR-0002 contract; its integration/evidence is recorded below. GEN-2
+  (ADR-0005, 2026-11-01) adds `io.RunMetadata`: explicit input metadata wins,
+  unknown/hybrid pair styles are `generic`, partial time metadata stays
+  unresolved, and the dump heuristic is a labelled fallback (`docs/agent/GEN-2b.md`).
 - GEN-3 adds immutable `io.Box` and NumPy `core.geometry` under accepted ADR-0003.
   Restricted-triclinic Cartesian RDF and constant-cell MSD use the typed path;
   unsupported tilted consumers reject. Legacy reader defaults and orthogonal
