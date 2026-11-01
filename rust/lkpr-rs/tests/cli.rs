@@ -10,6 +10,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Path of the `lkpr-rs` binary that Cargo built for these tests.
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_lkpr-rs")
 }
@@ -33,6 +34,7 @@ fn fake(dir: &Path, body: &str) -> PathBuf {
     path
 }
 
+/// Run `lkpr-rs` to completion with `LKPR_PYTHON` removed from its environment.
 fn run(args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
@@ -41,6 +43,7 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Captured stderr as text, for assertion messages.
 fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
@@ -57,6 +60,7 @@ fn gone(pid: i32) -> bool {
     }
 }
 
+/// Poll for up to 3 s until `pid` is gone; false if it is still alive.
 fn wait_gone(pid: i32) -> bool {
     let until = Instant::now() + Duration::from_secs(3);
     while Instant::now() < until {
@@ -82,6 +86,7 @@ fn await_pid(path: &Path) -> i32 {
     panic!("fake backend did not start: {}", path.display());
 }
 
+/// Without `--python` or `LKPR_PYTHON` the CLI refuses to guess (exit 2).
 #[test]
 fn requires_an_explicit_python_environment() {
     let o = run(&["doctor"]);
@@ -89,6 +94,7 @@ fn requires_an_explicit_python_environment() {
     assert!(stderr(&o).contains("LKPR_PYTHON"));
 }
 
+/// A nonexistent interpreter is a named `python_not_found` failure (exit 1).
 #[test]
 fn missing_interpreter_is_a_clear_failure() {
     let o = run(&["doctor", "--python", "/nonexistent/lkpr-python"]);
@@ -96,6 +102,7 @@ fn missing_interpreter_is_a_clear_failure() {
     assert!(stderr(&o).contains("python_not_found"), "{}", stderr(&o));
 }
 
+/// The backend receives `-m lammpkeeper run` and the exact request JSON.
 #[test]
 fn passes_the_request_and_arguments_to_lkpr_run() {
     let dir = tempdir("args");
@@ -131,6 +138,7 @@ fn passes_the_request_and_arguments_to_lkpr_run() {
     assert_eq!(request["parameters"], serde_json::json!({}));
 }
 
+/// `--json` forwards the backend snapshot bytes without re-encoding.
 #[test]
 fn json_mode_prints_backend_bytes_unchanged() {
     let dir = tempdir("verbatim");
@@ -149,6 +157,35 @@ fn json_mode_prints_backend_bytes_unchanged() {
     assert_eq!(String::from_utf8(o.stdout).unwrap(), format!("{body}\n"));
 }
 
+/// `--json` output that cannot be written (here: `/dev/full`) fails with exit
+/// 1 and `output_write_failed`; lost machine output must not exit 0.
+#[test]
+fn json_mode_write_failure_is_not_success() {
+    let dir = tempdir("write fail");
+    let body = r#"{"job_schema_version":1,"state":"succeeded"}"#;
+    let py = fake(&dir, &format!("cat >/dev/null\nprintf '%s' '{body}'"));
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let o = Command::new(bin())
+        .args([
+            "thermo-summary",
+            "--python",
+            py.to_str().unwrap(),
+            "--log",
+            "a",
+            "--json",
+        ])
+        .env_remove("LKPR_PYTHON")
+        .stdout(full)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains("output_write_failed"), "{}", stderr(&o));
+}
+
+/// Non-JSON, empty or crashed backend output fails instead of printing a result.
 #[test]
 fn malformed_or_crashed_backend_output_is_rejected() {
     let dir = tempdir("malformed");
@@ -179,6 +216,7 @@ fn malformed_or_crashed_backend_output_is_rejected() {
     }
 }
 
+/// Valid JSON that is not a job snapshot is rejected.
 #[test]
 fn non_snapshot_json_is_rejected() {
     let dir = tempdir("nonsnapshot");
@@ -194,6 +232,7 @@ fn non_snapshot_json_is_rejected() {
     assert!(stderr(&o).contains("job snapshot"), "{}", stderr(&o));
 }
 
+/// Output beyond the cap stops a still-running backend with `output_too_large`.
 #[test]
 fn oversized_output_stops_the_backend() {
     let dir = tempdir("large");
@@ -211,6 +250,7 @@ fn oversized_output_stops_the_backend() {
     assert!(start.elapsed() < Duration::from_secs(10));
 }
 
+/// `doctor` fails (exit 1) and says "NOT supported" for unknown protocol versions.
 #[test]
 fn incompatible_backend_versions_fail_doctor() {
     let dir = tempdir("incompatible");
@@ -224,6 +264,28 @@ fn incompatible_backend_versions_fail_doctor() {
         stderr(&o)
     );
     assert!(String::from_utf8_lossy(&o.stdout).contains("NOT supported"));
+}
+
+/// Output beyond the cap is detected even when the backend exits in the same
+/// poll in which it overflowed (audit 2026-11-01): before the fix the stream
+/// was kept with a hole in it and misreported as invalid output.
+#[test]
+fn oversized_output_is_detected_when_the_backend_exits_at_once() {
+    let dir = tempdir("large exit");
+    // One byte over the cap: the overflow is seen only on the last read,
+    // after the backend has already written everything and exited.
+    let py = fake(&dir, "cat >/dev/null; head -c 16777217 /dev/zero");
+    for _ in 0..3 {
+        let o = run(&[
+            "thermo-summary",
+            "--python",
+            py.to_str().unwrap(),
+            "--log",
+            "a",
+        ]);
+        assert_eq!(o.status.code(), Some(1));
+        assert!(stderr(&o).contains("output_too_large"), "{}", stderr(&o));
+    }
 }
 
 /// Start lkpr-rs with a fake backend, wait for the fake to start, send SIGINT.
@@ -250,6 +312,7 @@ fn interrupt_run(py: &Path, pid_file: &Path) -> (Output, i32) {
     (child.wait_with_output().unwrap(), fake_pid)
 }
 
+/// Ctrl-C reaches `lkpr run` once; the CLI exits 130 with the final snapshot.
 #[test]
 fn ctrl_c_is_forwarded_once_and_reports_interruption() {
     let dir = tempdir("sigint");
@@ -278,6 +341,7 @@ fn ctrl_c_is_forwarded_once_and_reports_interruption() {
     assert!(wait_gone(fake_pid));
 }
 
+/// A backend ignoring the forwarded Ctrl-C is killed and reported as forced.
 #[test]
 fn unresponsive_backend_after_ctrl_c_is_forced_and_not_called_cancelled() {
     let dir = tempdir("unresponsive");
@@ -315,6 +379,7 @@ fn unresponsive_backend_after_ctrl_c_is_forced_and_not_called_cancelled() {
     assert!(wait_gone(g), "process-group member must be stopped too");
 }
 
+/// A backend running past the deadline plus grace is killed with its group.
 #[test]
 fn backend_that_outlives_its_deadline_is_forced() {
     let dir = tempdir("deadline");
@@ -366,6 +431,7 @@ fn wait_bounded(mut child: std::process::Child, limit: Duration) -> Output {
     panic!("lkpr-rs did not finish within {limit:?}");
 }
 
+/// Ctrl-C is not blocked by a request write the backend never reads.
 #[test]
 fn ctrl_c_works_while_the_backend_never_reads_a_large_request() {
     let dir = tempdir("stdin");
@@ -402,6 +468,7 @@ fn ctrl_c_works_while_the_backend_never_reads_a_large_request() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("cancelled"));
 }
 
+/// A grandchild holding stdout open after exit is reported, not waited on.
 #[test]
 fn stdout_held_open_after_exit_is_reported_not_waited_forever() {
     let dir = tempdir("heldopen");

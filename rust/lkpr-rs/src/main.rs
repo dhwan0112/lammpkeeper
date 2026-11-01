@@ -56,6 +56,7 @@ struct Failure {
     message: String,
 }
 
+/// Usage error (exit 2) that also prints the usage text.
 fn usage_error(message: impl Into<String>) -> Failure {
     Failure {
         code: 2,
@@ -63,6 +64,7 @@ fn usage_error(message: impl Into<String>) -> Failure {
     }
 }
 
+/// Runtime failure (exit 1): backend, environment or result problem.
 fn failure(message: impl Into<String>) -> Failure {
     Failure {
         code: 1,
@@ -223,6 +225,11 @@ fn supports(capabilities: &Value) -> (bool, bool) {
     )
 }
 
+/// `doctor`: probe the backend's capabilities and report version support.
+///
+/// With `--json` the capabilities document is printed unchanged and an
+/// incompatible backend still fails (exit 1) after printing it. A Ctrl-C during
+/// the probe ends with 130 even if the backend answered.
 fn doctor(options: &Options, python: &str) -> Result<u8, Failure> {
     let args = ["-m", "lammpkeeper", "exec", "--capabilities"]
         .map(String::from)
@@ -232,7 +239,7 @@ fn doctor(options: &Options, python: &str) -> Result<u8, Failure> {
     let (protocol_ok, operation_ok) = supports(&caps);
     let ok = succeeded && protocol_ok && operation_ok;
     if options.json {
-        print_raw(&outcome.stdout);
+        print_raw(&outcome.stdout)?;
     } else {
         let p = &caps["provenance"];
         println!("python      {}", text(&p["python_executable"]));
@@ -272,9 +279,10 @@ fn doctor(options: &Options, python: &str) -> Result<u8, Failure> {
              with {OPERATION} v{OPERATION_VERSION}"
         )));
     }
-    Ok(0)
+    Ok(if outcome.interrupted { 130 } else { 0 })
 }
 
+/// `code: message` of a backend error object, or `-` when there is none.
 fn error_text(error: &Value) -> String {
     if error.is_null() {
         return "-".to_string();
@@ -283,13 +291,19 @@ fn error_text(error: &Value) -> String {
 }
 
 /// Write backend stdout unchanged (plus a newline if it lacked one).
-fn print_raw(bytes: &[u8]) {
+///
+/// A write failure (for example a closed pipe) is a failure: machine output
+/// that was not delivered must not exit 0.
+fn print_raw(bytes: &[u8]) -> Result<(), Failure> {
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(bytes);
-    if !bytes.ends_with(b"\n") {
-        let _ = out.write_all(b"\n");
-    }
-    let _ = out.flush();
+    let mut write = || -> std::io::Result<()> {
+        out.write_all(bytes)?;
+        if !bytes.ends_with(b"\n") {
+            out.write_all(b"\n")?;
+        }
+        out.flush()
+    };
+    write().map_err(|err| failure(format!("output_write_failed: {err}")))
 }
 
 /// Readable report of a job snapshot. Values, units and warnings come from the
@@ -359,6 +373,7 @@ fn print_summary(snapshot: &Value) {
     }
 }
 
+/// Print rows as left-aligned columns; the first row is the header.
 fn print_table(rows: &[Vec<String>]) {
     let widths: Vec<usize> = (0..rows[0].len())
         .map(|c| rows.iter().map(|r| r[c].chars().count()).max().unwrap_or(0))
@@ -373,6 +388,11 @@ fn print_table(rows: &[Vec<String>]) {
     }
 }
 
+/// `thermo-summary`: run `thermo.summary` v1 through `lkpr run` and report it.
+///
+/// Exit status follows the snapshot state, except that a forwarded Ctrl-C
+/// always returns 130, even if the job happened to finish first: the user
+/// asked to stop, and scripts should see that.
 fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
     let log = options
         .log
@@ -406,7 +426,7 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
         return Err(failure("invalid_backend_output: the backend did not return a job snapshot (job_schema_version 1)"));
     }
     if options.json {
-        print_raw(&outcome.stdout);
+        print_raw(&outcome.stdout)?;
     } else {
         print_summary(&snapshot);
     }
@@ -420,6 +440,7 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
     })
 }
 
+/// Parse arguments, install the Ctrl-C handler and run the chosen command.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -459,11 +480,13 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// Owned argument vector from string literals.
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
+    /// All thermo-summary options parse, including a log path with a space.
     fn parses_thermo_summary_options() {
         let o = parse_args(&args(&[
             "thermo-summary",
@@ -484,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    /// Invalid, unknown and repeated options are usage errors (exit 2).
     fn rejects_bad_timeouts_unknown_and_repeated_options() {
         for bad in [
             &["thermo-summary", "--timeout", "0"][..],
@@ -508,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    /// Displayed numbers keep their original JSON digits.
     fn number_text_keeps_original_digits() {
         // arbitrary_precision: exact integers and long decimals print unchanged.
         let v: Value =
@@ -519,6 +544,7 @@ mod tests {
     }
 
     #[test]
+    /// Protocol and operation versions are both required by doctor.
     fn capability_versions_are_checked() {
         let ok = json!({"result": {"protocol_versions": [1], "operations": {"thermo.summary": {"versions": [1]}}}});
         assert_eq!(supports(&ok), (true, true));
