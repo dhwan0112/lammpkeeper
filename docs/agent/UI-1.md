@@ -25,7 +25,7 @@ a design record approved before implementation. This file is that record.
 | Unresponsive backend | After timeout + bounded grace, SIGTERM then SIGKILL the `lkpr run` process; report `supervisor_unresponsive`, never `cancelled`/`succeeded` | Visible failure instead of a hang or a false terminal state. |
 | Exit codes | 0 succeeded; 1 failed/timed out/invalid; 2 usage error; 130 interrupted | Matches `lkpr run` (0/1/130) plus usage. |
 | JSON numbers | `serde_json` with `arbitrary_precision`; integers kept as received, signed-integer strings untouched, `NaN`/`Infinity` rejected | Lossless pass-through; the backend already forbids nonfinite JSON. |
-| Dependencies | `serde_json` (with `arbitrary_precision`) and `libc` (signals); hand-written argument parsing; `Cargo.lock` committed | Small audit surface; no TUI or async runtime in UI-1. |
+| Dependencies | `serde_json` (with `arbitrary_precision`; `preserve_order` added in review) and `libc` (signals); hand-written argument parsing; `Cargo.lock` committed | Small audit surface; no TUI or async runtime in UI-1. |
 | Toolchain | `rust-version` set to the oldest toolchain actually tested (initially the installed stable, 1.98.1) | Only measured toolchains are claimed. |
 | Platforms | Linux x86_64 (POSIX) only, as measured | EXEC-2 supervisor is POSIX-only; nothing else is claimed. |
 | Distribution | Build from source: `cargo install --path rust/lkpr-rs`; not in the Python wheel; not on crates.io | Rust stays optional; Python-only installs unchanged. |
@@ -66,7 +66,9 @@ Commit `468cac9`. Files:
   Ctrl-C, and as a last resort SIGTERM/SIGKILLs the backend's group.
 - `rust/lkpr-rs/src/main.rs` — strict argument parsing, explicit Python
   selection, `doctor` and `thermo-summary`, human table / verbatim `--json`.
-- `rust/lkpr-rs/tests/cli.rs` — 11 process tests with fake backends.
+- `rust/lkpr-rs/tests/cli.rs` — 11 process tests with fake backends at first
+  implementation; 13 after review (see Verification), 15 after the 2026-11-01
+  audit (overflow-then-exit and `--json` write failure).
 - `tests/test_rust_cli.py` — 7 tests with the real Python backend, registered in
   `tests/run.py`; they build the binary with cargo and skip visibly without it.
 

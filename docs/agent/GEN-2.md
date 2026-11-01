@@ -1,7 +1,8 @@
 # GEN-2 — explicit force-field and run metadata
 
-Status: architecture proposal complete; awaiting approval of
-ADR-0005. Branch: `gen/gen-2-explicit-metadata`.
+Status: done. ADR-0005 accepted 2026-11-01 (PR #47); implemented as GEN-2a
+(PR #48, `docs/agent/GEN-2a.md`) and GEN-2b (PR #49, `docs/agent/GEN-2b.md`).
+Original proposal branch: `gen/gen-2-explicit-metadata` (unpublished, superseded).
 Baseline: merged main `b9bd50333ad0b69a7274c89af850a56216d048c5`.
 
 ## Progress and decisions
