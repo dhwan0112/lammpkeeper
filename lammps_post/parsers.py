@@ -1881,6 +1881,11 @@ def parse_input(filepath):
 
     for parts in _read_lines(filepath):
         cmd = parts[0].lower()
+        # Style declarations become explicit metadata (ADR-0005), so `${var}`
+        # must expand to the real style or raise; a raw '${ff}' would otherwise
+        # classify as an explicit 'generic' family.
+        if cmd in ('units', 'atom_style', 'pair_style'):
+            parts = parts[:1] + [_resolve_string(part) for part in parts[1:]]
 
         if cmd == 'units' and len(parts) >= 2:
             if config['units'] is not None and config['units'] != parts[1]:
