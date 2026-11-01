@@ -20,6 +20,7 @@ type (ReaxFF / ACE / HDNNP) from dump column layouts and atom data.
 import ast
 import hashlib
 import json
+import math
 import mmap
 import operator
 import os
@@ -1817,8 +1818,21 @@ def parse_input(filepath):
     timestep_raw = None
     mappings = {}
     reference = re.compile(r'\$\{(\w+)\}|\$(\w)')
+    # LAMMPS `%` is C fmod (sign of the dividend), not Python's floor modulo.
     arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
-                  ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod}
+                  ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: math.fmod}
+    comparisons = {ast.Lt: operator.lt, ast.LtE: operator.le, ast.Gt: operator.gt,
+                   ast.GtE: operator.ge, ast.Eq: operator.eq, ast.NotEq: operator.ne}
+    # Scalar LAMMPS math functions (docs.lammps.org/variable.html) with their
+    # arity; `round` is LAMMPS MYROUND (half up), not Python's half-even.
+    math_functions = {
+        'round': (1, lambda x: math.ceil(x) if x - math.floor(x) >= 0.5 else math.floor(x)),
+        'floor': (1, math.floor), 'ceil': (1, math.ceil), 'abs': (1, abs),
+        'ternary': (3, None),  # evaluated lazily below, as LAMMPS does
+    }
+    # LAMMPS special functions reduce ONE global vector (c_ID, f_ID, v_name);
+    # they are not scalar math and cannot be evaluated from an input script.
+    special_functions = ('sum', 'min', 'max', 'ave', 'trap', 'slope', 'sort', 'rsort')
 
     # Resolve supported static equal/string/single-value index variables only;
     # reject unknown names, dependency cycles and excessive recursive references.
@@ -1843,16 +1857,30 @@ def parse_input(filepath):
         return value
 
     def _resolve_numeric(value, stack=()):
-        """Bounded arithmetic only: no eval, functions, attributes or runtime data."""
+        """Bounded static LAMMPS arithmetic: no eval, attributes or runtime data.
+
+        Supports numbers, v_name references, + - * / % ^, comparisons and the
+        scalar math functions round/floor/ceil/abs/ternary with LAMMPS
+        semantics (REV-IO-7). Forms that Python and LAMMPS parse differently
+        (unparenthesized -a^b, a^b^c, chained comparisons) raise instead of
+        guessing, as do special functions such as two-argument min()/max().
+        """
         # Length/node/exponent/result limits bound static arithmetic; these are
         # supported-expression limits, not an attempt to emulate all LAMMPS math.
         value = _resolve_string(value, stack)
         try:
             if len(value) > 4096:
                 raise ValueError('expression too long')
-            tree = ast.parse(value.replace('^', '**'), mode='eval')
+            source = value.replace('^', '**')
+            tree = ast.parse(source, mode='eval')
             if len(list(ast.walk(tree))) > 64:
                 raise ValueError('expression too complex')
+
+            def parenthesized(node):
+                """True if `node` starts right after '(' in the source text."""
+                # ast drops parentheses; a parenthesized subexpression starts
+                # just after its '(' (single-line source, so col offsets suffice).
+                return source[:node.col_offset].rstrip().endswith('(')
 
             # Recursively evaluate only numeric constants, v_name references and
             # whitelisted operators; every intermediate must stay finite/bounded.
@@ -1863,12 +1891,46 @@ def parse_input(filepath):
                 elif isinstance(node, ast.Name) and node.id.startswith('v_'):
                     result = float(_variable(node.id[2:], stack))
                 elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                    # LAMMPS binds unary minus tighter than ^, Python looser.
+                    if (isinstance(node.operand, ast.BinOp) and isinstance(node.operand.op, ast.Pow)
+                            and not parenthesized(node.operand)):
+                        raise ValueError('ambiguous -a^b: LAMMPS reads (-a)^b; add parentheses')
                     result = calculate(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
                 elif isinstance(node, ast.BinOp) and type(node.op) in arithmetic:
+                    # LAMMPS evaluates ^ left to right, Python right to left.
+                    if (isinstance(node.op, ast.Pow) and isinstance(node.right, ast.BinOp)
+                            and isinstance(node.right.op, ast.Pow) and not parenthesized(node.right)):
+                        raise ValueError('ambiguous a^b^c: LAMMPS reads (a^b)^c; add parentheses')
                     left, right = calculate(node.left), calculate(node.right)
                     if isinstance(node.op, ast.Pow) and abs(right) > 100:
                         raise ValueError('exponent too large')
                     result = arithmetic[type(node.op)](left, right)
+                elif isinstance(node, ast.Compare) and type(node.ops[0]) in comparisons:
+                    # Python chains a<b<c; LAMMPS evaluates pairwise with ==/!=
+                    # below </>. Accept a single comparison only.
+                    if len(node.ops) != 1:
+                        raise ValueError('chained comparison is ambiguous; add parentheses')
+                    op = comparisons[type(node.ops[0])]
+                    result = 1.0 if op(calculate(node.left), calculate(node.comparators[0])) else 0.0
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    name = node.func.id
+                    if name in special_functions:
+                        raise ValueError(f'{name}() is a LAMMPS special function of one vector '
+                                         'argument (c_ID, f_ID or v_name), not scalar math; '
+                                         'use ternary() for a scalar clamp')
+                    if name not in math_functions:
+                        raise ValueError(f'unsupported function {name}(); supported: '
+                                         + ', '.join(sorted(math_functions)))
+                    arity, function = math_functions[name]
+                    if node.keywords or len(node.args) != arity:
+                        raise ValueError(f'{name}() takes exactly {arity} positional argument(s)')
+                    if name == 'ternary':
+                        # Only the selected branch is evaluated, so the other
+                        # may be invalid (e.g. ternary(v_n>0,1/v_n,0) with n=0).
+                        condition = calculate(node.args[0])
+                        result = calculate(node.args[1] if condition != 0.0 else node.args[2])
+                    else:
+                        result = float(function(*[calculate(arg) for arg in node.args]))
                 else:
                     raise ValueError('unsupported expression')
                 if isinstance(result, complex) or not np.isfinite(result) or abs(result) > 1e100:
