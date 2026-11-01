@@ -193,6 +193,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.data_cell = Box(cell.lo, cell.hi, tilt=cell.tilt,
                               pbc=s.input_pbc)
         if isinstance(s.dump_frames, LazyFrames):
+            # Same transform, cleared frame cache: frames are re-validated
+            # lazily under the new metadata.
             s.dump_frames.set_transform(s.dump_frames._store.transform)
         if not s.surface_z_manual:
             s.surface_z = None
@@ -509,6 +511,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         original = dict(s.__dict__)
         # Stage mutable publication dictionaries separately from the old state.
         # This is not a deep copy of readers, frame stores or callback closures.
+        # set_transform below mutates the shared frame store, which a rollback
+        # does not undo; that is safe because it re-applies the store's own
+        # transform and only clears parsed frames, which re-parse on demand.
         s.ff_info = dict(s.ff_info, atom_types=dict(s.atom_types))
         s.cache = dict(s.cache)
         s.species_sources = {key: dict(value) for key, value in s.species_sources.items()}
@@ -957,6 +962,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                               'typed source unload; restored resolved source metadata',
                               RuntimeWarning, stacklevel=2)
             if isinstance(s.dump_frames, LazyFrames):
+                # Shared-store mutation survives rollback; safe as in do_load.
                 s.dump_frames.set_transform(s.dump_frames._store.transform)
         except Exception:
             s.__dict__.clear()
@@ -986,6 +992,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state._dump_type_ids = frozenset()
             self.state.species_sources = {key: value for key, value in
                                           self.state.species_sources.items() if key != 'dump'}
+            # Mirrors SessionState().ff_info. forcefield, unit_system and dt_fs
+            # are placeholders: _publish_metadata below overwrites them from the
+            # remaining evidence.
             self.state.ff_info = {'forcefield': 'unknown', 'unit_system': 'metal',
                                   'dt_fs': 1.0, 'has_charge': False, 'has_velocity': False,
                                   'has_element': False, 'atom_types': {}}
@@ -1279,7 +1288,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s.ff_info.update(previous_published)
             s.run_metadata = previous_metadata
             raise
-        s.clear_cache()  # Time axes change with timestep
+        # run_metadata holds evidence only, so it needs no invalidation here;
+        # only cached time-dependent results change with the timestep.
+        s.clear_cache()
         progress_msg(f"Timestep: {s.dt_fs} fs [manual]")
 
     def _set_manual_forcefield(self, family):
@@ -2825,8 +2836,17 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                              f"input {md.dt_fs.source} declares {input_dt!r} fs; "
                              'load matching run metadata')
         if dt_fs is None:
-            dt_fs = input_dt if input_dt is not None else s.dt_fs
-            if input_dt is None:
+            # Precedence without a log-declared dt: a manual `set dt` override
+            # (explicit user intent for this session, already warned about when
+            # it differs from evidence), then the explicit input, then the
+            # session value. A log that declares its own dt keeps it: it is
+            # evidence about that log, which an override must not rewrite.
+            if 'dt' in s.manual_overrides:
+                dt_fs = s.dt_fs
+            elif input_dt is not None:
+                dt_fs = input_dt
+            else:
+                dt_fs = s.dt_fs
                 warnings.warn('Log timestep is unconfirmed; using session timestep for thermo plots',
                               RuntimeWarning, stacklevel=2)
         return units, dt_fs

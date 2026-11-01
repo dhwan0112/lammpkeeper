@@ -806,3 +806,23 @@ def test_failed_manual_dt_publication_leaves_no_override():
                 raise AssertionError('publication failure was swallowed')
         assert _view(shell) == before
         assert 'dt' not in shell.state.manual_overrides
+
+
+def test_thermo_plots_honor_a_manual_dt_over_the_input_timestep():
+    """Thermo time axes follow `set dt` like every other time consumer.
+
+    Found in the 2026-11-01 audit: with an explicit input timestep (2 fs) and
+    `set dt 0.5`, MSD/OAR used 0.5 fs but thermo plots used the input's 2 fs.
+    A log that declares its own timestep still wins for its thermo data.
+    """
+    _util.require_numpy()
+    with tempfile.TemporaryDirectory(prefix='lk-g2b-') as tmp:
+        shell, dump, inp = _session(tmp, timestep='0.002')
+        _load(shell, 'input', inp)
+        log = Path(tmp) / 'log.lammps'
+        log.write_text('Step Temp\n0 300\n10 301\nLoop time of 1 on 1 procs for 10 steps with 6 atoms\n')
+        _load(shell, 'log', log)
+        assert shell._thermo_plot_metadata() == ('metal', 2.0)
+        _quiet(lambda: shell.do_set('dt 0.5'))
+        assert shell._thermo_plot_metadata() == ('metal', 0.5)
+        assert shell.state.dt_fs == 0.5
