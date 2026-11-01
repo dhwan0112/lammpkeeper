@@ -178,7 +178,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-ANALYSIS-3 · done (PR #37; native **531/0/0**, NumPy **525/0/6**) | P2; F-ANALYSIS-3, invalid density range/bins | `compute_density_profile` rejects equal/reversed/nonfinite `z_range` and non-integer/bool/zero/negative/nonfinite `n_bins` with ValueError before any frame is read; empty trajectory without a range raises ValueError (was TypeError). 9 new tests (2 pass/7 fail before the fix). Valid profiles/goldens unchanged. See `docs/agent/REV-ANALYSIS-3.md`. |
 | REV-ANALYSIS-4 · done (PR #41; native **564/0/0**, NumPy **558/0/6**) | P2; prior review, float32 RDF backend disagreement | `compute_rdf` evaluates selected positions in float64 once per frame, so SciPy and fallback agree and match an exact-Fraction oracle at the float32 cutoff edge (measured before: fallback bin 327483.887 vs 0). Float64 results byte-identical (484 old/new comparisons); goldens unchanged. 5 new tests (4 fail before). See `docs/agent/REV-ANALYSIS-4.md`. |
 | REV-ANALYSIS-6 | P3; found during REV-ANALYSIS-4, extreme-image RDF candidate wrap | With |x|/L near 2**53 the SciPy candidate `% L` wrap loses a pair the exact/fallback path counts (measured x=0 vs 1e16+2, L=10: SciPy g=[0,0,0], fallback [0,0,36.63]). Reject such coordinates loudly or reduce exactly before nomination; ordinary in-box inputs unaffected. |
-| REV-IO-7 | P2; found during GEN-2b, prep-generated input does not load in post | `parse_input` cannot evaluate `round(...)` in equal-style variables, so `load input` of prep's own `ace_oxidation.in` fails (`cannot resolve numeric expression 'round(500/0.00025)'`) on main and after GEN-2b; only reduced inputs load. Support the bounded LAMMPS math functions prep emits (or skip unresolvable step-count variables that no metadata needs) without becoming a general interpreter; prep-written ACE/ReaxFF inputs load with explicit timestep. |
+| REV-IO-7 · done (this PR) | P2; found during GEN-2b, prep-generated input does not load in post | `parse_input` evaluates `round`/`floor`/`ceil`/`abs`/lazy `ternary`, comparisons and fmod `%` with LAMMPS semantics (28 formulas checked against real LAMMPS 22Jul2025, 0 mismatches); ambiguous `-a^b`, `a^b^c`, chained comparisons and special functions such as two-argument `min`/`max` raise. Prep-written ACE and ReaxFF inputs load with explicit 0.25 fs (fail → pass, 4 new tests). See `docs/agent/REV-IO-7.md`. |
 | REV-ANALYSIS-5 · done (PR #38; native **545/0/0**, NumPy **539/0/6**) | P2; prior review, nonfinite selected coordinates | Nonfinite selected z raises ValueError (analysis, timestep, count) in OAR, penetration summary/trend, density, charge-z profile and z-restricted charge evolution/OR; unrelated species, empty selections and finite results unchanged. 14 new tests (3 pass/11 fail before the fix); CLI one-shot exits 1. See `docs/agent/REV-ANALYSIS-5.md`. |
 | REV-IO-2 | P2; F-IO-2, active-stream mutation | Changing a source during iteration is detected before publishing changed-frame atoms/species; unchanged stream/index/cache behavior preserved. |
 | REV-IO-3 | P2; F-IO-3, projection hides row corruption | Raw row width is validated before projection on NumPy and real native paths, including layouts without id/type/element. |
@@ -312,6 +312,10 @@ Next is unchanged: REV-IO-7.
 that prep's ACE input itself is invalid LAMMPS (two-argument `min`/`max`, since
 `7f42305`). It is fixed first, as P1; REV-IO-7 follows in its own PR. Review
 table: **16 done, 35 open**.
+
+**REV-IO-7 (2026-11-01):** done after REV-PREP-7; post loads prep's ACE and
+ReaxFF inputs. Review table: **17 done, 34 open**. Next candidates: GEN-4 or
+UI-2 (maintainer to choose), or the new P2 rows from AUDIT-20261101.
 
 **Next (per the decision above, superseded by the update):** UI-1 (Rust CLI, `thermo.summary` client first;
 needs its design note on executable/crate/packaging/cancel ownership), then the
