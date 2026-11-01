@@ -110,8 +110,11 @@ variable        T_damp    equal {ff['T_damp']}
 variable        spin_steps equal round(${{SPIN_PS}}/${{dt}})
 variable        eq_steps   equal round(${{EQ_PS}}/${{dt}})
 variable        ox_steps   equal round(${{OX_PS}}/${{dt}})
-variable        ox_dense   equal min(${{ox_steps}},max(0,round(${{DENSE_PS}}/${{dt}})))
-variable        ox_remain  equal max(0,${{ox_steps}}-${{ox_dense}})
+# Clamp with ternary(): LAMMPS min()/max() take one vector argument only.
+variable        ox_dense_req equal round(${{DENSE_PS}}/${{dt}})
+variable        ox_dense_pos equal ternary(${{ox_dense_req}}>0,${{ox_dense_req}},0)
+variable        ox_dense   equal ternary(${{ox_steps}}<${{ox_dense_pos}},${{ox_steps}},${{ox_dense_pos}})
+variable        ox_remain  equal ternary(${{ox_steps}}-${{ox_dense}}>0,${{ox_steps}}-${{ox_dense}},0)
 
 variable        label     string ace_${{T}}K
 

@@ -5,6 +5,7 @@ explicitly skip without ASE. Job scripts run with guarded local stubs.
 """
 import contextlib
 import io
+import math
 import os
 from pathlib import Path
 import shlex
@@ -201,6 +202,47 @@ def test_ace_cpu_overrides_use_compatible_or_automatic_grid():
     _rejects(lambda: render_run_script(None, s))
 
 
+# LAMMPS math functions (docs.lammps.org/variable.html) used by the templates,
+# with LAMMPS semantics. min()/max() are deliberately absent: in LAMMPS they are
+# special functions of ONE vector argument (c_ID, f_ID or v_name), so a
+# two-argument min(a,b) aborts the input ("Invalid special function").
+_LAMMPS_MATH = {
+    'round': lambda x: math.ceil(x) if x - math.floor(x) >= 0.5 else math.floor(x),
+    'floor': math.floor, 'ceil': math.ceil, 'abs': abs,
+    'ternary': lambda condition, a, b: a if condition else b,
+}
+_LAMMPS_MATH_ARITY = {'round': 1, 'floor': 1, 'ceil': 1, 'abs': 1, 'ternary': 3}
+
+
+def test_generated_equal_variables_use_only_lammps_math_functions():
+    """Every equal-style formula prep writes calls LAMMPS math functions with valid arity.
+
+    REV-PREP-7: AUDIT-20261027 wrote `min(${ox_steps},max(0,...))` into the
+    ACE input. LAMMPS (measured: 22Jul2025; same check in the 2Aug2023 and
+    29Aug2024 stable sources) rejects two-argument min/max, so every generated
+    ACE job aborted while reading its variables, before any MD.
+    """
+    import ast
+    import re
+    from lammps_pre.templates import render_input_script
+    for ff in ('ace', 'reaxff2010', 'reaxff2015'):
+        s = _state()
+        s.set_ff(ff)
+        text = render_input_script(None, s)
+        formulas = [line.split(None, 3)[3] for line in text.splitlines()
+                    if line.split()[:1] == ['variable'] and line.split()[2] == 'equal']
+        assert formulas, ff
+        for formula in formulas:
+            # Immediate ${name} substitutions become numbers before LAMMPS
+            # parses the formula; LAMMPS '^' is power.
+            tree = ast.parse(re.sub(r'\$\{\w+\}', '1', formula).replace('^', '**'), mode='eval')
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    name = getattr(node.func, 'id', None)
+                    assert name in _LAMMPS_MATH_ARITY, (ff, formula, name)
+                    assert len(node.args) == _LAMMPS_MATH_ARITY[name], (ff, formula, name)
+
+
 def test_ace_dense_stage_is_configured_clamped_and_exact_in_steps():
     """Dense and remaining runs stay nonnegative and sum to rounded oxidation steps."""
     from lammps_pre.templates import render_input_script
@@ -217,16 +259,17 @@ def test_ace_dense_stage_is_configured_clamped_and_exact_in_steps():
         assert float(variables['DENSE_PS']) == dense
         # Evaluate only the numeric duration variables, including short OX_PS
         # supplied at runtime, independently of the generation-time duration.
-        # Python evaluates this narrow arithmetic subset, not LAMMPS syntax or
-        # its full expression/rounding semantics; no solver is launched here.
+        # Python evaluates this narrow subset with LAMMPS function semantics;
+        # no solver is launched here (real-LAMMPS evidence: REV-PREP-7.md).
         for runtime_ox in (ox, .00075, 0):
             env = {'OX_PS': runtime_ox, 'DENSE_PS': dense, 'dt': s.ff['dt']}
-            for key in ('ox_steps', 'ox_dense', 'ox_remain'):
+            for key in ('ox_steps', 'ox_dense_req', 'ox_dense_pos', 'ox_dense', 'ox_remain'):
                 expression = variables[key]
                 for name, value in env.items():
                     expression = expression.replace('${' + name + '}', str(value))
-                env[key] = eval(expression, {'__builtins__': {}},
-                                {'round': round, 'max': max, 'min': min})
+                # Only LAMMPS math functions are offered (round half up, as in
+                # LAMMPS variable.cpp); Python min/max once hid REV-PREP-7.
+                env[key] = eval(expression, {'__builtins__': {}}, _LAMMPS_MATH)
             assert env['ox_dense'] >= 0 and env['ox_remain'] >= 0
             assert env['ox_dense'] + env['ox_remain'] == round(runtime_ox / s.ff['dt'])
             assert env['ox_dense'] <= round(dense / s.ff['dt'])
