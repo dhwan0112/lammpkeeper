@@ -47,3 +47,16 @@ The existing tests for real cleanup failures
   it is now reported only as the backend's error.
 - `LKPR_SLOW=1` goldens were not run.
 - `BACKLOG.md` and `CHANGELOG.md` were not edited (outside this task's scope).
+
+## Parent verification (measured, `ee5c21f`)
+
+- The parent re-ran the new test against the original `jobs.py` and it failed: cleanup was forged to `failed` and `backend_response` was `None`. With the fix it passed.
+- The parent confirmed that `_cleanup` is called only from `_cleanup_child`, which writes the failure record itself.
+- Full `/verify-lkpr` results:
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native | 646 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ex1-native/20261102T033916-ee5c21f-full` |
+| Forced NumPy | 637 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ex1-numpy/20261102T033916-ee5c21f-full` |
+
+The 9 skips in the forced-NumPy run are the named native-parity tests.
