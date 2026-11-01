@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Post loads prep-written inputs (REV-IO-7)
+
+- `parse_input()` evaluates the LAMMPS math functions `round` (half up, as in
+  LAMMPS), `floor`, `ceil`, `abs` and `ternary`, comparisons and `%` (C
+  `fmod`) in equal-style variables, so `load input` / `--input` accepts prep's
+  ACE and ReaxFF inputs. Formulas that Python and LAMMPS would read
+  differently (`-a^b`, `a^b^c`, `a<b<c`) and LAMMPS special functions such as
+  two-argument `min`/`max` raise with a reason instead of being guessed.
+
 ### Generated ACE input runs in LAMMPS again (REV-PREP-7)
 
 - Since 2026-10-27 the ACE input clamped the dense oxidation stage with
