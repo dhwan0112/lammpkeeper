@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Generated ACE input runs in LAMMPS again (REV-PREP-7)
+
+- Since 2026-10-27 the ACE input clamped the dense oxidation stage with
+  two-argument `min()`/`max()`, which LAMMPS rejects while reading the input,
+  so generated ACE jobs aborted before MD. The clamp now uses `ternary()`, with
+  the same step counts (checked in LAMMPS 22Jul2025). `-var OX_PS`/`DENSE_PS`
+  overrides still recompute the stages. ReaxFF inputs are unchanged.
+
 ### Whole-code audit fixes (AUDIT-20261101)
 
 - Thermo plots without a log-declared timestep now use a manual `set dt` before

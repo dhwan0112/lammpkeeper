@@ -208,6 +208,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-PREP-4 | P3; F-PREP-4, Masses inspection | Prep's metadata inspector reads conventional blank-separated Masses sections without changing structures/presets. |
 | REV-REF-5 | P3; CIF case/seam behavior | Decide supported case-insensitive loop parsing and metric/seam deduplication limits with independent tiny-CIF tests and visible rejection outside scope. |
 | REV-PREP-5 | P2; parent-reproduced in prior review, early logging symlink | After separate generated-script approval, prevent early `tee -a "$RUNLOG"` following a `run.log` symlink before copyback preflight; retain normal logging and scratch recovery. Parent measured target append with exit 0 and scratch removed. Not a copyback-preflight bypass. |
+| REV-PREP-7 · done (this PR) | P1; found 2026-11-01 while reproducing REV-IO-7, generated ACE input aborts in LAMMPS | Since AUDIT-20261027 (`7f42305`) the ACE template clamped the dense oxidation stage with two-argument `min()`/`max()`, which LAMMPS rejects ("Invalid special function", measured on LAMMPS 22Jul2025; same check in the 2Aug2023/29Aug2024 stable sources), so every generated ACE job aborted before MD. Maintainer-approved template fix: the same clamp with `ternary()`. Fail → pass test that only LAMMPS math functions with valid arity appear; 35 real-LAMMPS variable evaluations equal the intended clamp. See `docs/agent/REV-PREP-7.md`. |
 | REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
 | REV-TEST-3 · done (AUDIT-20261101 PR) | P2; Ctrl-C CLI test depends on inherited SIGINT disposition | `test_jobs.test_cli_ctrl_c_cancels_owned_job_and_emits_final_snapshot` timed out whenever the runner inherited SIGINT=SIG_IGN (verifier launched as a background job of a non-interactive shell): Python keeps the inherited ignore, so `lkpr run` never saw the signal. Production behaviour is correct (`nohup` semantics). The test now starts the CLI with SIG_DFL: before, 1/1 failures with the runner set to SIG_IGN; after, 0/5. See `docs/agent/AUDIT-20261101.md`. |
@@ -306,6 +307,11 @@ additions to REV-UI-3 and REV-PLOT-2. Also found and fixed: REV-TEST-3, a Ctrl-C
 test that failed whenever the runner inherited SIGINT=SIG_IGN. Review table:
 **15 done, 35 open**.
 Next is unchanged: REV-IO-7.
+
+**REV-PREP-7 (2026-11-01, maintainer approved):** reproducing REV-IO-7 showed
+that prep's ACE input itself is invalid LAMMPS (two-argument `min`/`max`, since
+`7f42305`). It is fixed first, as P1; REV-IO-7 follows in its own PR. Review
+table: **16 done, 35 open**.
 
 **Next (per the decision above, superseded by the update):** UI-1 (Rust CLI, `thermo.summary` client first;
 needs its design note on executable/crate/packaging/cancel ownership), then the
