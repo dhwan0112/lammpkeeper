@@ -8,9 +8,13 @@ Usage (from the repo root, always with an isolated HOME):
     HOME="$(mktemp -d)" python3 .claude/skills/verify/scripts/verify_refs.py --only analytic-msd
     HOME="$(mktemp -d)" python3 .claude/skills/verify/scripts/verify_refs.py --list
 
-Reference values live in ../references/<check-id>.json. A check runs only when
-its JSON file exists; the compute functions below for ids without a JSON file
-are inactive until the maintainer adds confirmed reference values.
+Reference values live in ../references/<check-id>.json. Every id in COMPUTE
+needs a JSON file there. A missing file is an ERROR (exit 1), never a silent
+skip, unless the id is listed in MISSING_REFERENCE_ALLOWED with a written
+reason. A JSON file for an id without a compute function is also an ERROR.
+Malformed reference files (see spec_errors) are ERRORs. A measured key that the
+reference does not list is an ERROR (exit 1): it would otherwise be measured
+but never compared. All six current references list every measured key.
 
 Every reference key carries a `kind` that says what a PASS means:
     analytic  the value follows from a closed-form identity (independent standard)
@@ -259,20 +263,62 @@ COMPUTE = {
 
 KINDS = ('analytic', 'external', 'fixture', 'snapshot')
 
+# COMPUTE ids that may run without a reference file. Maps id -> written reason.
+# Keep it empty unless the maintainer decides a check is intentionally inactive;
+# an id that is absent here and has no JSON file is an ERROR (VERIFY-REF-2).
+MISSING_REFERENCE_ALLOWED = {}
+
+TOLERANCE_FIELDS = ('abs', 'rel')
+
 
 def spec_errors(spec):
-    """Return schema problems in a reference file; empty list means well-formed."""
+    """Return schema problems in a reference file; empty list means well-formed.
+
+    Never raises: any JSON shape yields a list of messages, so a bad file
+    becomes an ERROR result instead of a crash or a vacuous PASS.
+    """
+    if not isinstance(spec, dict):
+        return [f'reference file must be a JSON object, got {type(spec).__name__}']
     errs = []
+    if 'reference' not in spec:
+        errs.append("missing required 'reference' object")
+    reference = spec.get('reference', {})
+    if not isinstance(reference, dict):
+        errs.append(f"'reference' must be an object, got {type(reference).__name__}")
+        reference = {}
+    elif 'reference' in spec and not reference:
+        # An empty reference would otherwise PASS with "all 0 reference keys".
+        errs.append("'reference' is empty: a check must pin at least one key")
     kinds = spec.get('kind', {})
-    for key in spec.get('reference', {}):
+    if not isinstance(kinds, dict):
+        errs.append(f"'kind' must be an object, got {type(kinds).__name__}")
+        kinds = {}
+    tols = spec.get('tolerance', {})
+    if not isinstance(tols, dict):
+        errs.append(f"'tolerance' must be an object, got {type(tols).__name__}")
+        tols = {}
+    for key in reference:
         k = kinds.get(key)
         if k not in KINDS:
             errs.append(f'key {key!r}: kind {k!r} must be one of {KINDS}')
         if k == 'snapshot' and not spec.get('baseline_commit'):
             errs.append(f'key {key!r}: snapshot kind requires a top-level baseline_commit')
     for key in kinds:
-        if key not in spec.get('reference', {}):
+        if key not in reference:
             errs.append(f'kind given for unknown key {key!r}')
+    for key, tol in tols.items():
+        # A tolerance for no reference key is a typo that would silently
+        # leave the intended key at zero tolerance.
+        if key not in reference:
+            errs.append(f'tolerance given for unknown key {key!r}')
+        if not isinstance(tol, dict):
+            errs.append(f'key {key!r}: tolerance must be an object, got {type(tol).__name__}')
+            continue
+        for field, val in tol.items():
+            if field not in TOLERANCE_FIELDS:
+                errs.append(f'key {key!r}: unknown tolerance field {field!r} (allowed: {TOLERANCE_FIELDS})')
+            elif isinstance(val, bool) or not isinstance(val, (int, float)) or not val >= 0:
+                errs.append(f'key {key!r}: tolerance {field!r} must be a non-negative number, got {val!r}')
     return errs
 
 
@@ -308,6 +354,13 @@ def _compare(measured, reference, tol):
 def run_check(spec):
     """Measure one check and compare every reference key; returns a PASS/FAIL/ERROR record."""
     cid = spec['id']
+    if spec.get('_missing_reference'):
+        return {'id': cid, 'status': 'ERROR', 'keys': {},
+                'detail': f'missing reference file references/{cid}.json for a known compute function '
+                          '(add it, or list the id with a reason in MISSING_REFERENCE_ALLOWED)'}
+    if spec.get('_load_error'):
+        return {'id': cid, 'status': 'ERROR', 'keys': {},
+                'detail': f"reference file cannot be read: {spec['_load_error']}"}
     fn = COMPUTE.get(cid)
     if fn is None:
         return {'id': cid, 'status': 'ERROR', 'detail': 'no compute function for this id', 'keys': {}}
@@ -331,14 +384,54 @@ def run_check(spec):
         if not ok:
             failed.append(key)
     status = 'PASS' if not failed else 'FAIL'
+    # Measured but unpinned keys are never compared. Make that an ERROR so a
+    # new measurement cannot sit unchecked behind a green PASS.
+    unlisted = sorted(set(measured) - set(spec['reference']))
     counts = {k: sum(1 for v in keys.values() if v.get('kind') == k) for k in KINDS}
     meaning = ', '.join(f'{n} {k}' for k, n in counts.items() if n)
     if counts['snapshot']:
         meaning += f"; snapshot keys are a regression check against baseline_commit {spec['baseline_commit'][:7]}, not a correctness proof"
     detail = (f'all {len(keys)} reference keys within tolerance ({meaning})' if not failed
               else 'failed keys: %s' % ', '.join(failed))
+    if unlisted:
+        # ERROR outranks FAIL/PASS: the reference file is incomplete.
+        status = 'ERROR'
+        detail = (f'measured keys not listed in the reference (never compared): {unlisted}'
+                  + ('; ' + detail if failed else ''))
     return {'id': cid, 'status': status, 'detail': detail, 'keys': keys, 'source': spec.get('source'),
-            'baseline_commit': spec.get('baseline_commit')}
+            'baseline_commit': spec.get('baseline_commit'), 'unlisted_measured_keys': unlisted}
+
+
+def load_specs(ref_dir=None):
+    """Read every reference file; add ERROR stubs for known ids that have no file.
+
+    Unreadable JSON becomes a stub with `_load_error` so one bad file does not
+    hide the other checks. Ids in MISSING_REFERENCE_ALLOWED get no stub.
+    """
+    ref_dir = REF_DIR if ref_dir is None else ref_dir
+    specs = []
+    names = sorted(os.listdir(ref_dir)) if os.path.isdir(ref_dir) else []
+    for name in names:
+        if not name.endswith('.json'):
+            continue
+        cid = name[:-5]
+        try:
+            with open(os.path.join(ref_dir, name)) as fh:
+                spec = json.load(fh)
+        except (OSError, ValueError) as exc:
+            specs.append({'id': cid, '_load_error': f'{type(exc).__name__}: {exc}'})
+            continue
+        if isinstance(spec, dict):
+            spec.setdefault('id', cid)
+            specs.append(spec)
+        else:
+            # Keep the file name as id; spec_errors reports the wrong shape.
+            specs.append({'id': cid, '_load_error': f'top-level JSON must be an object, got {type(spec).__name__}'})
+    have = {s['id'] for s in specs}
+    for cid in sorted(COMPUTE):
+        if cid not in have and cid not in MISSING_REFERENCE_ALLOWED:
+            specs.append({'id': cid, '_missing_reference': True})
+    return specs
 
 
 # ── doctor ─────────────────────────────────────────────────────────────────
@@ -360,9 +453,12 @@ def doctor():
     lines.append(f'  fixture: {"present" if os.path.exists(FIXTURE) else "MISSING"} {FIXTURE}')
     refs = sorted(f[:-5] for f in os.listdir(REF_DIR) if f.endswith('.json')) if os.path.isdir(REF_DIR) else []
     lines.append(f'  reference files: {len(refs)} {refs}')
-    inactive = sorted(set(COMPUTE) - set(refs))
-    lines.append(f'  compute functions without references (inactive): {inactive}')
-    ok = _have('numpy') and os.path.exists(FIXTURE) and bool(refs)
+    missing = sorted(set(COMPUTE) - set(refs) - set(MISSING_REFERENCE_ALLOWED))
+    allowed = sorted((set(COMPUTE) & set(MISSING_REFERENCE_ALLOWED)) - set(refs))
+    lines.append(f'  compute functions with MISSING reference (ERROR): {missing}')
+    lines.append(f'  compute functions allowed inactive (MISSING_REFERENCE_ALLOWED): {allowed}')
+    # Missing references are reported as per-check ERRORs by load_specs, not as a doctor failure.
+    ok = _have('numpy') and os.path.exists(FIXTURE)
     return ok, '\n'.join(lines)
 
 
@@ -380,18 +476,17 @@ def main(argv=None):
     ok, report = doctor()
     print(report)
     if args.doctor:
-        return 0 if ok else 2
+        # --doctor ignores --only. Missing references are a setup problem here.
+        has_missing = any(s.get('_missing_reference') for s in load_specs())
+        return 0 if ok and not has_missing else 2
 
-    specs = []
-    for name in sorted(os.listdir(REF_DIR)):
-        if name.endswith('.json'):
-            with open(os.path.join(REF_DIR, name)) as fh:
-                spec = json.load(fh)
-            spec.setdefault('id', name[:-5])
-            specs.append(spec)
+    specs = load_specs()
     if args.list:
         for s in specs:
-            kinds = s.get('kind', {})
+            if s.get('_missing_reference') or s.get('_load_error'):
+                print(f"{s['id']}: {run_check(s)['detail']}")
+                continue
+            kinds = s.get('kind', {}) if isinstance(s.get('kind'), dict) else {}
             by_kind = {k: sorted(key for key, kk in kinds.items() if kk == k) for k in KINDS}
             print(f"{s['id']}: {s.get('description','')}\n    source: {s.get('source','')}\n    status: {s.get('status','')}")
             for k, ks in by_kind.items():
@@ -401,14 +496,15 @@ def main(argv=None):
                 print(f"    baseline_commit: {s['baseline_commit']}")
             for e in spec_errors(s):
                 print(f'    SCHEMA ERROR: {e}')
-        return 0
+        return 1 if any(run_check(s)['status'] == 'ERROR' for s in specs
+                        if s.get('_missing_reference') or s.get('_load_error') or spec_errors(s)) else 0
     if args.only:
         specs = [s for s in specs if s['id'] in args.only]
         missing = set(args.only) - {s['id'] for s in specs}
         if missing:
             print(f'unknown check id(s): {sorted(missing)}', file=sys.stderr); return 2
     if not ok:
-        print('doctor failed: numpy, the fixture or reference files are missing', file=sys.stderr); return 2
+        print('doctor failed: numpy or the fixture is missing', file=sys.stderr); return 2
 
     root = args.evidence_dir or os.environ.get('LKPR_VERIFY_DIR') or os.path.join(os.path.expanduser('~'), '.cache', 'lkpr-verify')
     stamp = _dt.datetime.now().strftime('%Y%m%dT%H%M%S')
