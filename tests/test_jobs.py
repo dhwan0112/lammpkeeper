@@ -668,10 +668,15 @@ def test_cli_ctrl_c_cancels_owned_job_and_emits_final_snapshot():
         request_path.write_text(json.dumps(_request()))
         env = dict(os.environ, HOME=str(root / 'home'), TMPDIR='/tmp/opencode',
                    PYTHONPATH=_util.REPO_ROOT)
+        # A runner started in the background of a non-interactive shell (`cmd &`)
+        # inherits SIGINT=SIG_IGN, and Python then keeps ignoring Ctrl-C, so the
+        # signal below would never arrive (REV-TEST-3). Simulate a terminal
+        # Ctrl-C by giving the CLI the default disposition.
         proc = subprocess.Popen([sys.executable, '-m', 'lammpkeeper', 'run',
                                  '--request', str(request_path), '--python', fake, '--events'],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env=env, cwd=root)
+                                stderr=subprocess.PIPE, text=True, env=env, cwd=root,
+                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         try:
             pid = int(_await_file(root / 'execution.started'))
             proc.send_signal(signal.SIGINT)
