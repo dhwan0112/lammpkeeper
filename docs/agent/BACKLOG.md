@@ -832,6 +832,13 @@ says otherwise, and must add made-up-label tests (`"A"`, `"B"`).
   ADR-0005 on 2026-10-31). 2026-11-01: refreshed against main after #37–#46 and
   published for the maintainer's approval review. See `docs/agent/GEN-2.md` and
   `docs/adr/0005-explicit-run-metadata.md`.
+- **GEN-2a — done (PR #48; native 612/0/0, NumPy 603/0/9):** ADR-0005 steps 1–2.
+  `lammpkeeper/io/metadata.py` (`RunMetadata`/`MetadataField`, provenance
+  explicit/guessed/unresolved), exact first-token `classify_pair_style`, additive
+  `parse_input()['metadata']`; differing repeated `timestep` now rejected. Legacy
+  keys unchanged; shell not yet routed. 23 new tests. See `docs/agent/GEN-2a.md`.
+- **GEN-2b (next):** session routing, `--input` preload, manual override
+  lifetimes, status output, Fe-O invariance proof (ADR-0005 steps 3–5).
 
 ### GEN-3 · Box model with triclinic + PBC — `done (PR #20; ADR-0003 accepted)` (builds on PARSE-1)
 - **Target:** `io.Box(lo, hi, tilt, pbc)`. Fractional transforms plus exact periodic

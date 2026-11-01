@@ -12,6 +12,19 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Explicit run metadata model (GEN-2a; ADR-0005)
+
+- Add `lammpkeeper.io.RunMetadata`/`MetadataField`: pair style, force-field
+  family, atom style, units, native timestep and femtosecond step, each marked
+  explicit, guessed or unresolved with its source. `dt_fs` is derived only from
+  explicit `metal`/`real` units plus an explicit timestep; no scale is invented.
+- Add `lammps_post.parsers.classify_pair_style`: exact first-token matching
+  against enumerated LAMMPS pair styles; hybrid and unknown styles are
+  `generic`. `parse_input()` returns a new `metadata` key; existing keys keep
+  their values (the shell switches to the new model in GEN-2b).
+- `parse_input()` now raises when one input declares `timestep` more than once
+  with different values (previously the last value silently won).
+
 ### Optional Rust CLI `lkpr-rs` (UI-1)
 
 - Add `rust/lkpr-rs`, a separate binary that drives the Python backend through

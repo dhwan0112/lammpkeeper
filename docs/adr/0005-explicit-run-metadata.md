@@ -48,6 +48,18 @@ The proposal text below is unchanged except where noted here. Relevant merged wo
   the existing `thermo.summary` v1 contract is proposed.
 - Total collected checks on main after #46: native **589/0/0**.
 
+### Implementation clarification (GEN-2a, 2026-11-01)
+
+The alias list was checked against the LAMMPS manual (pair_pace, pair_reaxff,
+pair_hdnnp, Commands_pair). Recognized first tokens: `pace`, `pace/kk`,
+`pace/extrapolation`, `pace/extrapolation/kk`, `pace/apip`, `pace/fast/apip`,
+`pace/precise/apip`; `reaxff`, `reaxff/kk`, `reaxff/omp` plus the historical
+`reax/c`, `reax/c/kk`, `reax/c/omp` (assumed; no longer in the manual); `hdnnp`.
+The decision text's `ace` and `n2p2` are not LAMMPS pair-style names (`n2p2` is
+the library behind `hdnnp`), so they classify as `generic`. An input using n2p2's
+older external `nnp` style is therefore `generic` (no domain defaults), which is
+the safe direction; add it explicitly if such inputs must be recognized.
+
 ## Options
 
 1. **Do nothing:** retain warned shape heuristics. Lowest immediate migration
