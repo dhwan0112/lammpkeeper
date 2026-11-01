@@ -48,6 +48,21 @@ Run `lkpr prep -h` / `lkpr post -h` for the full option list. The legacy entry
 points (`python -m lammps_pre`, `python -m lammps_post`, and the `lammps-pre.py`
 / `lammps-post.py` wrapper scripts) still work unchanged.
 
+### Optional Rust CLI (`lkpr-rs`)
+
+A separate, optional Rust front end drives the same Python backend. It does not
+replace `lkpr`, and Python-only installs do not need Rust. Build it from source
+(Linux tested):
+
+```bash
+cargo install --locked --path rust/lkpr-rs     # installs lkpr-rs into ~/.cargo/bin
+lkpr-rs doctor --python /path/to/env/bin/python
+lkpr-rs thermo-summary --python /path/to/env/bin/python --log log.lammps [--json]
+```
+
+The Python environment must have `lammpkeeper` installed; select it with
+`--python` or `LKPR_PYTHON`. See [`docs/agent/UI-1.md`](docs/agent/UI-1.md).
+
 ## Explicit species and groups
 
 Species selections are system-owned; they need not have a force-field name:
@@ -108,6 +123,7 @@ are not a claim that every scientific input or optional path is validated.
 lammpkeeper/     unified CLI + core/ (species, geometry) + io/ (Box) + common/
 lammps_pre/      structure building & LAMMPS input generation
 lammps_post/     trajectory analysis & plotting
+rust/lkpr-rs/    optional Rust CLI front end (drives the Python backend)
 tests/           regression suite + fixtures
 MIGRATION.md     how the two originally-separate CLIs were unified (design record)
 ```
