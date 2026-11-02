@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### `lkpr run` cancels its job when it fails after start (REV-EXEC-2)
+
+- An error inside `lkpr run` after the job had started (for example a failing
+  `--events` write) was reported as a request that never started, while the
+  job and its children kept running until the timeout. The job is now
+  cancelled and cleaned up, its real state is reported, and the exit code is 1.
+
 ### RDF no longer overrides a dump's periodic z (REV-ANALYSIS-9)
 
 - `compute_rdf(..., pbc=None)` applied the legacy `z_pbc=False` default even to
