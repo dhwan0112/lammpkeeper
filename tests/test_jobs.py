@@ -330,6 +330,35 @@ def test_backend_error_code_cleanup_failed_does_not_forge_cleanup_failure():
         assert snapshot['error'] == {'code': 'cleanup_failed', 'message': 'backend-side text'}
 
 
+def test_cli_error_after_job_start_cancels_job_and_is_not_invalid_request():
+    """Cancel the live job on a post-start CLI error; never claim a pre-submission failure (REV-EXEC-2)."""
+    from lammpkeeper import jobs
+    real_print = print
+    with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
+        root = Path(tmp)
+        fake = _fake(root, execution='signal.pause()')
+        request = root / 'request.json'
+        request.write_text(json.dumps(_request()))
+        def failing_print(*args, **kwargs):
+            """Fail the stderr event stream once the execution child is live."""
+            if kwargs.get('file') is sys.stderr and '"running"' in args[0]:
+                _await_file(root / 'execution.started')
+                raise OSError('synthetic stderr write failure')
+            return real_print(*args, **kwargs)
+        output = io.StringIO()
+        with patch('lammpkeeper.jobs.print', failing_print, create=True), \
+                contextlib.redirect_stdout(output):
+            status = jobs.main(['--request', str(request), '--python', fake, '--events'])
+        snapshot = json.loads(output.getvalue())
+        assert status != 0, status
+        assert snapshot['state'] == 'cancelled', snapshot
+        assert snapshot['error']['code'] != 'invalid_request', snapshot
+        assert 'synthetic stderr write failure' in snapshot['error']['message'], snapshot
+        assert snapshot['cleanup']['status'] == 'complete' and snapshot['cleanup']['reaped'] is True, snapshot
+        assert snapshot['request_id'] == 'local-A', snapshot
+        _assert_stopped(int((root / 'execution.started').read_text()))
+
+
 def test_child_crash_and_non_executable_import_failure_are_visible():
     """Map sudden process death and interpreter import failure to local failure."""
     from lammpkeeper.jobs import start_job
