@@ -1,6 +1,6 @@
 # REV-IO-2 — dump changed during an active `DumpReader` iteration
 
-Status: fixed; verification below.
+Status: fixed and verified at `6ab3de5` (see Verification).
 
 Finding F-IO-2 in `docs/agent/REVIEW-20261028.md`. Branch `fix/rev-io-2-stream-mutation`, base `94e562f`.
 
@@ -74,3 +74,13 @@ Differences are within run-to-run noise (about +-8%, both signs). Direct cost:
 ## Not changed
 `index()`, `read_frame()`, `LazyFrames`/`_FrameStore` (already check the source), atom-row
 parsing and projection, `tests/run.py`, BACKLOG, CHANGELOG, fixtures, goldens.
+
+## Verification (measured, `6ab3de5`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 720 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io2-native/20261102T204047-6ab3de5-full` |
+| Forced-NumPy full verifier | 711 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/io2-numpy/20261102T204047-6ab3de5-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/io2-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
