@@ -160,9 +160,15 @@ def test_warning_retention_and_diagnostic_bounds_on_failure():
         with patch('lammps_post.parsers.parse_log', side_effect=warned):
             response = _execute(_request(path))
         assert response['status'] == 'failed'
-        assert response['provenance']['unit_source'] == 'log.unit_system'
+        # REV-EXEC-3: unit_source is set only after validation, so a failed
+        # validation (NaN) must not claim a validated source. Was 'log.unit_system'.
+        assert response['provenance']['unit_source'] == 'unresolved'
         assert len(response['warnings']) == MAX_WARNINGS
         assert 'sentinel' in response['warnings'][0]
+        # REV-EXEC-3: the final entry is the notice with the omitted count
+        # (the log parse adds none; the test emits MAX_WARNINGS + 5 warnings).
+        assert response['warnings'][-1].startswith('6 additional warnings omitted'), response['warnings'][-1]
+        assert sum('sentinel' in item for item in response['warnings']) == MAX_WARNINGS - 1
         assert all(len(item) <= MAX_DIAGNOSTIC for item in response['warnings'])
         with patch('lammps_post.parsers.parse_log', side_effect=ValueError('x' * 10000)):
             response = _execute(_request(path))
@@ -407,6 +413,60 @@ def test_stat_change_and_replacement_during_parse_cannot_publish_success():
                 response = _execute(_request(path))
             assert response['error']['code'] == 'input_changed', response
             assert response['result'] is None
+
+
+def test_input_changed_keeps_original_parse_error_visible_and_chained():
+    """Report input_changed but name and chain the original error (REV-EXEC-3a)."""
+    _util.require_numpy()
+    from lammpkeeper.application import InputChangedError, summarize_thermo_file
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'changing.log'
+        _log(path)
+        def broken(source):
+            """Fail parsing while the file identity also changes."""
+            with path.open('a') as stream:
+                stream.write('\n# changed\n')
+            raise ValueError('original parse failure sentinel')
+        with patch('lammps_post.parsers.parse_log', side_effect=broken):
+            response = _execute(_request(path))
+            assert response['error']['code'] == 'input_changed', response
+            assert 'original parse failure sentinel' in response['error']['message'], response
+            assert 'ValueError' in response['error']['message'], response
+            assert response['provenance']['unit_source'] == 'unresolved', response
+            _log(path)
+            try:
+                summarize_thermo_file(path)
+            except InputChangedError as exc:
+                assert isinstance(exc.__cause__, ValueError), repr(exc.__cause__)
+                assert 'original parse failure sentinel' in str(exc.__cause__)
+            else:
+                raise AssertionError('changed input was accepted')
+
+
+def test_warning_overflow_notice_states_omitted_count_and_keeps_bound():
+    """Keep MAX_WARNINGS entries with a final notice naming how many were dropped (REV-EXEC-3b)."""
+    _util.require_numpy()
+    from lammpkeeper.execution import MAX_WARNINGS
+    from lammps_post.parsers import parse_log
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'warn.log'
+        for extra, omitted in ((0, None), (1, 2)):
+            _log(path)
+            def warned(source):
+                """Emit exactly MAX_WARNINGS + extra distinct warnings."""
+                result = parse_log(source)
+                for index in range(MAX_WARNINGS + extra):
+                    warnings.warn(f'sentinel-{index}', RuntimeWarning)
+                return result
+            with patch('lammps_post.parsers.parse_log', side_effect=warned):
+                response = _execute(_request(path))
+            assert len(response['warnings']) == MAX_WARNINGS, len(response['warnings'])
+            if omitted is None:
+                # Exactly at the bound: nothing is dropped, so no notice.
+                assert response['warnings'][-1] == f'sentinel-{MAX_WARNINGS - 1}'
+            else:
+                assert response['warnings'][-2] == f'sentinel-{MAX_WARNINGS - 2}'
+                assert response['warnings'][-1].startswith(f'{omitted} additional warnings omitted')
 
 
 def _cli(args, cwd, home, text=None):

@@ -166,29 +166,34 @@ def summarize_thermo_file(path, diagnostics=None, provenance=None):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
         try:
+            failure = None
             try:
                 data = parse_log(source)
-                # Set before validation on purpose (REV-EXEC-3 notes the
-                # trade-off): a failure response still shows where units came
-                # from; success overwrites it with the validated source.
-                if isinstance(data, dict) and data.get('unit_system') in ('metal', 'real'):
-                    provenance['unit_source'] = 'log.unit_system'
                 result = summarize_thermo(data)
+                # Set only after validation: a failure response must not claim a
+                # validated unit source for a result that was never published.
                 provenance['unit_source'] = ('log.unit_system'
                                              if result['unit_system'] else 'unresolved')
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
-                # Runs on failure too: a changed or vanished file replaces any
-                # parse error with InputChangedError, because results from a
-                # changing file are not trustworthy (stat identity, not a hash;
-                # REV-EXEC-3 tracks keeping the original error as the cause).
+                # Runs on failure too: a changed or vanished file reports
+                # InputChangedError, because results from a changing file are
+                # not trustworthy (stat identity, not a hash). The original
+                # parse/validation error is chained as the cause and named in
+                # the message so neither is hidden.
+                detail = ''
+                if failure is not None:
+                    detail = f' (original error: {type(failure).__name__}: {str(failure)[:200]})'
                 try:
                     after = _fingerprint(source)
                 except OSError as exc:
                     raise InputChangedError('Log became unavailable while parsing; '
-                                            'no result published') from exc
+                                            'no result published' + detail) from (failure or exc)
                 if after != before:
                     raise InputChangedError('Log stat identity changed while parsing; '
-                                            'no result published')
+                                            'no result published' + detail) from failure
         finally:
             diagnostics.extend(str(item.message) for item in caught)
     return result, diagnostics, before

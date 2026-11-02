@@ -359,6 +359,70 @@ def test_cli_error_after_job_start_cancels_job_and_is_not_invalid_request():
         _assert_stopped(int((root / 'execution.started').read_text()))
 
 
+def test_large_legal_response_is_read_completely_after_child_exit():
+    """Read a ~900 KiB response fully even if the reader stalls after the child exits (REV-EXEC-3c)."""
+    from lammpkeeper import jobs
+    original_read = os.read
+    # F_SETPIPE_SZ (Linux): lets the child put the whole response into the pipe
+    # and exit at once, so the reader meets it only after exit. Leading JSON
+    # whitespace keeps the envelope valid and pushes it near the stream limit; it
+    # goes first so a truncated read loses the closing brace.
+    code = ("import fcntl\n"
+            "fcntl.fcntl(1, 1031, 1 << 20)\n"
+            "_dumps = json.dumps\n"
+            "json.dumps = lambda *a, **k: ' ' * 900000 + _dumps(*a, **k)")
+    delays = [0.5, 0.4]
+    with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
+        root = Path(tmp)
+        def stalling_read(fd, size):
+            """Stall after the first two data reads of the execution phase.
+
+            The first stall lets the child write everything and exit; the second
+            outlasts the old 0.15 s post-exit drain bound after reaping.
+            """
+            chunk = original_read(fd, size)
+            if chunk and delays and (root / 'execution.started').exists():
+                time.sleep(delays.pop(0))
+            return chunk
+        with patch.object(jobs.os, 'read', stalling_read):
+            snapshot = jobs.start_job(_request(), python=_fake(root, execution=code)).wait(10)
+        assert not delays, 'stalls were not injected'
+        assert snapshot['state'] == 'succeeded', snapshot['error']
+        assert snapshot['backend_response'] is not None
+    # Without the injected stall: repeated unstalled runs must never fail.
+    for index in range(20):
+        with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
+            snapshot = jobs.start_job(_request(), python=_fake(Path(tmp), execution=code)).wait(10)
+            assert snapshot['state'] == 'succeeded', (index, snapshot['error'])
+
+
+def test_stdout_held_open_after_exit_gets_accurate_bounded_diagnostic():
+    """Report a descendant-held stdout as possibly incomplete, not as invalid JSON (REV-EXEC-3c)."""
+    from lammpkeeper import jobs
+    # The grandchild leaves the child's process group, so group cleanup cannot
+    # close the inherited stdout pipe.
+    code = ("grand = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " start_new_session=True)\n"
+            "(root / 'grand.pid').write_text(str(grand.pid))")
+    with tempfile.TemporaryDirectory(dir='/tmp/opencode') as tmp:
+        root = Path(tmp)
+        try:
+            began = time.monotonic()
+            snapshot = jobs.start_job(_request(), python=_fake(root, execution=code)).wait(15)
+            elapsed = time.monotonic() - began
+        finally:
+            if (root / 'grand.pid').exists():
+                with contextlib.suppress(OSError):
+                    os.kill(int((root / 'grand.pid').read_text()), signal.SIGKILL)
+        assert snapshot['state'] == 'failed', snapshot
+        assert snapshot['error']['code'] == 'invalid_response', snapshot
+        assert 'stdout still open' in snapshot['error']['message'], snapshot
+        assert 'Invalid backend JSON' not in snapshot['error']['message'], snapshot
+        assert snapshot['backend_response'] is None
+        assert snapshot['cleanup']['status'] == 'complete', snapshot['cleanup']
+        assert jobs.DRAIN_WAIT <= elapsed < jobs.DRAIN_WAIT + 5, elapsed
+
+
 def test_child_crash_and_non_executable_import_failure_are_visible():
     """Map sudden process death and interpreter import failure to local failure."""
     from lammpkeeper.jobs import start_job
