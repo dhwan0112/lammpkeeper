@@ -73,3 +73,13 @@ REV-UI-3 created the output directory for `export summary` only when no name was
 - **How it was found:** the REV-VERIFY-3 work. Full mode had passed only because plotting had already created the directory.
 - **Fix:** branch `fix/rev-ui-3-summary-dir`. The output directory is again always created, as it was before REV-UI-3, but only after the summary text has been built. Other parent directories are not created.
 - **Regression test:** `test_output_failures.test_summary_to_a_named_path_creates_the_output_directory_as_before`. It fails before the fix and passes after.
+
+## Verification (measured, `805f3ae`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 699 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui3b-native/20261102T192935-805f3ae-full` |
+| Forced-NumPy full verifier | 690 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ui3b-numpy/20261102T192935-805f3ae-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui3b-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
