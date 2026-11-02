@@ -220,6 +220,24 @@ def pbc_from_boundary(boundary):
     return tuple(flag == 'pp' for flag in boundary)
 
 
+def _find_frame_marker(mm, marker, start):
+    """Return the offset of the next line that is exactly the frame marker, or -1.
+
+    Streaming accepts only a stripped line equal to the marker. A substring hit
+    inside an atom row (or a longer line) is skipped here so that the index
+    and streaming paths agree on frame boundaries.
+    """
+    pos = mm.find(marker, start)
+    while pos != -1:
+        if pos == 0 or mm[pos - 1:pos] == b'\n':
+            end = mm.find(b'\n', pos)
+            line = mm[pos:end if end != -1 else mm.size()]
+            if line.strip() == marker:
+                return pos
+        pos = mm.find(marker, pos + 1)
+    return -1
+
+
 class DumpReader:
     """
     Lazy LAMMPS dump reader: iterating yields one frame dict at a time, so a
@@ -484,7 +502,7 @@ class DumpReader:
                 mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             size = mm.size()
             released = 0
-            pos = mm.find(marker)
+            pos = _find_frame_marker(mm, marker, 0)
             while pos != -1:
                 # Scanned pages count toward RSS until dropped; release them in
                 # page-aligned steps so indexing a multi-GB dump stays small.
@@ -496,7 +514,7 @@ class DumpReader:
                 mm.readline()                   # ITEM: TIMESTEP
                 timestep, natoms, box, _, cell = self._read_header(mm)
                 start = mm.tell()
-                pos = mm.find(marker, start)
+                pos = _find_frame_marker(mm, marker, start)
                 idx.add(timestep, natoms, box, start, size if pos == -1 else pos, cell=cell)
         self._check_source()
         return idx.finalize()
@@ -1366,9 +1384,17 @@ def parse_log(filepath):
         warnings.warn(f"{filepath}: unresolved timestep command in log; supply confirmed input metadata",
                       RuntimeWarning)
 
+    # Two columns sharing one normalized key would overwrite each other and the
+    # last would win silently. Raising keeps every valid log's keys unchanged.
+    owners = {}
     for i, h in enumerate(headers):
         # Normalize: 'PotEng' -> 'pe', 'TotEng' -> 'etotal', etc.
         key = NORM.get(h.lower(), h.lower())
+        if key in owners:
+            raise ValueError(f"{filepath}: thermo block {selected[0][0]}: alias collision: columns "
+                             f"{headers[owners[key]]!r} and {h!r} both normalize to {key!r}; "
+                             "use distinct thermo columns")
+        owners[key] = i
         result[key] = arr[:, i]
 
     return result
