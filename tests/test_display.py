@@ -78,3 +78,41 @@ def test_render_ansi():
     assert common_d.C.ok('x') == '\x1b[92mx\x1b[0m'
     assert common_d.C.err('x') == '\x1b[91mx\x1b[0m'
     assert common_d.C.RESET == '\x1b[0m'
+
+
+def _render_table(has_rich, headers, rows):
+    """Render print_table on the chosen path, restoring the HAS_RICH global."""
+    import contextlib
+    import io
+    saved = common_d.HAS_RICH
+    common_d.HAS_RICH = has_rich
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            common_d.print_table(headers, rows)
+        return buf.getvalue()
+    finally:
+        common_d.HAS_RICH = saved
+
+
+def test_print_table_empty_rows_renders_header_only():
+    """REV-UI-1: rows=[] prints header and rule, no body, on Rich and plain paths."""
+    for has_rich in {common_d.HAS_RICH, False}:
+        text = _render_table(has_rich, ['Type', 'Name'], [])
+        plain = common_d._ANSI_RE.sub('', text)
+        assert 'Type' in plain and 'Name' in plain, plain
+        if not has_rich:
+            # Header line plus rule line only; the body is empty.
+            assert len(_visible_lines(text)) == 2, plain
+
+
+def test_print_table_row_length_mismatch_raises_value_error():
+    """REV-UI-1: short or long rows fail visibly on both paths, never IndexError/padding."""
+    for has_rich in {common_d.HAS_RICH, False}:
+        for bad in (['1'], ['1', '2', '3']):
+            try:
+                _render_table(has_rich, ['Type', 'Name'], [['1', 'Fe'], bad])
+            except ValueError as exc:
+                assert 'row 1' in str(exc) and '2' in str(exc), exc
+            else:
+                raise AssertionError(f'no ValueError for row {bad!r} (rich={has_rich})')
