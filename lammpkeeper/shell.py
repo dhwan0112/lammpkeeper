@@ -86,6 +86,22 @@ class LkprShell(cmd.Cmd):
         except OSError:
             pass
 
+    def _snapshot_history(self):
+        """Copy the in-memory readline buffer (oldest first); [] if history is off."""
+        if readline is None or not history_enabled():
+            return []
+        return [readline.get_history_item(i + 1)
+                for i in range(readline.get_current_history_length())]
+
+    def _restore_history(self, entries):
+        """Replace the readline buffer with `entries` from _snapshot_history."""
+        if readline is None or not history_enabled():
+            return
+        readline.clear_history()
+        readline.set_history_length(HISTORY_LENGTH)
+        for line in entries:
+            readline.add_history(line)
+
     # ── shells ──
 
     def _shell(self, name):
@@ -142,8 +158,17 @@ class LkprShell(cmd.Cmd):
         navigation protocol, not a stray truthy return from an inline command.
         """
         if arg.strip():
-            sh = self._shell(name)
-            sh.onecmd(arg)
+            # Constructing a child (first use) and dispatching both replace the
+            # process-global readline buffer, so snapshot the menu's in-memory
+            # history (including unsaved entries) and restore it even if the
+            # child raises; otherwise postloop would save post history into
+            # the menu file.
+            snapshot = self._snapshot_history()
+            try:
+                sh = self._shell(name)
+                sh.onecmd(arg)
+            finally:
+                self._restore_history(snapshot)
             return False
         if self._run(name):
             return True
