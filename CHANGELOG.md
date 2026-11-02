@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Short or long dump rows are rejected (REV-IO-3)
+
+- Every atom row must have exactly the header's number of columns, on the
+  native and NumPy readers alike, even when only some columns are requested.
+  Before, a short row could pass when only its first columns were read.
+
 ### Dump changes during reading are detected (REV-IO-2)
 
 - A dump file that is appended to, truncated, replaced or deleted while it is
