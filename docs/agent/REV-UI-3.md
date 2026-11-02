@@ -1,6 +1,6 @@
 # REV-UI-3: explicit output requests fail instead of exiting 0
 
-Status: fixed and verified at `11e53e4` (see Verification).
+Status: fixed and verified at `11e53e4` (see Verification); follow-up fix below.
 Branch: `fix/rev-ui-3-export-failures` from main `c61419a`.
 Sources: the prior-work review (PRIOR-WORK-REVIEW-20261029: `export csv missing` and a pressure plot from a Step/Temp log exit 0 with no artifact) and the 2026-11-01 audit additions.
 
@@ -63,5 +63,23 @@ Two side effects:
 | Native full verifier | 687 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui3-native/20261102T130337-11e53e4-full` |
 | Forced-NumPy full verifier | 678 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ui3-numpy/20261102T130337-11e53e4-full` |
 | Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui3-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
+
+## Follow-up fix (2026-11-02): summary output directory
+
+REV-UI-3 created the output directory for `export summary` only when no name was given. As a result, `export summary <output_dir>/summary.txt` failed with `FileNotFoundError` on a fresh session. The verifier's quick mode uses exactly that command, so it ended in `FAIL post` on main.
+
+- **How it was found:** the REV-VERIFY-3 work. Full mode had passed only because plotting had already created the directory.
+- **Fix:** branch `fix/rev-ui-3-summary-dir`. The output directory is again always created, as it was before REV-UI-3, but only after the summary text has been built. Other parent directories are not created.
+- **Regression test:** `test_output_failures.test_summary_to_a_named_path_creates_the_output_directory_as_before`. It fails before the fix and passes after.
+
+## Verification (measured, `805f3ae`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 699 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui3b-native/20261102T192935-805f3ae-full` |
+| Forced-NumPy full verifier | 690 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ui3b-numpy/20261102T192935-805f3ae-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui3b-refs/` |
 
 The forced-NumPy skips are the named native-parity tests.
