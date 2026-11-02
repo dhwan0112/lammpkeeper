@@ -1,5 +1,7 @@
 # REV-IO-2 — dump changed during an active `DumpReader` iteration
 
+Status: fixed; verification below.
+
 Finding F-IO-2 in `docs/agent/REVIEW-20261028.md`. Branch `fix/rev-io-2-stream-mutation`, base `94e562f`.
 
 ## Problem (measured on unmodified code)
