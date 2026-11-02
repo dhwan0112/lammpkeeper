@@ -646,10 +646,20 @@ class DumpReader:
             raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "
                              f"expected {natoms} (truncated or surplus dump?)")
         fields = None
+        n_raw = len(self.raw_columns)
         if self._has_type_ids or self.has_elements or 'id' in self.col_idx:
             fields = [row.split() for row in lines]
-            if any(len(row) != len(self.raw_columns) for row in fields):
-                raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: wrong column count")
+            widths = map(len, fields)
+        else:
+            widths = (len(row.split()) for row in lines)
+        # Raw width is checked before any projection (REV-IO-3): the backends read
+        # only the selected fields and would accept a short or long row silently.
+        # One shared check keeps the native and NumPy decisions identical.
+        for number, width in enumerate(widths, 1):
+            if width != n_raw:
+                raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: "
+                                 f"row {number} has {width} columns, expected {n_raw}")
+        if fields is not None:
             # Integer identity must survive the homogeneous numeric array exactly.
             for name in ('id', 'type'):
                 if name not in self.col_idx:
