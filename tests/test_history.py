@@ -222,3 +222,156 @@ def test_inline_hosted_command_restores_menu_history_when_child_raises():
         assert _buffer() == ['menu_old', 'menu_unsaved'], _buffer()
         sh.postloop()
         assert _lines(menu_file) == ['menu_old', 'menu_unsaved'], _lines(menu_file)
+
+
+class _ShellStub:
+    """Build a history-only shell class lazily so import works without readline."""
+
+    @staticmethod
+    def make():
+        """Return a minimal HostedShellMixin subclass (standalone, no cmdloop)."""
+        from lammpkeeper.common.hosted import HostedShellMixin
+
+        class Shell(HostedShellMixin):
+            """Expose only the history policy under test."""
+            pass
+
+        return Shell
+
+
+class _keep_readline:
+    """Restore the process-global readline buffer and drop test atexit hooks."""
+
+    def __enter__(self):
+        """Remember the buffer and the shells whose atexit hooks must go."""
+        self.saved = _buffer()
+        self.shells = []
+        return self
+
+    def track(self, sh):
+        """Register `sh` so its atexit callback is unregistered on exit."""
+        self.shells.append(sh)
+        return sh
+
+    def __exit__(self, *exc):
+        """Unregister callbacks (they would write into deleted temp homes) and restore."""
+        import atexit
+        for sh in self.shells:
+            cb = getattr(sh, '_atexit_callback', None)
+            if cb is not None:
+                atexit.unregister(cb)
+        readline.clear_history()
+        for line in self.saved:
+            readline.add_history(line)
+
+
+def test_standalone_startup_buffer_bounded_to_limit_keeping_newest():
+    """REV-OPS-1: a 5000-line file loads into at most LIMIT entries, newest kept."""
+    _require_readline()
+    Shell = _ShellStub.make()
+    with _patched_home() as home, _keep_readline() as keep:
+        path = os.path.join(home, '.big_history')
+        _fill(path)
+        keep.track(Shell())
+        sh = keep.shells[0]
+        sh._setup_history(path)
+        buf = _buffer()
+        assert len(buf) <= LIMIT, len(buf)
+        assert buf[-1] == f'cmd {N - 1}' and buf[0] == f'cmd {N - LIMIT}', (buf[0], buf[-1])
+
+
+def test_lkpr_menu_startup_buffer_bounded_to_limit_keeping_newest():
+    """REV-OPS-1: the unified menu's own loader applies the same startup bound."""
+    _require_readline()
+    import lammpkeeper.shell as lk
+    with _patched_home() as home, _keep_readline():
+        path = os.path.join(home, '.lkpr_history')
+        _fill(path)
+        saved = lk._HISTFILE
+        lk._HISTFILE = path
+        try:
+            lk.LkprShell()
+        finally:
+            lk._HISTFILE = saved
+        buf = _buffer()
+        assert len(buf) <= LIMIT and buf[-1] == f'cmd {N - 1}', (len(buf), buf[-1])
+
+
+def test_bounded_load_round_trips_backslash_and_unicode_entries():
+    """REV-OPS-1: trimming goes through readline, so special entries survive intact.
+
+    GNU readline's file format has no newline escape (a newline splits an entry on
+    reload, before and after this change), so only single-line entries are claimed.
+    """
+    _require_readline()
+    from lammpkeeper.common.hosted import load_history_bounded
+    with _patched_home() as home, _keep_readline():
+        path = os.path.join(home, '.ml_history')
+        readline.clear_history()
+        for i in range(LIMIT + 50):
+            readline.add_history(f'line {i}')
+        readline.add_history('back\\slash 한글 "q"')
+        readline.set_history_length(-1)
+        readline.write_history_file(path)
+        readline.clear_history()
+        load_history_bounded(path)
+        buf = _buffer()
+        assert len(buf) == LIMIT and buf[-1] == 'back\\slash 한글 "q"', (len(buf), buf[-1])
+
+
+def test_two_standalone_instances_write_only_their_own_history():
+    """REV-OPS-1: shared readline must not leak one instance's commands into another's file."""
+    _require_readline()
+    Shell = _ShellStub.make()
+    with _patched_home() as home, _keep_readline() as keep:
+        fa, fb = os.path.join(home, '.a_history'), os.path.join(home, '.b_history')
+        for path, name in ((fa, 'a'), (fb, 'b')):
+            with open(path, 'w') as f:
+                f.write(f'{name}_old\n')
+        a = keep.track(Shell())
+        a._setup_history(fa)
+        readline.add_history('a_new')
+        b = keep.track(Shell())
+        b._setup_history(fb)
+        readline.add_history('b_new')
+        a._atexit_callback()
+        b._atexit_callback()
+        assert _lines(fa) == ['a_old', 'a_new'], _lines(fa)
+        assert _lines(fb) == ['b_old', 'b_new'], _lines(fb)
+
+
+def test_failing_atexit_callback_does_not_block_other_instances():
+    """REV-OPS-1: an exception in one save callback is reported, not propagated."""
+    _require_readline()
+    import contextlib
+    import io
+    import atexit
+    Shell = _ShellStub.make()
+    with _patched_home() as home, _keep_readline() as keep:
+        fa, fb = os.path.join(home, '.a_history'), os.path.join(home, '.b_history')
+        a = keep.track(Shell())
+        a._setup_history(fa)
+        b = keep.track(Shell())
+        b._setup_history(fb)
+        readline.add_history('b_new')
+
+        def boom():
+            """Simulate an unexpected non-OSError failure while saving."""
+            raise RuntimeError('boom')
+
+        a._save_history_if_standalone = boom
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            a._atexit_callback()  # must not raise
+        assert 'boom' in err.getvalue(), err.getvalue()
+        b._atexit_callback()
+        assert _lines(fb) == ['b_new'], _lines(fb)
+        # Registered once per instance: re-running setup must not add a second hook.
+        calls = []
+        real_register = atexit.register
+        atexit.register = lambda fn, *a, **k: calls.append(fn) or real_register(fn, *a, **k)
+        try:
+            b._setup_history(fb)
+        finally:
+            atexit.register = real_register
+        assert calls == [], calls
