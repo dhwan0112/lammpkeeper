@@ -1,6 +1,6 @@
 # REV-ANALYSIS-7: RDF cutoff beyond the nearest-image limit
 
-Status: fixed; verification below.
+Status: fixed and verified at `e381a83` (see Verification).
 Branch: `fix/rev-analysis-7-rdf-half-box` from main `d552b7b`.
 
 **Decision (maintainer, 2026-11-01):** warn, and report the limit in the result, plots and exports.
@@ -58,3 +58,13 @@ Example: 60 random atoms in a 10 Å periodic cube, `r_max = 6`, 12 bins. The com
 
 - No g value, golden or fixture.
 - Reference crystal RDFs (`references.py`, REV-REF-2) do not use `compute_rdf`.
+
+## Verification (measured, `e381a83`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 652 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/an7-native/20261102T034539-e381a83-full` |
+| Forced-NumPy full verifier | 643 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/an7-numpy/20261102T034539-e381a83-full` |
+
+- The 9 skips in the forced-NumPy run are the named native-parity tests.
+- **ACE fixture session** (`post-summary.txt`): `r_max: 6.0`, `r_complete: 8.395…`. The fixture's RDF is therefore complete; it gets no warning and no shading.
