@@ -125,24 +125,71 @@ def to_cartesian(fractional, cell):
     return _finite_result(result)
 
 
-def wrap_positions(positions, cell):
-    """Target [0, 1) in periodic fractions, leaving other fractions unwrapped.
+def _wrap_tolerance(cell, mask):
+    """Allowed rounding outside [0, 1) when converting a wrapped point back.
 
-    A periodic skew vector may change several Cartesian components. Floating
-    subtraction/reconstruction can round a value onto a cell face; this is not
-    an exact-arithmetic guarantee of strict half-open fractional coordinates
-    after converting the returned Cartesian points back to fractions.
+    Zero for orthogonal cells, where the axes are independent and the face
+    can be met exactly. For tilted cells, 64 machine epsilons times the
+    periodic basis condition number: rebuilding Cartesian points through the
+    tilt can round a 0 fraction to about -1e-17 (or a near-1 one to 1.0).
+    """
+    if cell.is_orthogonal:
+        return 0.0
+    return 64.0 * np.finfo(np.float64).eps * _condition(cell.matrix[mask])
+
+
+def _inside(fractions, tol):
+    """True where periodic fractions lie in [-tol, 1) (tol 0) or [-tol, 1 + tol)."""
+    upper = (fractions < 1) if tol == 0 else (fractions < 1 + tol)
+    return (fractions >= -tol) & upper
+
+
+def wrap_positions(positions, cell):
+    """Wrap periodic fractions into strict [0, 1); other fractions stay unwrapped.
+
+    Convention (REV-GEOM-1, maintainer approved 2026-11-02):
+
+    - Wrapping produces fractions in [0, 1) on periodic axes. A value that
+      rounds onto the upper face (``x - floor(x) == 1.0``) is the same
+      periodic position as the lower face and is mapped to 0.
+    - Points that are already wrapped are returned unchanged, so the function
+      is idempotent bit for bit.
+    - Orthogonal cells: ``to_fractional(result)`` is in [0, 1) exactly.
+      Tilted cells: rebuilding Cartesian points through the tilt can round by
+      a tolerance ``tol`` (64 eps times the periodic basis condition number),
+      so ``to_fractional(result)`` is in [-tol, 1 + tol); no exact arithmetic.
+
+    Only lattice-vector shifts are applied, so the physical image selection
+    never changes.
     """
     _cell(cell, periodic=True)
     points = _array(positions, 'positions')
     if not any(cell.pbc):
         return points
-    fractional = to_fractional(points, cell)
     mask = np.asarray(cell.pbc, dtype=bool)
-    if np.any(np.abs(fractional[..., mask]) > _MAX_IMAGE):
+    tol = _wrap_tolerance(cell, mask)
+    fractional = to_fractional(points, cell)
+    periodic = fractional[..., mask]
+    if np.any(np.abs(periodic) > _MAX_IMAGE):
         raise ValueError('periodic image coefficients exceed the 2**45 geometry limit')
-    fractional[..., mask] -= np.floor(fractional[..., mask])
-    return to_cartesian(fractional, cell)
+    # Already wrapped: return unchanged. This is what makes a second call a no-op.
+    if np.all(_inside(periodic, tol)):
+        return points
+    periodic = periodic - np.floor(periodic)
+    periodic[periodic >= 1] = 0.0   # x - floor(x) rounded up to 1: same face as 0
+    fractional[..., mask] = periodic
+    result = to_cartesian(fractional, cell)
+    if cell.is_orthogonal:
+        # lo + f * L can still round onto the upper face; per axis that face
+        # is the same position as lo, which converts back to exactly 0.
+        lo, lengths = np.asarray(cell.lo), cell.lengths
+        for axis in np.flatnonzero(mask):
+            back = (result[..., axis] - lo[axis]) / lengths[axis]
+            result[..., axis] = np.where(back >= 1, lo[axis], result[..., axis])
+    if not np.all(_inside(to_fractional(result, cell)[..., mask], tol)):
+        raise ValueError('wrap_positions could not meet the wrap convention; cell '
+                         'conditioning is too poor')
+    return result
 
 
 def _integers_nearest_first(low, high, center):
