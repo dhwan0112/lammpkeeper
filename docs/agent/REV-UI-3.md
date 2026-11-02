@@ -1,6 +1,6 @@
 # REV-UI-3: explicit output requests fail instead of exiting 0
 
-Status: fixed; verification below.
+Status: fixed and verified at `11e53e4` (see Verification).
 Branch: `fix/rev-ui-3-export-failures` from main `c61419a`.
 Sources: the prior-work review (PRIOR-WORK-REVIEW-20261029: `export csv missing` and a pressure plot from a Step/Temp log exit 0 with no artifact) and the 2026-11-01 audit additions.
 
@@ -55,3 +55,13 @@ Two side effects:
 
 - The thermo and thermostat plots in `plot all` keep their current handling.
 - Interactive prompts are unchanged.
+
+## Verification (measured, `11e53e4`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 687 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui3-native/20261102T130337-11e53e4-full` |
+| Forced-NumPy full verifier | 678 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ui3-numpy/20261102T130337-11e53e4-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui3-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
