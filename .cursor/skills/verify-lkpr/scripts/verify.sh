@@ -14,10 +14,33 @@ export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 FIXTURE="$ROOT/tests/fixtures/ace_examples/regular_MD/traj.dump"
 
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-EVID="${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/$(date +%Y%m%dT%H%M%S)-$SHA-$MODE"
-# Timestamp resolution is one second: simultaneous identical-mode runs should
-# use distinct LKPR_VERIFY_DIR roots to avoid sharing an evidence directory.
-mkdir -p "$EVID" || { echo "cannot create evidence dir $EVID" >&2; exit 2; }
+EVID_ROOT="${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}"
+STAMP="$(date +%Y%m%dT%H%M%S)"
+# Each run owns a unique evidence directory. The first run keeps
+# <stamp>-<sha>-<mode>. On collision, try <stamp>-<n>-<sha>-<mode> for
+# n = 2, 3, ... so the name still matches the glob *-<sha>-<mode>.
+# Existing evidence is never reused, overwritten or removed.
+# Plain mkdir is not a safe lock: uutils mkdir 0.8.0 (measured on this host)
+# can report success to two concurrent callers. A claim file made with
+# noclobber (O_EXCL) is atomic, so it decides the owner of each name.
+mkdir -p "$EVID_ROOT/.claims" || { echo "cannot create evidence root $EVID_ROOT" >&2; exit 2; }
+EVID=""
+n=1
+while [ "$n" -le 1000 ]; do
+  if [ "$n" -eq 1 ]; then name="$STAMP-$SHA-$MODE"; else name="$STAMP-$n-$SHA-$MODE"; fi
+  cand="$EVID_ROOT/$name"
+  # Skip a name that already exists, such as evidence from an older run.
+  if [ ! -e "$cand" ] && ( set -C; : > "$EVID_ROOT/.claims/$name" ) 2>/dev/null; then
+    # This run won the claim. A failing mkdir now is a real error.
+    mkdir "$cand" || { echo "cannot create evidence dir $cand" >&2; exit 2; }
+    EVID="$cand"; break
+  fi
+  # An unwritable claims dir fails every attempt; report it at once.
+  [ -w "$EVID_ROOT/.claims" ] || { echo "cannot write claims in $EVID_ROOT/.claims" >&2; exit 2; }
+  n=$((n+1))
+done
+# Every name was taken: fail visibly instead of reusing one.
+[ -n "$EVID" ] || { echo "no free evidence dir under $EVID_ROOT for $STAMP-$SHA-$MODE" >&2; exit 2; }
 # Without -e, an unchecked failed mktemp would leave HOME empty and turn
 # "$WORK/post_out" into "/post_out". Refuse to start any isolated work unless
 # both directories exist; the evidence directory survives with a FAIL line.

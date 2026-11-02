@@ -43,8 +43,12 @@ Say so in the report.
 
 ## Evidence
 
-Everything is written to `${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/<timestamp>-<sha>/`,
-outside the repo, and survives cleanup:
+Everything is written to `${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/<timestamp>-<sha>-<mode>/`,
+outside the repo, and survives cleanup. Each run gets its own directory. If that
+name is taken (same second, SHA and mode), the script uses
+`<timestamp>-<n>-<sha>-<mode>` with n = 2, 3, ... and never reuses or deletes
+existing evidence. The `evidence:` line shows the real path. Hidden claim files
+in `.claims/` record which run owns a name. Files:
 `doctor.txt`, `tests.log`, `post.log`, `post-batch.log`, `post-summary.txt`,
 `prep.log`, `outputs.txt`, `summary.txt`.
 Quote `summary.txt` and the test-count line in your report. The test count is the
