@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Far-unwrapped RDF coordinates are exact or rejected (REV-ANALYSIS-6)
+
+- `compute_rdf` rejects periodic coordinates more than 2^45 box lengths from
+  the box origin, on both pair backends alike. Below that, the SciPy path now
+  finds every pair the fallback path counts; before, far-unwrapped coordinates
+  could lose pairs on the SciPy path only. Ordinary results are unchanged.
+
 ### pair_coeff species maps use exact style names (REV-IO-9)
 
 - In hybrid inputs, only sub-styles with an exact LAMMPS name from the
