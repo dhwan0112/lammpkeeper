@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Reference checks cannot pass by omission (VERIFY-REF-2)
+
+- `.claude/skills/verify/scripts/verify_refs.py` reports a missing reference
+  file, a malformed or empty reference, an unknown or invalid tolerance entry,
+  and a measured value the reference does not list as a named ERROR (exit 1).
+  Before, a missing file silently disabled its check and an empty reference
+  passed.
+
 ### RDF reports where its count is complete (REV-ANALYSIS-7)
 
 - `compute_rdf` results gain `r_max` and `r_complete`. `r_complete` is half the
