@@ -84,3 +84,20 @@ Real checker:
   `'test_verify_refs'` to `MODULES`). Until then `python tests/run.py` does not run it.
 - Malformed `id` fields inside a JSON file (the file name stays the key for
   missing-file detection).
+
+## Parent verification (measured, `c947882`)
+
+The worker's environment lacked pandas, matplotlib and ase, so the parent re-ran all checks with the project's `chem` interpreter.
+
+- **New tests:** 14 tests in `tests/test_verify_refs.py`. On the original script, 12 fail and 2 pass; the 2 that pass guard behavior that must not change. On the new script, all 14 pass. The module is registered in `tests/run.py`.
+- **Real checker:** all 6 checks PASS, exit 0.
+  - Evidence: `/tmp/opencode/vr2-refs/20261102T124156-c947882-refs`.
+
+Full `/verify-lkpr` results:
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native | 666 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/vr2-native/20261102T123637-c947882-full` |
+| Forced NumPy | 657 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/vr2-numpy/20261102T123637-c947882-full` |
+
+The 9 skips in the forced-NumPy run are the named native-parity tests. The worker's failing `test_stale_cache` result ("pandas not available") does not occur with the project interpreter.
