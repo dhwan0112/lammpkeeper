@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Concurrent verifier runs keep separate evidence (REV-VERIFY-2)
+
+- Two `verify.sh` runs in the same second for the same commit and mode no
+  longer share and overwrite one evidence directory; the second gets
+  `<stamp>-2-<sha>-<mode>`. Existing evidence is never reused or deleted.
+
 ### Wrapped positions are half-open and idempotent (REV-GEOM-1)
 
 - `lammpkeeper.core.geometry.wrap_positions` never returns a point on the

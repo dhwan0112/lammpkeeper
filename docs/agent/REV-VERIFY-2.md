@@ -72,3 +72,9 @@ Other checks:
 - REV-VERIFY-1 and REV-VERIFY-3 behaviour (mktemp checks, evidence retention).
 - No cleanup of old evidence or claim files. `BACKLOG.md`, `CHANGELOG.md`, `tests/run.py` untouched.
 - Slow goldens (`LKPR_SLOW=1`) were not run.
+
+## Parent review (2026-11-02)
+
+- **Reproduced the `mkdir` finding.** `mkdir (uutils coreutils) 0.8.0` on this host reported success to two of three concurrent callers in 2 of 30 races. That is why the script claims names with a noclobber file and does not use `mkdir` alone.
+- **Re-ran fail → pass on `test_audit_verifier`:** the original script gives 2 FAIL and 11 PASS; the fixed script gives 13 PASS.
+- **Related risk, not changed.** The generated HPC job script (`lammps_pre/templates.py`, scratch and destination setup) also relies on exclusive `mkdir`. That is safe with GNU coreutils, the usual tool on HPC nodes, but not with a uutils `mkdir` like this host's. Changing generated job scripts needs maintainer approval (AGENTS.md §8), so this is recorded here and in BACKLOG (REV-PREP-8), not fixed.
