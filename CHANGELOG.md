@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Verifier fails when evidence cannot be retained (REV-VERIFY-3)
+
+- `verify-lkpr` (`verify.sh`): failures to retain required evidence
+  (`post-summary.txt` copy, `outputs.txt`, `doctor.txt`, final `summary.txt`)
+  now record `FAIL evidence` and exit nonzero; a post step that leaves no
+  `summary.txt` also fails. The exit status is decided from the in-memory
+  results instead of re-reading `summary.txt`. Before, a denied evidence copy
+  still exited 0.
+
 ### Verifier stops when temporary directories cannot be created (REV-VERIFY-1)
 
 - `verify-lkpr` (`verify.sh`): if a temporary HOME or work directory cannot be

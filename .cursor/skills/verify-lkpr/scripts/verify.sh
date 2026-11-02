@@ -38,15 +38,17 @@ WORK="$(mktemp -d)" && [ -d "$WORK" ] \
 # normal completion and failure so a failed verification can be investigated.
 export HOME="$TMPHOME" LKPR_NO_HISTORY=1
 export MPLCONFIGDIR="$TMPHOME/matplotlib"
-: > "$EVID/outputs.txt"
-
 declare -a RESULTS=()
 # Keep machine-detectable PASS/FAIL/SKIP prefixes; only FAIL controls the exit
 # status, while SKIP remains explicit evidence of an unverified optional path.
 record() { RESULTS+=("$1 $2${3:+ — $3}"); }   # STATUS STEP NOTE
+# Evidence that cannot be written or retained is a verification failure: a
+# PASS without its proof must not exit zero (REV-VERIFY-3).
+evidence_fail() { record FAIL evidence "$1"; echo "FAIL evidence — $1" >&2; }
+: > "$EVID/outputs.txt" || evidence_fail "cannot create outputs.txt"
 
 # ── Doctor ──────────────────────────────────────────────────────────────
-{
+if ! {
   echo "mode: $MODE"; echo "root: $ROOT"
   echo "git: $(git rev-parse --abbrev-ref HEAD 2>/dev/null) @ $SHA"
   echo "dirty files: $(git status --porcelain 2>/dev/null | wc -l)"
@@ -58,8 +60,11 @@ record() { RESULTS+=("$1 $2${3:+ — $3}"); }   # STATUS STEP NOTE
   ls lammps_post/_dumpparse*.so >/dev/null 2>&1 && echo "  native parser: present" \
       || echo "  native parser: absent (NumPy fallback)"
   [ -f "$FIXTURE" ] && echo "  fixture: present" || echo "  fixture: MISSING"
-} > "$EVID/doctor.txt" 2>&1
-cat "$EVID/doctor.txt"
+} > "$EVID/doctor.txt" 2>&1; then
+  # The group's status is that of its last command, so a failed redirect shows here.
+  evidence_fail "cannot write doctor.txt"
+fi
+cat "$EVID/doctor.txt" 2>/dev/null
 # Probe the selected interpreter, not a different environment's installed
 # package list. An import failure disables only the optional drive step.
 have() { "$PY" -c "import $1" 2>/dev/null; }
@@ -121,8 +126,18 @@ if [ -f "$FIXTURE" ]; then
   else
     record FAIL post "missing analyses/plots or command failure; see post.log and post-batch.log"
   fi
-  [ ! -f "$WORK/post_out/summary.txt" ] || cp "$WORK/post_out/summary.txt" "$EVID/post-summary.txt"
-  find "$WORK/post_out" -type f 2>/dev/null | sed "s|$WORK/||" | sort > "$EVID/outputs.txt"
+  if [ -f "$WORK/post_out/summary.txt" ]; then
+    # A partial copy would look like retained evidence; remove it on failure.
+    cp "$WORK/post_out/summary.txt" "$EVID/post-summary.txt" \
+      || { rm -f "$EVID/post-summary.txt"; evidence_fail "could not retain post-summary.txt in evidence dir"; }
+  else
+    # post ran, so the analysis summary must exist to be retained.
+    evidence_fail "post ran but produced no summary.txt; post-summary.txt not retained"
+  fi
+  # find exits nonzero when post_out is absent (a post failure reported above);
+  # tolerate that so only a real write failure counts as evidence loss.
+  { find "$WORK/post_out" -type f 2>/dev/null || true; } | sed "s|$WORK/||" | sort > "$EVID/outputs.txt" \
+    || evidence_fail "cannot write outputs.txt"
   # outputs.txt inventories disposable artifacts; only logs and the copied
   # analysis summary survive cleanup, not the plots or generated preparation.
 else
@@ -138,7 +153,8 @@ if [ "$MODE" = full ]; then
       while IFS= read -r s; do
         n=$((n+1)); bash -n "$s" >> "$EVID/prep.log" 2>&1 || bad=1
       done < <(find "$WORK/prep_out" -type f \( -name '*.sh' -o -name '*.pbs' \) 2>/dev/null)
-      find "$WORK/prep_out" -type f 2>/dev/null | sed "s|$WORK/||" | sort >> "$EVID/outputs.txt"
+      { find "$WORK/prep_out" -type f 2>/dev/null || true; } | sed "s|$WORK/||" | sort >> "$EVID/outputs.txt" \
+        || evidence_fail "cannot append prep outputs to outputs.txt"
       # An exit status of zero is insufficient: writers used to swallow errors.
       for required in ace_oxidation.in lammps_ace.data regions_ace.inc structure.xyz run.sh; do
         [ -s "$WORK/prep_out/$required" ] || { echo "Missing/empty artifact: $required" >> "$EVID/prep.log"; bad=1; }
@@ -160,7 +176,15 @@ if [ "$MODE" = full ]; then
 fi
 
 # ── Evidence summary ────────────────────────────────────────────────────
-printf '%s\n' "${RESULTS[@]}" | tee "$EVID/summary.txt"
+# Decide the exit status from the in-memory results, never by re-reading
+# summary.txt: an unwritable or truncated file must not turn FAIL into exit 0.
+STATUS=0
+for r in "${RESULTS[@]+"${RESULTS[@]}"}"; do
+  case "$r" in FAIL*) STATUS=1 ;; esac
+done
+if ! printf '%s\n' "${RESULTS[@]+"${RESULTS[@]}"}" | tee "$EVID/summary.txt"; then
+  echo "FAIL evidence — cannot write summary.txt" >&2
+  STATUS=1
+fi
 echo "evidence: $EVID"
-grep -q '^FAIL' "$EVID/summary.txt" && exit 1
-exit 0
+exit "$STATUS"

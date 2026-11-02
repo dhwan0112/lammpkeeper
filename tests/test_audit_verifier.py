@@ -192,3 +192,20 @@ def test_verifier_refuses_when_second_mktemp_fails_and_cleans_first():
     """REV-VERIFY-1: a failed WORK mktemp must remove the already-created TMPHOME."""
     details = _assert_setup_refused('2')
     assert details['leftover_dirs'] == [], details['leftover_dirs']
+
+
+# Fails only when the destination (last argument) is post-summary.txt; every
+# other copy is delegated to the real cp so the rest of the run is unchanged.
+_CP_STUB = """for a; do last="$a"; done
+case "$last" in */post-summary.txt) echo 'cp: stub denied' >&2; exit 1 ;; esac
+exec /bin/cp "$@"
+"""
+
+
+def test_verifier_fails_when_post_summary_evidence_cannot_be_retained():
+    """REV-VERIFY-3: a denied evidence copy must fail the run, not exit zero."""
+    details = {}
+    code, summary = _run_verifier('complete', mode='quick', stubs={'cp': _CP_STUB}, details=details)
+    assert code != 0, summary
+    assert 'FAIL evidence' in summary and 'post-summary.txt' in summary, summary
+    assert 'post-summary.txt' not in details['evidence'], details['evidence']
