@@ -140,7 +140,18 @@ def print_table(headers, rows, title=None):
         rows:    list[list] — Each inner list is one row of data.
                  Values are converted to strings automatically.
         title:   str or None — Optional title displayed above the table.
+
+    An empty `rows` renders the header (and rule) with no body.
+
+    Raises:
+        ValueError: a row's length differs from the header count. Padding or
+            truncating would silently misalign data under the wrong column.
     """
+    rows = [list(r) for r in rows]
+    for n, row in enumerate(rows):
+        if len(row) != len(headers):
+            raise ValueError(f"print_table: row {n} has {len(row)} cells but "
+                             f"there are {len(headers)} headers")
     if HAS_RICH:
         t = RichTable(title=title, box=rich_box.ROUNDED)
         for h in headers:
@@ -153,7 +164,8 @@ def print_table(headers, rows, title=None):
         # then format each row with left-aligned, padded columns.
         if title:
             print(f"\n  {C.bold(title)}")
-        widths = [max(visible_width(h), *(visible_width(r[i]) for r in rows)) + 2
+        # Header is always a candidate, so max() also works when rows is empty.
+        widths = [max([visible_width(h)] + [visible_width(r[i]) for r in rows]) + 2
                   for i, h in enumerate(headers)]
         hdr = "  ".join(pad(h, widths[i]) for i, h in enumerate(headers))
         print(f"  {C.BOLD}{hdr}{C.RESET}")

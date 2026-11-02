@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Empty and ragged tables (REV-UI-1)
+
+- `print_table`: an empty `rows` list now renders the header (and rule on the
+  plain path) instead of raising `TypeError` on the plain path. Rows whose
+  length differs from the headers now raise `ValueError` before anything is
+  printed, on both the Rich and plain paths; Rich used to pad them silently.
+  All in-repo callers build rows matching their headers.
+
 ### Verifier fails when evidence cannot be retained (REV-VERIFY-3)
 
 - `verify-lkpr` (`verify.sh`): failures to retain required evidence
