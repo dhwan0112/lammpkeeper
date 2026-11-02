@@ -412,6 +412,29 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
     return {'z': ctr, 'fe_charge': fe_q_avg, 'fe_count': fe_n, 'o_count': o_n}
 
 
+_RDF_MAX_IMAGE = 2 ** 45
+
+
+def _check_rdf_image_range(pos_a, pos_b, lo, L, periodic, step=None):
+    """
+    Raise ValueError when a periodic coordinate lies more than 2**45 box
+    lengths from the box origin (the core.geometry image limit).
+
+    Beyond it float64 cannot resolve a position within the cell, so a pair
+    could be counted or lost depending on rounding. Both RDF pair backends
+    call this with the same inputs, so they accept and reject identically.
+    """
+    for dim, is_periodic in enumerate(periodic):
+        if not is_periodic:
+            continue
+        for pos in (pos_a, pos_b):
+            if np.any(np.abs(pos[:, dim] - lo[dim]) / L[dim] > _RDF_MAX_IMAGE):
+                where = '' if step is None else f' timestep {step}'
+                raise ValueError(
+                    f'RDF{where}: periodic image coefficients exceed the '
+                    f'2**45 geometry limit on axis {"xyz"[dim]}')
+
+
 def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pbc=None):
     """
     (ia, ib, weight) for every (a, b) pair whose minimum-image distance may be
@@ -442,14 +465,24 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
 
     lo = box[:, 0]
     L = box[:, 1] - box[:, 0]
-    wa = pos_a - lo
-    wb = pos_b - lo
     boxsize = L.astype(float)
     periodic = (True, True, z_pbc) if pbc is None else pbc
+    _check_rdf_image_range(pos_a, pos_b, lo, L, periodic)
+    # The caller's distance formula rounds at ulp(|x|). Widen the nomination
+    # radius by that error so the candidates stay a superset of the pairs the
+    # fallback bins even for far-unwrapped coordinates (REV-ANALYSIS-6).
+    scale = max(float(np.abs(pos_a).max()), float(np.abs(pos_b).max()),
+                float(np.abs(lo).max()))
+    pad = 16.0 * np.finfo(np.float64).eps * scale
+    wa = pos_a - lo
+    wb = pos_b - lo
     for dim, is_periodic in enumerate(periodic):
         if is_periodic:
-            for w in (wa, wb):
-                w[:, dim] %= L[dim]
+            for w, pos in ((wa, pos_a), (wb, pos_b)):
+                # fmod is exact, unlike (x - lo) for |x| >> L. Reduce x and lo
+                # separately, then combine small numbers.
+                w[:, dim] = (np.fmod(pos[:, dim], L[dim])
+                             - np.fmod(lo[dim], L[dim])) % L[dim]
                 # cKDTree needs periodic coordinates in [0, L); float x % L
                 # can round up to exactly L, which is the same point as 0.
                 w[w[:, dim] >= L[dim], dim] = 0.0
@@ -462,7 +495,7 @@ def _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc, same_species=False, pb
             # non-periodic axis.
             boxsize[dim] = max(wa[:, dim].max(), wb[:, dim].max()) + 2 * r_max + 1.0
 
-    radius = r_max * (1 + 1e-6) + 1e-6
+    radius = r_max * (1 + 1e-6) + 1e-6 + pad
     tree_a = cKDTree(wa, boxsize=boxsize)
     if same_species:
         pairs = tree_a.query_pairs(radius, output_type='ndarray')
@@ -641,6 +674,9 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
         if r_complete is None or frame_limit < r_complete:
             r_complete, limit_step = frame_limit, fr['timestep']
 
+        if not triclinic:
+            _check_rdf_image_range(pos_a, pos_b, box[:, 0], L, frame_periodic,
+                                   step=fr['timestep'])
         pairs = (None if triclinic else
                  _rdf_candidate_pairs(pos_a, pos_b, box, r_max, z_pbc,
                                       same_species=same_species, pbc=frame_periodic))
