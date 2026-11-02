@@ -1,6 +1,6 @@
 # REV-IO-9: pair_coeff species maps use exact pair-style names
 
-Status: fixed; verification below.
+Status: fixed and verified at `37bf58c` (see Verification).
 Branch: `fix/rev-io-9-hybrid-exact-alias` from main `94e562f`.
 Decision: the maintainer approved on 2026-11-02 (§8 species-mapping convention) the use of exact names only, the same ADR-0005 table the classifier uses.
 
@@ -33,3 +33,13 @@ New `tests/test_pair_coeff_mapping.py` (3 tests, made-up labels A and B), regist
 - **Before the fix:** 2 of the 3 fail (non-LAMMPS hybrid names mapped; non-hybrid `n2p2` took no file). The third pins unchanged mapping for real LAMMPS sub-styles and passes before and after.
 - **After the fix:** all 3 pass.
 - **Related modules:** `test_run_metadata`, `test_session_metadata`, `test_audit_parsers`, `test_species_metadata`, `test_species_session`, `test_input_math`, `test_audit_workflow`, `test_audit_integration` and `test_fair_comparison` pass with `LKPR_SLOW=1`.
+
+## Verification (measured, `37bf58c`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 729 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io9-native/20261102T205859-37bf58c-full` |
+| Forced-NumPy full verifier | 718 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/io9-numpy/20261102T205859-37bf58c-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/io9-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
