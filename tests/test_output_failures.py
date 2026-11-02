@@ -185,3 +185,22 @@ def _util_has(module):
         return True
     except ImportError:
         return False
+
+
+def test_summary_to_a_named_path_creates_the_output_directory_as_before():
+    """`export summary <output_dir>/summary.txt` works when output_dir does not exist yet.
+
+    Regression from REV-UI-3, found by the REV-VERIFY-3 work: the output
+    directory was created only for the default name, so the verifier's own
+    `export summary "$WORK/post_out/summary.txt"` failed in quick mode. Before
+    REV-UI-3 the output directory was always created; that behaviour is kept,
+    after the summary text is built.
+    """
+    _util.require_numpy()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        shell = _shell(root)
+        assert not (root / 'out').exists()
+        target = root / 'out' / 'summary.txt'
+        _ok(shell, 'export summary %s' % shlex.quote(str(target)))
+        assert target.exists()

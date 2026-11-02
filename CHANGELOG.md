@@ -64,6 +64,8 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   name not ending in `.txt` was silently replaced by `summary.txt`.
 - `plot pressure` on a log without Press or Pxx/Pyy/Pzz fails; `plot all`
   skips that plot with a notice.
+- Follow-up: `export summary <path>` again creates the output directory on a
+  fresh session, as before (a REV-UI-3 regression found by REV-VERIFY-3).
 
 ### Analysis parameters are validated (REV-ANALYSIS-8)
 

@@ -3784,8 +3784,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         cache layouts are not normalized here.
         """
         s = self.state
-        default = fname is None
-        if default:
+        if fname is None:
             fname = os.path.join(s.output_dir, 'summary.txt')
 
         lines = []
@@ -3823,10 +3822,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 for k, v in data.items():
                     lines.append(f"  {k}: {v}")
 
-        # Built in full above; create the default directory only now. A path
-        # given by the user is used as is, without creating its parent.
-        if default:
-            os.makedirs(s.output_dir, exist_ok=True)
+        # Built in full above; only now create the output directory, as before
+        # REV-UI-3, whatever name was given (a name inside output_dir must work
+        # on a fresh session). Other parent directories are not created.
+        os.makedirs(s.output_dir, exist_ok=True)
         with open(fname, 'w') as f:
             f.write('\n'.join(lines))
         progress_msg(f"Summary exported: {C.ok(fname)}")
