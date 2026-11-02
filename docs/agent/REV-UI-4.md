@@ -1,6 +1,6 @@
 # REV-UI-4 — CLI style flags, `--find` and `--batch` failures
 
-Status: fixed; verification below.
+Status: fixed and verified at `4a43a2c` (see Verification).
 
 Audit 2026-11-01, P3. Tests: `tests/test_cli_flags.py` (7 tests).
 
@@ -67,3 +67,13 @@ Run in the worktree with isolated HOME, `LKPR_NO_HISTORY=1`, `MPLBACKEND=Agg`.
 
 Flag names, `set` keys, theme/format handling (argparse `choices` already
 validates), interactive `find` output, `--max-frames` (argparse `int`).
+
+## Verification (measured, `4a43a2c`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 711 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui4-native/20261102T194120-4a43a2c-full` |
+| Forced-NumPy full verifier | 702 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ui4-numpy/20261102T194120-4a43a2c-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui4-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
