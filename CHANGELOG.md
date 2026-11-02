@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Menu history kept across inline commands (REV-OPS-1)
+
+- `lkpr` menu: running an inline `prep <cmd>` or `post <cmd>` no longer
+  replaces the menu's in-memory command history with the child shell's
+  history (which `postloop` then saved into the menu history file). The menu
+  buffer is snapshotted before the child is built and restored afterwards,
+  also when the child raises.
+
 ### Empty and ragged tables (REV-UI-1)
 
 - `print_table`: an empty `rows` list now renders the header (and rule on the
