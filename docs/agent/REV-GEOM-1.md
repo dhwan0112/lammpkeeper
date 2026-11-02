@@ -1,6 +1,6 @@
 # REV-GEOM-1: wrap_positions face convention
 
-Status: fixed; verification below.
+Status: fixed and verified at `84f937d` (see Verification).
 Branch: `fix/rev-geom-1-wrap-face` from main `a6d21b0`.
 
 **Decision (maintainer, 2026-11-02):** strict [0, 1) and idempotent. The caveat recorded with the decision is that tilted cells do not guarantee exact rounding when converting back to Cartesian coordinates.
@@ -42,3 +42,13 @@ The related modules (`test_box_geometry`, `test_box_model`, `test_triclinic_io`,
 ## Not changed
 
 `minimum_image`, `unwrap_step` and RDF/MSD image selection.
+
+## Verification (measured, `84f937d`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 749 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/gm1-native/20261102T223510-84f937d-full` |
+| Forced-NumPy full verifier | 738 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/gm1-numpy/20261102T223510-84f937d-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/gm1-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
