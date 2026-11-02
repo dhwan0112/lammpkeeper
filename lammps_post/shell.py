@@ -2522,8 +2522,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if len(parts) >= 2 and parts[0] == 'save_defaults':
             # Only the shared preference subset is promoted. Hidden provenance
             # fields and plot-specific options do not become global defaults.
-            recipe_key = parts[1].lower()
-            recipe = self.state.plot_recipes.get(recipe_key)
+            recipe_key, recipe = self._resolve_recipe_name(parts[1])
             if not recipe:
                 print(C.warn(f"  No saved recipe for '{recipe_key}'."))
                 return
@@ -2543,8 +2542,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         if len(parts) >= 2 and parts[0] == 'redo':
             # Rewrite the selection, not the saved data: downstream handlers
             # render current caches and selectively consult their recipe keys.
-            redo_type = parts[1].lower()
-            recipe = self.state.plot_recipes.get(redo_type)
+            redo_type, recipe = self._resolve_recipe_name(parts[1])
             if not recipe:
                 print(C.warn(f"  No saved recipe for '{redo_type}'. Run 'plot {redo_type}' first."))
                 return
@@ -2555,8 +2553,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # ── plot edit <type>: edit saved recipe and regenerate ──
         _edit_mode = False
         if len(parts) >= 2 and parts[0] == 'edit':
-            edit_type = parts[1].lower()
-            if edit_type not in self.state.plot_recipes:
+            edit_type, edit_recipe = self._resolve_recipe_name(parts[1])
+            if not edit_recipe:
                 print(C.warn(f"  No saved recipe for '{edit_type}'. Run 'plot {edit_type}' first."))
                 return
             _edit_mode = True
@@ -2666,7 +2664,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if what == 'penetration_profile' and not s.dump_frames:
                 raise ValueError('No dump data loaded')
             # Determine mode: redo (silent with saved recipe) or edit (interactive with saved defaults)
-            is_redo = (what in s.plot_recipes and
+            is_redo = (self._resolve_recipe_name(what)[1] is not None and
                        len(arg.split()) >= 2 and arg.split()[0] == 'redo')
             # A direct noninteractive request must never silently skip because
             # no analysis has been cached yet. Plot-all still skips inapplicable
@@ -2768,6 +2766,41 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # Save recipe
         s.plot_recipes[recipe_key] = opts.copy()
         return opts
+
+    # Plot dispatch name -> stored recipe keys. Stored keys are unchanged so
+    # earlier sessions keep working; this table only lets 'plot redo/edit'
+    # accept the name the user typed for 'plot <name>'. Names equal to their
+    # key (thermo, rdf, ...) need no entry.
+    _RECIPE_KEYS = {
+        'charge': ('charge_evolution',),
+        'charge_z': ('charge_z_distribution',),
+        'oar': ('oxygen_absorption_rate',),
+        'penetration': ('o_penetration',),
+        'penetration_trend': ('penetration_trend', 'o_penetration_trend'),
+        'dissociation': ('o2_dissociation',),
+        'spin': ('spin_evolution',),
+    }
+
+    def _resolve_recipe_name(self, name):
+        """Map a typed plot or stored recipe name to (dispatch name, recipe).
+
+        Accepts the dispatch name ('charge') or a stored key
+        ('charge_evolution'). Returns (dispatch_name, recipe_dict), or
+        (dispatch_name, None) when nothing is saved. Unknown names pass through
+        unchanged so the dispatcher can reject them.
+        """
+        name = name.lower()
+        recipes = self.state.plot_recipes
+        dispatch = name
+        for disp, keys in self._RECIPE_KEYS.items():
+            if name == disp or name in keys:
+                dispatch = disp
+                break
+        candidates = [dispatch] + list(self._RECIPE_KEYS.get(dispatch, ()))
+        for key in candidates:
+            if recipes.get(key):
+                return dispatch, recipes[key]
+        return dispatch, None
 
     def _save_recipe(self, plot_name, extra=None):
         """Merge options into a normalized recipe and record hidden output metadata.

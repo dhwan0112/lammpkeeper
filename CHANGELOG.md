@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Plot redo/edit accept the plot names users type (REV-UI-2)
+
+- `plot redo charge` (and `spin`, `oar`, `penetration`, `dissociation`,
+  `charge_z`) now finds the recipe saved by `plot charge`; the stored key
+  names (`charge_evolution`, …) keep working and saved defaults stay readable.
+
 ### Far-unwrapped RDF coordinates are exact or rejected (REV-ANALYSIS-6)
 
 - `compute_rdf` rejects periodic coordinates more than 2^45 box lengths from
