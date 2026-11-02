@@ -38,7 +38,7 @@ MODULES = ['test_mapping', 'test_display', 'test_lkpr_cli', 'test_fair_compariso
            'test_spin_species', 'test_rdf_precision', 'test_dump_comment_tokens',
            'test_boundary_flags', 'test_stale_cache', 'test_rust_cli',
            'test_run_metadata', 'test_session_metadata',
-           'test_input_math', 'test_rdf_cutoff', 'test_rdf_box_pbc', 'test_verify_refs', 'test_output_failures']
+           'test_input_math', 'test_rdf_cutoff', 'test_rdf_box_pbc', 'test_verify_refs', 'test_output_failures', 'test_parser_edges']
 
 
 def main():

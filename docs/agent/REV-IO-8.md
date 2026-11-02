@@ -1,5 +1,7 @@
 # REV-IO-8: parser edge cases (2026-11-01 audit, P3)
 
+Status: fixed; verification below.
+
 Branch `fix/rev-io-8-parser-edges`, base `main` 8d29ae5. Tests:
 `tests/test_parser_edges.py` (5 tests). All numbers below are *measured*.
 

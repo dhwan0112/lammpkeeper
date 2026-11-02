@@ -12,6 +12,16 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Parser edge cases fail or work visibly (REV-IO-8)
+
+- `parse_log` rejects a thermo header pair that maps to the same quantity
+  (for example `Temp` with `c_temp_mobile`, or `Press` with `Pressure`) and
+  names both columns; before, the last column silently replaced the first.
+- Density profiles accept frames that carry only a typed cell, and warn when
+  an explicit z range meets an empty trajectory.
+- The indexed dump reader recognises a frame only at an exact `ITEM: TIMESTEP`
+  line, as the streaming reader does.
+
 ### Menu history kept across inline commands (REV-OPS-1)
 
 - `lkpr` menu: running an inline `prep <cmd>` or `post <cmd>` no longer
