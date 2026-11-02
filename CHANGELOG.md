@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Wrapped positions are half-open and idempotent (REV-GEOM-1)
+
+- `lammpkeeper.core.geometry.wrap_positions` never returns a point on the
+  upper periodic face, and wrapping its result again changes nothing (before:
+  -1e-17 became 1.0, then 0.0). Already-wrapped points keep their exact values.
+  Tilted cells allow a small documented rounding tolerance when the result is
+  converted back to fractions.
+
 ### Prep reads Masses in conventional data files (REV-PREP-4)
 
 - The prep data-file inspector now reads a `Masses` section followed by a
