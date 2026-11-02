@@ -10,7 +10,11 @@ from unittest.mock import patch
 import numpy as np
 
 import _util
-from _util import require
+
+
+def require(condition, message):
+    """Assert, not skip: _util.require raises Skip, which would hide a failure."""
+    assert condition, message
 
 COL = dict(id=0, type=1, x=2, y=3, z=4)
 TA, TB = 4, 9
