@@ -1,6 +1,6 @@
 # REV-EXEC-3: execution diagnostics
 
-Status: fixed; verification below.
+Status: fixed and verified at `1981f70` (see Verification).
 Branch: `fix/rev-exec-3-diagnostics` (rebased onto main `5d5fe4a`).
 
 **Decisions (parent, 2026-11-02):**
@@ -96,3 +96,13 @@ Evidence:
 Not changed: `docs/agent/EXEC-2.md` still states a 0.15 s final pipe drain
 (line 108); it should be updated by the maintainer (out of scope for this item).
 `LKPR_SLOW=1` goldens not run.
+
+## Verification (measured, `1981f70`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 691 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ex3-native/20261102T131052-1981f70-full` |
+| Forced-NumPy full verifier | 682 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ex3-numpy/20261102T131052-1981f70-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ex3-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
