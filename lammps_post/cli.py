@@ -75,6 +75,10 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
+    if args.batch is not None and (args.analyze is not None or args.plot is not None):
+        # One-shot mode would silently skip the script; ambiguous ordering, so refuse.
+        parser.error('--batch cannot be combined with --analyze or --plot')
+
     # Lazy import: only load the heavy shell module when needed
     from lammps_post.shell import LammpsPostShell
 
@@ -87,18 +91,25 @@ def main(argv=None):
     shell.noninteractive = one_shot or args.batch is not None or args.find is not None
 
     # Apply style flags before any plotting
+    # Routed through onecmd so a bad value is counted and reported, not a traceback.
     if args.theme:
-        shell.do_set(f'theme {args.theme}')
+        shell.onecmd(f'set theme {args.theme}')
     if args.save_format:
-        shell.do_set(f'save_format {args.save_format}')
-    if args.dpi:
-        shell.do_set(f'dpi {args.dpi}')
+        shell.onecmd(f'set save_format {args.save_format}')
+    if args.dpi is not None:
+        # `is not None`: --dpi 0 must reach validation instead of being ignored.
+        shell.onecmd(f'set dpi {args.dpi}')
+    if shell.command_failures:
+        raise SystemExit(1)
 
     # ── File search mode ──
     if args.find is not None:
-        # Search takes precedence over preload/analysis/batch. It calls the
-        # handler directly, unlike commands whose failures onecmd accumulates.
-        shell.do_find(args.find)
+        # Search takes precedence over preload/analysis/batch. Through onecmd
+        # so failures count; an empty result is a failure for this request.
+        shell.require_find_match = True
+        shell.onecmd(f'find {shlex.quote(args.find)}')
+        if shell.command_failures:
+            raise SystemExit(1)
         return
 
     # ── Pre-load files if specified ──

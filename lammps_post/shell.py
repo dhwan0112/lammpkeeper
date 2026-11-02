@@ -389,6 +389,21 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             raise ValueError(f'{name} must be strictly positive, got {text!r}')
         return value
 
+    @staticmethod
+    def _positive_int(name, text):
+        """Parse a presentation setting that must be an integer >= 1.
+
+        Raises ValueError before any caller changes state. Fractions, NaN and
+        inf are rejected rather than truncated.
+        """
+        try:
+            value = int(text)
+        except ValueError:
+            raise ValueError(f'{name} must be a positive integer, got {text!r}') from None
+        if value < 1:
+            raise ValueError(f'{name} must be a positive integer, got {text!r}')
+        return value
+
     def _require_surface_z(self):
         """Require an Angstrom surface plane, preserving automatic/manual ownership.
 
@@ -1413,7 +1428,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self._invalidate_metadata()
             progress_msg(f"Types: {type_map}")
         elif key == 'dpi':
-            s.dpi = int(val)
+            s.dpi = self._positive_int('dpi', val)
             s.apply_plot_style()
             progress_msg(f"DPI: {s.dpi}")
         elif key == 'normalize':
@@ -1436,22 +1451,27 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             elif val.lower() in ('off', 'none', 'reset'):
                 s.z_focus = None
                 progress_msg("z_focus: OFF (full z-range)")
-            elif len(parts) >= 3:
-                s.z_focus = (float(parts[1]), float(parts[2]))
+            elif len(parts) == 3:
+                # Validate both bounds before publishing the window.
+                lo = self._finite_value('z_focus lo', parts[1])
+                hi = self._finite_value('z_focus hi', parts[2])
+                if not lo < hi:
+                    raise ValueError(f'z_focus requires lo < hi, got {parts[1]!r} {parts[2]!r}')
+                s.z_focus = (lo, hi)
                 progress_msg(f"z_focus: [{s.z_focus[0]:.1f}, {s.z_focus[1]:.1f}] A")
             else:
                 raise ValueError('Usage: set z_focus auto | off | <zlo> <zhi>')
         # ── Plot style settings ──
         elif key == 'linewidth' or key == 'lw':
-            s.linewidth = float(val)
+            s.linewidth = self._finite_value('linewidth', val, positive=True)
             s.apply_plot_style()
             progress_msg(f"Line width: {s.linewidth}")
         elif key == 'markersize' or key == 'ms':
-            s.marker_size = float(val)
+            s.marker_size = self._finite_value('markersize', val, positive=True)
             s.apply_plot_style()
             progress_msg(f"Marker size: {s.marker_size}")
         elif key == 'fontsize' or key == 'fs':
-            s.font_size = int(val)
+            s.font_size = self._positive_int('fontsize', val)
             s.apply_plot_style()
             progress_msg(f"Font size: {s.font_size}")
         elif key == 'grid':
@@ -1466,7 +1486,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             else:
                 raise ValueError('Usage: set grid on|off')
         elif key == 'grid_alpha':
-            s.grid_alpha = float(val)
+            alpha = self._finite_value('grid_alpha', val)
+            if not 0.0 <= alpha <= 1.0:
+                raise ValueError(f'grid_alpha must be within [0, 1], got {val!r}')
+            s.grid_alpha = alpha
             s.apply_plot_style()
             progress_msg(f"Grid alpha: {s.grid_alpha}")
         elif key == 'figsize':
@@ -1491,9 +1514,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 else:
                     s.figsize_override = None
                     progress_msg("Figure size override: OFF (using per-function defaults)")
-            elif len(parts) >= 3:
-                s.fig_width = float(parts[1])
-                s.fig_height = float(parts[2])
+            elif len(parts) == 3:
+                # Both sizes are validated before either is stored.
+                width = self._finite_value('figsize width', parts[1], positive=True)
+                height = self._finite_value('figsize height', parts[2], positive=True)
+                s.fig_width, s.fig_height = width, height
                 s.figsize_override = (s.fig_width, s.fig_height)
                 progress_msg(f"Figure size: {s.fig_width} x {s.fig_height} inches")
             else:
@@ -3927,6 +3952,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         if not found:
             print(C.dim("  No LAMMPS files found."))
+            if getattr(self, 'require_find_match', False):
+                # Explicit --find request: automation must see "no match" as failure.
+                raise ValueError('find: no LAMMPS files found')
             return
 
         # Group by type
