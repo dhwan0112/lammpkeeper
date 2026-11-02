@@ -1,6 +1,6 @@
 # REV-UI-2 — `plot redo/edit` find recipes saved under normalized keys
 
-Status: fixed; verification below.
+Status: fixed and verified at `d77b034` (see Verification).
 
 Finding: F-SESSION-2 in `docs/agent/REVIEW-20261028.md`.
 
@@ -72,3 +72,13 @@ defaults (this saves the recipe), clears the output directory, runs
 - Batch redo still reads recipe values only where the handler already did.
   Some handlers (oar, spin, dissociation) use session defaults in batch mode.
 - `plot recipes` still lists stored keys.
+
+## Verification (measured, `d77b034`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 739 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ui2-native/20261102T222317-d77b034-full` |
+| Forced-NumPy full verifier | 728 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/ui2-numpy/20261102T222317-d77b034-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/ui2-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
