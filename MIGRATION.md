@@ -35,7 +35,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - Real LAMMPS/HPC execution is deferred. The old run report below is historical,
   not a claim that the current code or this environment was run on LAMMPS.
 
-## Interface roadmap (through AGENT-1, 2026-10-30)
+## Interface roadmap (through UI-1, updated 2026-11-02)
 
 **Detailed stage-by-stage plan:** [INTERFACE-ROADMAP.md](docs/agent/INTERFACE-ROADMAP.md)
 records current status, requirements, implementation steps, deliverables, acceptance
@@ -44,7 +44,8 @@ checks, remaining host validation and the connection to the GEN/scientific backl
 [ADR-0004](docs/adr/0004-rust-frontends-python-execution-agent-access.md) establishes
 Rust CLI/TUI frontends over shared Python application execution, with skills
 and an optional MCP adapter using that same contract. **Status: accepted
-2026-10-30; architecture, EXEC-1/2 and AGENT-1 merged through PRs #28–31.** Python scientific APIs, ecosystem
+2026-10-30; architecture, EXEC-1/2 and AGENT-1 merged through PRs #28–31; UI-1
+(`lkpr-rs`) merged in PR #46. UI-2 and AGENT-2 are not started.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 
@@ -80,7 +81,13 @@ cleanup with visible incomplete-cleanup diagnostics. PR #30 is merged.
 Its lifecycle contract and measured evidence are in `docs/agent/EXEC-2.md`.
 AGENT-1 adds the portable `.agents/skills/lammpkeeper` workflow and a Claude
 project symlink (merged PR #31). Host discovery evidence, paired evaluations and limitations
-are recorded in `docs/agent/AGENT-1.md`; UI-1 is the next client slice.
+are recorded in `docs/agent/AGENT-1.md`.
+UI-1 adds the separate Rust executable `lkpr-rs` (`doctor`, `thermo-summary`) in
+`rust/lkpr-rs/`. It calls the selected Python through `lkpr run`, reimplements no
+science or job state, and is built from source only; Python-only installs are
+unchanged. Measured on Linux x86_64 with rustc 1.98.1 only. See
+`docs/agent/UI-1.md`. Later audit fixes REV-EXEC-1/2/3 (PRs #54, #58, #61)
+tightened the EXEC-2 supervisor without schema or error-code changes.
 
 ## Audit correction note (2026-10-27)
 
