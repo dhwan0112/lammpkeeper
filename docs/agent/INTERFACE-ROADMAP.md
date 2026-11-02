@@ -1,6 +1,6 @@
 # 상세 실행 로드맵 — Python 기반 · Rust CLI/TUI · 에이전트 연동
 
-기준일: 2026-10-30. 기준 코드: `main`의 AGENT-1 머지 `f473ff8`.
+작성일: 2026-10-30. 최종 갱신: 2026-11-02, 기준 코드 `main` `196f597`(PR #61).
 설계 근거: [승인된 ADR-0004](../adr/0004-rust-frontends-python-execution-agent-access.md).
 이 문서는 승인된 방향의 구현 순서와 검증 기준을 구체화한다. 새로운 패키지
 이동, 과학 계산 변경, 기존 명령 교체를 승인하는 문서는 아니다.
@@ -21,8 +21,8 @@ ARCH-1 설계 승인 [완료]
               └─ UI-2 Rust TUI [미착수]
 ```
 
-현재의 첫 공통 작업은 `thermo.summary` v1이다. 모든 분석 기능의 서비스화가
-끝났다는 뜻은 아니다. UI-1과 AGENT-2는 EXEC-2 이후 독립적으로 진행 가능하며,
+공통 실행 계약이 제공하는 작업은 아직 `thermo.summary` v1 하나다. 모든 분석 기능의 서비스화가
+끝났다는 뜻은 아니다. UI-2와 AGENT-2는 서로 독립적으로 진행 가능하며,
 실제 작업은 한 백로그 항목씩 별도 브랜치·PR로 진행한다.
 
 | 단계 | 실제 상태 | 근거 | 남은 범위 |
@@ -31,7 +31,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-1 | 구현·검증·머지 | PR #29, `ed41c1f` | 다른 과학 작업은 개별 확장 |
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
-| UI-1 | 구현·검증 (`lkpr-rs`, docs/agent/UI-1.md) | 아래 7절 | 새 backend operation 추가 시 확장, Linux 외 미검증 |
+| UI-1 | 구현·검증·머지 (`lkpr-rs`) | PR #46, `f752337`; [UI-1 개발로그](UI-1.md) | 새 backend operation 추가 시 확장, Linux x86_64 외 미검증 |
 | UI-2 | 미착수 | 아래 8절 | Rust TUI 전체 |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
@@ -41,15 +41,15 @@ ARCH-1 설계 승인 [완료]
 | --- | --- | --- |
 | Python 호환성 필수 | Python API·NumPy·과학 패키지 생태계 유지; EXEC-1/2, 모든 UI | 실제 Python 실행 및 설치 wheel 검증 |
 | 기존 conda/venv 활용 | 명시 Python 경로, symlink 보존, 호환성 확인, 실패 후 환경 자동 변경 금지 | 실제 venv·공백 경로 검증; 모든 conda 조합을 검증한 것은 아님 |
-| Rust CLI 및 대화형 TUI | UI-1 → UI-2; 계산 커널은 Python 재사용 | 설계 반영, 아직 미구현 |
+| Rust CLI 및 대화형 TUI | UI-1 → UI-2; 계산 커널은 Python 재사용 | CLI `lkpr-rs`(doctor, thermo-summary) 구현·머지, Linux x86_64만 실측; TUI 미착수 |
 | Claude/Codex/OpenCode 연동 | AGENT-1 공통 Skill + 얇은 호스트 안내; AGENT-2 MCP | OpenCode 발견·명시적 로딩 확인; 나머지 실호스트 미검증 |
 | CLI·API·에이전트 결과 일치 | 동일 operation/schema/오류 계약과 직접 Python 기준값 대조 | 현재 thermo.summary 경로 검증 |
 | 주석·코멘팅 항상 유지 | 새/중요 변경 함수·클래스·테스트에 영문 설명, 비자명한 분기에 이유 기록 | AGENTS.md 상시 규칙; 신규 Python 정의 점검 기록 |
 | 로깅·개발로그 항상 유지 | 상태 이벤트·오류·정리 상태 보존, stdout은 프로토콜 전용, 단계별 로그 갱신 | EXEC-2/Skill 및 개발로그 반영 |
 | 커밋은 사용자 이름 | 커밋 전 `Kim Donghwan <e1075536@u.nus.edu>` 설정 확인 | 현재 구현 커밋 확인; GitHub 머지는 같은 이메일의 Donghwan Kim |
-| 건너뛴 테스트 확인 후 진행 | 각 skip의 이유·대체 실행 증거 기록; 미검증을 통과로 계산하지 않음 | native 전용 6개 재실행 및 개별 PASS 대조 |
+| 건너뛴 테스트 확인 후 진행 | 각 skip의 이유·대체 실행 증거 기록; 미검증을 통과로 계산하지 않음 | NumPy 모드 skip 9개(native 전용 6개 + REV-IO-4 native 비교 3개), 같은 커밋의 native 실행에서 모두 PASS로 기록 |
 | 실제 HPC 실행은 보류 | 로컬 분석·생성물 검증과 실제 LAMMPS/HPC 실행 구분 | 실제 HPC 미실행·후속 범위로 유지 |
-| 기존 Python 사용자 보호 | Python-only 설치 유지, 기존 lkpr/import 보존, Rust 실행 파일 별도 | 기반 구현 유지; UI-1에서 재검증 |
+| 기존 Python 사용자 보호 | Python-only 설치 유지, 기존 lkpr/import 보존, Rust 실행 파일 별도 | UI-1에서 재검증: `lkpr-rs`는 별도 이름·소스 빌드, Python wheel 미포함, cargo 없으면 Rust 테스트는 skip으로 표시 |
 | 범용화·과학 정확성 우선 | ADR-0001 및 GEN 경로 유지, 관련 REV 결함 해결 후 기능 공개 | 별도 과학 백로그와 연계; 범용화 전체 완료 아님 |
 
 ## 3. 모든 단계에 적용할 작업·완료 절차
@@ -80,7 +80,7 @@ ARCH-1 설계 승인 [완료]
 - 기반 → 로컬 실행 → 각 클라이언트 순서와 호환성·배포 승인 지점을 정한다.
 
 **산출물/완료 근거:** ADR-0004 승인, MIGRATION/BACKLOG, PR #28.
-실행 파일 이름·Rust crate 위치·배포 대상은 UI-1에서 결정할 미해결 구현 선택이다.
+실행 파일 이름·Rust crate 위치·배포 대상은 UI-1 설계 기록에서 확정했다(7절).
 
 ## 5. EXEC-1 — 공유 Python 작업과 구조화 실행 [완료]
 
@@ -129,6 +129,12 @@ Python 3.9 런타임·비POSIX lifecycle·MDAnalysis는 미검증이다. 지원 
 제공하지 않는다. OS가 정리를 허용하지 않는 경우 실패/불완전 정리를 정직하게 보고한다.
 현재 작업은 과학 파일을 만들지 않으므로 partial artifact 정리는 향후 생산 작업에서 검증한다.
 
+**머지 후 보완(AUDIT-20261101):** REV-EXEC-1(#54) backend 오류 코드가 정리 실패로
+위장되지 않게 함, REV-EXEC-2(#58) `lkpr run`이 작업 시작 후 오류 시 자기 작업을 취소·정리,
+REV-EXEC-3(#61) 원래 파싱 오류 보존·경고 64개 초과 시 생략 수 표시·종료 후 stdout을
+끝까지 읽기. REV-TEST-2(#34)는 부하에 민감한 timeout 테스트를 고쳤다. 모두 실패 재현
+후 수정했고 schema·오류 코드는 바뀌지 않았다.
+
 ## 7. UI-1 — additive Rust CLI [완료: 2026-11-01, docs/agent/UI-1.md]
 
 **선행 조건:** EXEC-1/2 완료. 기존 Python `lkpr`를 덮어쓰지 않는다.
@@ -145,8 +151,23 @@ Python 3.9 런타임·비POSIX lifecycle·MDAnalysis는 미검증이다. 지원 
    손자 프로세스가 어떻게 정리되는지 명시·시험하고, 단순 kill을 취소 완료로 취급하지 않는다.
 7. 설치된 Rust binary + 저장소 밖 Python wheel/venv 조합으로 검증한다.
 
-**예정 산출물:** 별도 Rust CLI, 설치/환경 선택 안내, protocol client 및 계약 테스트,
-`docs/agent/UI-1.md`. 최종 이름·경로는 아직 결정되지 않았다.
+**산출물:** 별도 실행 파일 `lkpr-rs`(`rust/lkpr-rs/`, `publish = false`), 명령
+`doctor`와 `thermo-summary`(사람용 표 / `--json` 원본 snapshot), Rust 단위·프로세스
+테스트, 실제 backend 대조 `tests/test_rust_cli.py`, [UI-1 개발로그](UI-1.md).
+Python 선택은 `--python` → `LKPR_PYTHON` → 실패(PATH 추측 없음). backend 호출은
+`python -m lammpkeeper run`이며 Rust는 작업 상태·과학 계산을 재구현하지 않는다.
+설치는 `cargo install --path rust/lkpr-rs` 소스 빌드만 제공한다.
+
+**완료 근거:** PR #46(`f752337`). `cargo test` 단위 4 + 프로세스 13 통과(rustc 1.98.1,
+Linux x86_64), clippy·fmt 통과. 실제 backend 대조 7개 통과: AGENT-1 평가 로그 3종에서
+`--json` 결과가 Python 직접 호출·`lkpr exec`·`lkpr run`과 같고, 2**53 근처 step과
+`mtime_ns` 문자열이 손실 없이 유지됐다. Ctrl-C는 exit 130·`cancelled`·잔존 프로세스 없음,
+timeout은 `timed_out`·정리 완료. 저장소 밖 설치(공백 경로 venv) 확인. 최종 full verifier
+native 589/0/0, NumPy 580/0/9.
+
+**범위 제한:** Linux x86_64·rustc 1.98.1만 실측했다. 다른 OS, 이전 Rust toolchain,
+Python 3.9 runtime, MDAnalysis, 실제 HPC는 미검증이다. 감사(AUDIT-20261101)에서
+backend 종료 시 overflow 누락과 `--json` 출력 실패 시 exit 0 문제를 찾아 고쳤다.
 
 **완료 기준:**
 - 직접 Python/기존 CLI/구조화 CLI/Rust 결과가 값·단위·경고·오류에서 일치한다.
@@ -227,10 +248,12 @@ Python-only 설치에 MCP 의존성이 들어오지 않는다. artifact 생산 �
    pickle 로딩을 요구하지 않으며 제어 JSON에 trajectory를 넣지 않는다.
 5. 직접 Python과 각 공개 client의 일치 및 실패/취소 검증 후 순차 공개한다.
 
-PR #26/#27은 아직 열려 있는 charge 관련 수정이다. 현재 thermo.summary 완료와
-별개이며 해당 분석 공개 전 해결해야 한다. 그 밖의 미해결 REV 항목도 관련 작업의
-차단 조건으로 확인한다. GEN-2 metadata, GEN-4 domain 분리 및 GEN-8 비Fe 참조계는
-기존 별도 로드맵을 유지한다. GEN-9 전면 이동을 UI 작업의 선행 조건으로 만들지 않는다.
+charge 관련 수정 PR #26/#27은 2026-11-01에 충돌 해결·재검증 후 머지됐다.
+리뷰 표 기준 2026-11-02 현재 **25개 완료, 26개 미해결**이다. 새 operation을 공개할 때는
+그 분석에 관련된 미해결 REV 항목(예: RDF는 REV-ANALYSIS-6·REV-PLOT-1, 참조 결정은
+REV-REF-2/3/4)을 먼저 확인한다. GEN-2 metadata는 완료됐고, GEN-4 domain 분리 및
+GEN-8 비Fe 참조계는 기존 별도 로드맵을 유지한다. GEN-9 전면 이동을 UI 작업의
+선행 조건으로 만들지 않는다.
 
 다음은 아직 승인·구현된 제공 기능이 아니다: Rust로 기존 lkpr 대체, Python 임베딩,
 영속 서비스/재시작 복구, 원격/HPC 제출, 새로운 저장 형식·필수 의존성 도입.
@@ -243,10 +266,10 @@ PR #26/#27은 아직 열려 있는 charge 관련 수정이다. 현재 thermo.sum
 | 기존 단계 | 상태 | 후속 진행 순서와 완료 조건 |
 | --- | --- | --- |
 | Phase 0 재현성 | REL-0 완료 | thesis tag 보존; 역사적 재현성과 현재 정확성 검증을 구분 |
-| Phase 1 테스트·물리 교정 | 기존 주요 항목 완료, 후속 REV 일부 미해결 | 관련 실패 재현 → 수정 → 독립 oracle/회귀 → 리뷰 순서; open REV를 완료로 표시하지 않음 |
+| Phase 1 테스트·물리 교정 | 기존 주요 항목 완료; 리뷰 표 25 완료 / 26 미해결(2026-11-02) | 관련 실패 재현 → 수정 → 독립 oracle/회귀 → 리뷰 순서; open REV를 완료로 표시하지 않음 |
 | GEN-1 species model | 완료, PR #19 | system-owned species/group 계약을 새 operation에서도 사용 |
 | GEN-3 box/PBC | 완료, PR #20 | 지원되는 triclinic/PBC는 검증된 geometry 재사용; 미지원 소비자는 명시적 거절 |
-| GEN-2 명시적 metadata | 완료 (ADR-0005 #47, GEN-2a #48, GEN-2b #49) | LJ/EAM/hybrid는 generic, 부분 시간 정보는 미확인, 명시·추정·미확인 출처 표시. 남은 일: REV-IO-7(prep input의 `round()` 해석), 새 operation 공개 시 메타데이터 출처 보고 |
+| GEN-2 명시적 metadata | 완료 (ADR-0005 #47, GEN-2a #48, GEN-2b #49) | LJ/EAM/hybrid는 generic, 부분 시간 정보는 미확인, 명시·추정·미확인 출처 표시. 후속 REV-IO-7(#53)로 prep이 만든 ACE·ReaxFF input을 post가 읽음. 남은 일: 새 operation 공개 시 메타데이터 출처 보고 |
 | GEN-4 domain 분리 | open, GEN-2 이후 | Fe/O 전용 분석·상수를 domain pack으로 이동 → 기존 import shim → generic 경로의 원소 하드코딩 점검 → Fe-O 회귀 |
 | GEN-5 molecule/bond | open | generic per-pair cutoff·PBC pairing → O2 preset 연결 → 기존 결과 및 A–B 합성 분자 검증 |
 | GEN-6 HPC site profiles | deferred | 사이트 설정과 run logic 분리 → 기존 NUS 출력 보존 → local/Slurm 문법·실패 주입; 실제 HPC는 별도 사용자 승인 후 |
@@ -271,15 +294,41 @@ native·NumPy 전체 검증). 작업 중 발견한 REV-ANALYSIS-6(P3)은 기록�
 다음 후보: REV-IO-7(prep이 만든 ACE input을 post가 읽지 못함, P2), GEN-4(domain 분리),
 UI-2(Rust TUI). 무결성 우선 원칙에 따라 REV-IO-7을 먼저 진행한다.
 
-1. UI-1 설계 노트에서 실행 파일·crate·배포 대상·중단 소유권을 확정한다.
-2. 승인된 구조 안에서 가장 작은 capability/thermo.summary Rust client를 구현한다.
-3. 직접 Python 대조와 환경/실패/취소 검증 후 별도 PR로 마무리한다.
-4. 이후 UI-2를 진행한다. AGENT-2는 필요 우선순위에 따라 독립 항목으로 진행 가능하다.
+**완료(2026-11-01~02):** REV-PREP-7(#52, P1: prep ACE input의 LAMMPS 문법 오류)과
+REV-IO-7(#53)을 고쳤다. 전체 코드 감사 AUDIT-20261101(#51)에서 찾은 P2 항목
+REV-EXEC-1(#54)·REV-ANALYSIS-7(#55)·VERIFY-REF-2(#56)·REV-ANALYSIS-9(#57)·
+REV-EXEC-2(#58)·REV-ANALYSIS-8(#59)·REV-UI-3(#60)·REV-EXEC-3(#61)도 모두 머지했다.
+마지막 기록된 full verifier(REV-EXEC-3): native 691/0/0, NumPy 682/0/9.
+
+**현재 상태(2026-11-02):** 열린 PR 없음, 원격·로컬 브랜치는 `main`만 남김.
+다음 순서는 사용자가 정한다. 후보:
+
+1. **무결성 P2(승인 불필요):** REV-IO-2/3/5(입력 변경 감지·행 폭 검증·큰 step 정밀도),
+   REV-REF-2/3/4(참조 결정 shell·대칭·셀 검증), REV-PLOT-1/2(RDF 참조 쌍·라벨),
+   REV-UI-1, REV-VERIFY-1/3, REV-OPS-1. 무결성 우선 원칙상 기본 추천.
+2. **무결성 P2(사람 승인 필요, AGENTS.md §8):** REV-PREP-2/3/5. 생성 input·구조·job script
+   변경이 따르므로 승인 후 진행한다.
+3. **GEN-4:** Fe/O 전용 분석을 domain pack으로 분리. 범용화의 다음 단계.
+4. **UI-2(Rust TUI):** 8절 절차. UI-1의 client와 중단·정리 계약을 재사용한다.
+5. **AGENT-2(MCP):** 9절 절차. TUI와 독립적으로 진행할 수 있다.
+6. **호스트 검증(AGENT-1 잔여):** Claude Code·Codex 실호스트 발견·로딩·실행 기록.
+
+각 항목은 3절 절차대로 한 브랜치·한 PR로 진행한다. 실제 HPC 실행(GEN-6 포함)은
+사용자 일정에 따라 별도로 재개한다.
 
 고정 일정이나 구현되지 않은 기능의 완료 날짜는 추정하지 않는다. 각 단계가 위 완료
 기준을 충족할 때만 상태를 갱신하며, 다음 단계 시작 전에 미검증 항목을 다시 확인한다.
 
 ## 문서 정비 기록
+
+2026-11-02: 사용자 요청으로 원격 변경을 모두 받아오고(`a974563` → `196f597`, PR #33–#61),
+머지 완료·대체된 원격 브랜치 61개와 로컬 브랜치 10개를 삭제했다. `fix/hpc-1-job-script-safety`는
+닫힌 PR #5의 브랜치로 작업이 PR #9로 반영됐다. 이 문서의 UI-1 미구현·이름 미정 문구,
+PR #26/#27 open 문구, GEN-2 잔여 작업, skip 수(6 → 9), 다음 실행 순서를 실제 상태로
+고쳤다. BACKLOG의 "done (this PR)" 10건에 PR 번호를 넣고 2026-11-02 checkpoint를 추가했다.
+신규 113개 non-merge 커밋은 모두 `Kim Donghwan <e1075536@u.nus.edu>` 명의다. 코드·테스트는
+바꾸지 않았다. 인용한 검증 수치는 각 개발로그의 기록이며, 이번에 재실행하지 않았다
+(`/tmp/opencode` 증거 디렉터리가 이 머신에 없음).
 
 2026-10-31: 사용자 요청으로 개발 현황·로드맵·로그를 대조했다. PR #26/#27은
 `84ee8d1` 기준으로만 검증된 open 상태이며 현재 main 및 서로 간에 CHANGELOG/tests/run.py
