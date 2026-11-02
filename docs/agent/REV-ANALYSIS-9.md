@@ -1,6 +1,6 @@
 # REV-ANALYSIS-9: legacy `z_pbc` may not override a typed Box's PBC in RDF
 
-Status: fixed; verification below.
+Status: fixed and verified at `0ba91a2` (see Verification).
 Branch: `fix/rev-analysis-9-rdf-box-pbc` from main `124c3b4`.
 
 **Decision (maintainer, 2026-11-01):** raise on disagreement.
@@ -45,3 +45,13 @@ Branch: `fix/rev-analysis-9-rdf-box-pbc` from main `124c3b4`.
 **Related modules.** The parent ran 17 RDF/geometry/session modules with `LKPR_SLOW=1`. Before the test updates, the 3 tests above were the only failures. After the updates, all pass.
 
 **Reference checks.** `verify_refs.py`: all 6 checks PASS. The fixture and golden calls use `z_pbc=True` on `pp pp pp` data, which agrees.
+
+## Verification (measured, `0ba91a2`, after rebase onto main `08b4ea3`)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 669 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/an9-native/20261102T124259-0ba91a2-full` |
+| Forced-NumPy full verifier | 660 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/an9-numpy/20261102T124259-0ba91a2-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/an9-refs/` |
+
+The 9 skips in the forced-NumPy run are the named native-parity tests.
