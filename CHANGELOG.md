@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### RDF reports where its count is complete (REV-ANALYSIS-7)
+
+- `compute_rdf` results gain `r_max` and `r_complete`. `r_complete` is half the
+  shortest periodic lattice vector; beyond it the nearest-image count misses
+  pairs and g(r) is too low (measured 15–38 % low in a 10 Å cube at 6 Å). A
+  cutoff above it now warns; RDF plots shade that range and CSV/LaTeX exports
+  add an `r_complete` header line. g values are unchanged.
+- New `lammpkeeper.core.geometry.unique_image_radius(cell)`.
+
 ### Backend error codes cannot fake a cleanup failure (REV-EXEC-1)
 
 - `lkpr run` reported a cleanup failure, and dropped the backend response,

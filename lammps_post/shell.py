@@ -3717,14 +3717,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def _export_header_lines(data):
         """Provenance lines written as comments above exported tables.
 
-        Currently only the RDF frame window (which frames were averaged); other
-        results export without a header, exactly as before.
+        RDF results carry their frame window (which frames were averaged) and,
+        only when r_max exceeds it, the nearest-image limit r_complete
+        (REV-ANALYSIS-7). Other results export without a header, as before.
         """
         window = data.get('frame_window') if isinstance(data, dict) else None
         if not window:
             return []
-        from lammps_post.analysis import describe_frame_window
-        return [f'frame_window: {describe_frame_window(window)}']
+        from lammps_post.analysis import describe_frame_window, rdf_incomplete_from
+        lines = [f'frame_window: {describe_frame_window(window)}']
+        limit = rdf_incomplete_from(data)
+        if limit is not None:
+            lines.append(f'r_complete: {limit:g} Å; g(r) beyond counts nearest images only '
+                         '(undercounted)')
+        return lines
 
     def _export_latex(self, what, fname):
         """Write exact-key cached 1-D arrays as a four-decimal pandas LaTeX table.

@@ -512,8 +512,10 @@ def test_numeric_apis_keep_existing_return_keys_without_shell_metadata():
     assert set(analyze_msd(_msd_frames(), COL, species_type=1)) == {'time', 'msd'}
     # frame_window is numeric provenance (which frames were averaged), not
     # shell display metadata; display_label still must not appear here.
+    # r_max/r_complete (REV-ANALYSIS-7, maintainer-approved 2026-11-01) are
+    # numeric provenance too: the cutoff and the range where g is complete.
     assert set(compute_rdf(_rdf_frames(), COL, type_a=1, type_b=3)) == {
-        'r', 'g', 'label', 'n_frames', 'frame_window'}
+        'r', 'g', 'label', 'n_frames', 'frame_window', 'r_max', 'r_complete'}
 
 
 def test_explicit_groups_cannot_borrow_unrelated_preset_display_names():
