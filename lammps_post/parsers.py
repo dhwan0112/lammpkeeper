@@ -2060,7 +2060,11 @@ def parse_input(filepath):
                     substyle = args.pop(0)
                     if args and args[0].isdigit():
                         substyle += ':' + args.pop(0)
-                    if not any(name in substyle for name in ('pace', 'ace', 'reax', 'hdnnp', 'n2p2')):
+                    # Only sub-styles whose exact LAMMPS name is in the ADR-0005
+                    # alias table carry a species map; a substring such as
+                    # 'ace' in 'mypace' is not evidence (REV-IO-9). ':N' is a
+                    # sub-style instance number, not part of the name.
+                    if _PAIR_STYLE_ALIASES.get(substyle.split(':')[0]) is None:
                         # Numeric pair coefficients do not encode species maps.
                         continue
                 if not args:
@@ -2072,7 +2076,10 @@ def parse_input(filepath):
                 else:
                     # Ordinary numeric pair coefficients carry no species map.
                     continue
-                if any(name in substyle for name in ('hdnnp', 'n2p2')):
+                # hdnnp reads its weights from the pair_style directory, so its
+                # pair_coeff lists elements only; every other style is
+                # `file elements` (exact name, REV-IO-9).
+                if _PAIR_STYLE_ALIASES.get(substyle.split(':')[0]) == 'hdnnp':
                     potential_file, elements = None, args
                 else:
                     potential_file, elements = args[0], args[1:]
