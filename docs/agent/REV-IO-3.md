@@ -56,3 +56,13 @@ A Rust-side width check would remove that cost but changes the native API.
 ## Not changed
 Rust parser, BACKLOG, CHANGELOG, `tests/run.py`, fixtures, goldens, data/log/input
 parsers. Parent must register `test_row_width` in `tests/run.py`.
+
+## Verification (measured, `799a6bf`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 722 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io3-native/20261102T204720-799a6bf-full` |
+| Forced-NumPy full verifier | 711 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/io3-numpy/20261102T204720-799a6bf-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/io3-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
