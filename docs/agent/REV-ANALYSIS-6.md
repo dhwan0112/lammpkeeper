@@ -1,6 +1,6 @@
 # REV-ANALYSIS-6: RDF candidate wrap at extreme image counts
 
-Status: fixed; verification below.
+Status: fixed and verified at `2e49191` (see Verification).
 
 ## Problem (measured on unmodified code, base `a6d21b0`)
 Atom A at x=0, atom B at x=1e16+2, box x in [0.5, 10.5], `r_max` 4,
@@ -57,3 +57,13 @@ Full suite (`LKPR_SLOW=1 python tests/run.py`, isolated HOME, new module not yet
 ## Not changed
 `BACKLOG.md`, `CHANGELOG.md`, `tests/run.py` registration, goldens, fixtures,
 triclinic path (already limited by core.geometry), nonperiodic axes (no limit).
+
+## Verification (measured, `2e49191`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 734 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/an6-native/20261102T221715-2e49191-full` |
+| Forced-NumPy full verifier | 723 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/an6-numpy/20261102T221715-2e49191-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/an6-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
