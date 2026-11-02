@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### pair_coeff species maps use exact style names (REV-IO-9)
+
+- In hybrid inputs, only sub-styles with an exact LAMMPS name from the
+  ADR-0005 table (pace, pace/kk, reaxff, reax/c, hdnnp, ...) provide a species
+  map. Names that only contain such a word (`ace`, `n2p2`, `mypace`) no
+  longer do. Real LAMMPS inputs and prep inputs map as before.
+
 ### Thermo steps beyond 2^53 are rejected (REV-IO-5)
 
 - `parse_log` rejects a thermo Step that is not a whole number below 2^53 in
