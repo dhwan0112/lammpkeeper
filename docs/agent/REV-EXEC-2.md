@@ -63,3 +63,16 @@ Env: `HOME=$(mktemp -d /tmp/opencode/ex2-home.XXXXXX) TMPDIR=/tmp/opencode LKPR_
 - Errors other than the four listed types in the wait loop are not caught
   (unchanged).
 - `LKPR_SLOW=1` goldens not run. `BACKLOG.md` and `CHANGELOG.md` not edited.
+
+## Parent verification (measured, `7707170`)
+
+- **Fail → pass:** the parent re-ran the new test against `jobs.py` from main and it failed. The snapshot showed `state: failed`, `request_id: None` and `error.code: invalid_request`. With the fix the test passed.
+- **Codes:** the parent confirmed that `cancelled` (owner cancellation) and `transport_error` already exist in `jobs.py`. No new code was added.
+- **Full `/verify-lkpr`:**
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native | 670 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/ex2-native/20261102T125155-7707170-full` |
+| Forced NumPy | 661 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/ex2-numpy/20261102T125155-7707170-full` |
+
+The 9 skips in the forced-NumPy run are the named native-parity tests.
