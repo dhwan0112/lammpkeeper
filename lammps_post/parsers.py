@@ -563,35 +563,63 @@ class DumpReader:
         per_atom = len(self.columns) * self.dtype.itemsize + (8 if self.has_elements else 0)
         return natoms * per_atom
 
+    def _check_stream_source(self):
+        """Raise if the source changed (or vanished) while a streaming pass is active."""
+        try:
+            changed = self._signature() != self._source_signature
+        except OSError:
+            changed = True
+        if changed:
+            raise ValueError(f"{self.filepath}: dump source changed during reading; "
+                             "create a new DumpReader/index/cache")
+
     # Reopen for each pass, apply stride to source-frame positions, and stop after
     # the requested number of yielded frames. None/0 means unlimited, not empty.
     # Skipped atom rows are advanced without numeric conversion or payload checks.
     def __iter__(self):
         """Reopen and source-check at entry, then stream selected frames in file order."""
-        # Unlike indexed reads, this pass has no post-read stat check. The source
-        # must remain unchanged while the iterator is active; it is not a tailer.
+        # One os.stat per frame boundary guards the pass (append, truncate,
+        # replace, touch). The check runs after the block is read and before it
+        # is parsed, because parsing publishes type IDs/labels. It is not a lock:
+        # a same-size, same-mtime/ctime rewrite is not detected. Frames already
+        # yielded are unaffected. Not a tailer: an appended frame is an error.
         self._check_source()
         n_seen = 0
         n_yielded = 0
         with open(self.filepath, 'r') as f:
             while True:
-                line = f.readline()
-                if not line:
-                    return
-                if not line.strip():
-                    continue
-                if line.strip() != 'ITEM: TIMESTEP':
-                    raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: {line.strip()}")
-                timestep, natoms, box, _, cell = self._read_header(f)
+                try:
+                    line = f.readline()
+                    if not line:
+                        # A truncation at a frame boundary would otherwise end the
+                        # pass silently and look like a complete trajectory.
+                        self._check_stream_source()
+                        return
+                    if not line.strip():
+                        continue
+                    if line.strip() != 'ITEM: TIMESTEP':
+                        raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: {line.strip()}")
+                    timestep, natoms, box, _, cell = self._read_header(f)
 
-                n_seen += 1
-                if (n_seen - 1) % self.stride:
-                    for _ in range(natoms):
-                        f.readline()
-                    continue
+                    n_seen += 1
+                    if (n_seen - 1) % self.stride:
+                        for _ in range(natoms):
+                            f.readline()
+                        self._check_stream_source()
+                        continue
 
-                block = ''.join([f.readline() for _ in range(natoms)]).encode()
-                atoms, elements = self._parse_block(block, natoms, timestep)
+                    block = ''.join([f.readline() for _ in range(natoms)]).encode()
+                    self._check_stream_source()
+                    atoms, elements = self._parse_block(block, natoms, timestep)
+                except ValueError as exc:
+                    # A mutated file often fails parsing first; report the cause.
+                    if 'source changed' in str(exc):
+                        raise
+                    try:
+                        self._check_stream_source()
+                    except ValueError as changed:
+                        raise changed from exc
+                    raise
                 frame = {
                     'timestep': timestep,
                     'natoms': natoms,

@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Dump changes during reading are detected (REV-IO-2)
+
+- A dump file that is appended to, truncated, replaced or deleted while it is
+  being read now stops the read with an error, before any changed frame or new
+  atom type is used. Before, an appended frame could add a new atom type
+  silently. Unchanged files read exactly as before.
+
 ### CLI flag and display-setting failures are reported (REV-UI-4)
 
 - `lammps_post --dpi/--theme/--save-format` with a bad value now exits 1 with
