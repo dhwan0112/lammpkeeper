@@ -121,6 +121,8 @@ ordered-pair/global-density convention without nonperiodic shell corrections.
 Choose a physically suitable cutoff; a mathematically correct histogram does
 not establish complete spherical sampling in a small or open cell. Triclinic
 initial support uses complete NumPy pair search, not orthogonal cKDTree boxsize.
+(Amended by REV-ANALYSIS-9, 2026-11-01: a legacy `z_pbc` that disagrees with
+resolved Box flags now raises; see `docs/agent/REV-ANALYSIS-9.md`.)
 Orthogonal RDF still honors its legacy `z_pbc` switch when `pbc=None`, including
 typed frames; explicit three-axis masks must agree with resolved Box metadata.
 
