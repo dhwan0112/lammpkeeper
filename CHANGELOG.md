@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Verifier stops when temporary directories cannot be created (REV-VERIFY-1)
+
+- `verify-lkpr` (`verify.sh`): if a temporary HOME or work directory cannot be
+  created, the verifier now stops with `FAIL setup` and exit 2 before any work.
+  Before, a failed `mktemp` left `HOME` empty and paths such as `$WORK/post.commands`
+  resolved to `/`.
+
 ### Clearer execution diagnostics (REV-EXEC-3)
 
 - `lammpkeeper exec`: when the log changes while a parse fails, the
