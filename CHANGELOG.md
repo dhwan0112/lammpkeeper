@@ -12,6 +12,16 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Analysis parameters are validated (REV-ANALYSIS-8)
+
+- Charge evolution, oxidation rate, OAR, penetration (summary, trend and
+  profile), O2 detection, spin evolution, MSD and the charge-z profile now
+  reject invalid parameters with a ValueError naming the parameter, before
+  reading any frame: nonfinite or non-positive `dt_fs`, nonfinite surface
+  heights or charge thresholds, reversed or nonfinite `z_range`, and
+  non-positive or non-integer `z_bins`/`window`. Before, several of these
+  returned zeros or NaN without an error. Valid results are unchanged.
+
 ### `lkpr run` cancels its job when it fails after start (REV-EXEC-2)
 
 - An error inside `lkpr run` after the job had started (for example a failing
