@@ -1,6 +1,6 @@
 # REV-VERIFY-2 — verifier evidence directory collision
 
-Status: fixed; verification below.
+Status: fixed and verified at `3404ca0` (see Verification).
 
 ## Problem
 
@@ -78,3 +78,13 @@ Other checks:
 - **Reproduced the `mkdir` finding.** `mkdir (uutils coreutils) 0.8.0` on this host reported success to two of three concurrent callers in 2 of 30 races. That is why the script claims names with a noclobber file and does not use `mkdir` alone.
 - **Re-ran fail → pass on `test_audit_verifier`:** the original script gives 2 FAIL and 11 PASS; the fixed script gives 13 PASS.
 - **Related risk, not changed.** The generated HPC job script (`lammps_pre/templates.py`, scratch and destination setup) also relies on exclusive `mkdir`. That is safe with GNU coreutils, the usual tool on HPC nodes, but not with a uutils `mkdir` like this host's. Changing generated job scripts needs maintainer approval (AGENTS.md §8), so this is recorded here and in BACKLOG (REV-PREP-8), not fixed.
+
+## Verification (measured, `3404ca0`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 751 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/vf2-native/20261102T224103-3404ca0-full` |
+| Forced-NumPy full verifier | 740 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/vf2-numpy/20261102T224103-3404ca0-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/vf2-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
