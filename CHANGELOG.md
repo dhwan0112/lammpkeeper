@@ -12,6 +12,16 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Clearer execution diagnostics (REV-EXEC-3)
+
+- `lammpkeeper exec`: when the log changes while a parse fails, the
+  `input_changed` message now also names the original error; a failed run no
+  longer reports a validated `unit_source`; above 64 warnings the last entry
+  states how many were omitted instead of replacing a real warning.
+- `lkpr run` reads a finished backend's output to the end (up to 2 s), so a
+  large valid response is no longer cut off and misreported as invalid JSON.
+  A stdout still held open by an escaped process fails with a message saying so.
+
 ### Failed exports and pressure plots fail the command (REV-UI-3)
 
 - `export csv|latex` with no cached data, no pandas, no exportable columns, an

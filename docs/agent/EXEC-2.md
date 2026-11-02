@@ -106,7 +106,9 @@ Each child stdout and stderr is limited to 1 MiB; either overflow fails transpor
 Retain the first 1024 stderr characters per phase. Error messages are also bounded
 to 1024 characters. At most four lifecycle transitions are retained without
 dropping events. Cleanup uses 0.15 s TERM grace, 1 s reap wait and 0.15 s final
-pipe drain, with 0.02 s polling granularity.
+pipe drain, with 0.02 s polling granularity. (Since REV-EXEC-3: stdout is read
+to EOF for up to 2 s after exit, and a stdout still open then fails the job
+with an accurate message; stderr keeps the 0.15 s drain.)
 Require strict UTF-8 and exactly one JSON response document, rejecting duplicates,
 nonfinite numbers, foreign request IDs/operations and incompatible schemas.
 

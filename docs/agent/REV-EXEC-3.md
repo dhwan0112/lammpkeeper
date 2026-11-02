@@ -1,5 +1,14 @@
 # REV-EXEC-3: execution diagnostics
 
+Status: fixed; verification below.
+Branch: `fix/rev-exec-3-diagnostics` (rebased onto main `5d5fe4a`).
+
+**Decisions (parent, 2026-11-02):**
+- **A descendant still holding stdout open DRAIN_WAIT (2 s) after the child exits fails the job** with `invalid_response`, even if the bytes already read form a complete response.
+  - Such a process escaped the job's process group, so cleanup cannot confirm it. EXEC-2 requires unconfirmed cleanup to be visible, and the Rust CLI (UI-1) already reports a held-open stdout as a failure.
+  - Before this change the job could succeed while the orphan kept running.
+- **Normal jobs do not wait.** They reach EOF at once; the 2 s bound applies only in that leak case.
+
 Env for all commands: `HOME=$(mktemp -d /tmp/opencode/ex3-home.XXXXXX) TMPDIR=/tmp/opencode LKPR_NO_HISTORY=1 PYTHONDONTWRITEBYTECODE=1`, chem python.
 
 ## (a) `summarize_thermo_file`: original error and `unit_source`
