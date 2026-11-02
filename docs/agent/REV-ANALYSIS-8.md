@@ -92,3 +92,13 @@ Functions and parameters checked:
 `o_type` selections (already checked by `_type_ids`), `species_type`, `pbc`,
 `surface_percentile` (already checked), `analyze_structure`'s compatibility
 arguments.
+
+## Verification (measured, `0ad491e`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 681 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/an8-native/20261102T125743-0ad491e-full` |
+| Forced-NumPy full verifier | 672 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/an8-numpy/20261102T125743-0ad491e-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/an8-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
