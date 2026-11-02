@@ -1,6 +1,6 @@
 # REV-PREP-4 — conventional Masses sections in the prep data inspector
 
-Status: fixed; verification below.
+Status: fixed and verified at `9cc0f79` (see Verification).
 Baseline: `main` `a6d21b0`.
 Branch: `fix/rev-prep-4-masses-inspect`.
 Source: F-PREP-4 (P3) in `docs/agent/REVIEW-20261028.md`.
@@ -98,3 +98,13 @@ was silently skipped. Full `tests/run.py` was not run.
   (kept as before). LAMMPS treats such lines as blank. The prep writer does not
   emit them.
 - The inspector still reads only header metadata; it is not a data reader.
+
+## Verification (measured, `9cc0f79`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 746 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/pp4-native/20261102T222908-9cc0f79-full` |
+| Forced-NumPy full verifier | 735 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/pp4-numpy/20261102T222908-9cc0f79-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/pp4-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
