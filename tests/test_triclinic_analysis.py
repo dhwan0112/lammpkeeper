@@ -322,7 +322,9 @@ def test_typed_cell_triclinic_marker_is_a_boolean_geometry_claim():
         for marker in (skew, np.bool_(skew)):
             matching = dict(fr, triclinic=marker)
             assert _typed_cell(matching, 'test') is fr['cell']
-            compute_rdf([matching], COL, 4, 9)
+            # Explicit flags matching the Box: since REV-ANALYSIS-9 the legacy
+            # z_pbc=False default may not override resolved orthogonal flags.
+            compute_rdf([matching], COL, 4, 9, pbc=(True, True, True))
             analyze_msd([matching, matching], COL, pbc=(True, True, True))
         conflicting = dict(fr, triclinic=not skew)
         _reject(lambda: _typed_cell(conflicting, 'test'), 'disagree')
@@ -381,8 +383,14 @@ def test_legacy_tilt_rejection_and_zero_tilt_orthogonal_parity():
                                           pbc=(True, True, True)), 'PBC')
 
 
-def test_typed_orthogonal_rdf_keeps_legacy_z_pbc_switch():
-    """Reader opt-in must not erase the old explicit orthogonal z-only override."""
+def test_typed_orthogonal_rdf_rejects_disagreeing_legacy_z_pbc():
+    """The legacy z_pbc switch may not override resolved orthogonal Box flags.
+
+    Before REV-ANALYSIS-9 this test pinned the opposite contract (GEN-3: z_pbc
+    stays authoritative for typed orthogonal frames). The maintainer approved
+    raising on disagreement on 2026-11-01, as MSD and pair detection do.
+    Agreement still reproduces the legacy bare-bounds result exactly.
+    """
     _util.require_numpy()
     import numpy as np
     from lammps_post.analysis import compute_rdf
@@ -390,13 +398,11 @@ def test_typed_orthogonal_rdf_keeps_legacy_z_pbc_switch():
                    lengths=(10, 10, 10), tilt=(0, 0, 0), pbc=(True, True, True))
     legacy = {key: value for key, value in fr.items() if key not in ('cell', 'tilt')}
     kwargs = dict(type_a=4, type_b=9, r_max=3., n_bins=6)
-    curves = []
-    for flag in (False, True):
-        actual = compute_rdf([fr], COL, z_pbc=flag, **kwargs)['g']
-        expected = compute_rdf([legacy], COL, z_pbc=flag, **kwargs)['g']
-        np.testing.assert_array_equal(actual, expected)
-        curves.append(actual)
-    assert not np.array_equal(*curves)
+    actual = compute_rdf([fr], COL, z_pbc=True, **kwargs)['g']
+    np.testing.assert_array_equal(actual, compute_rdf([legacy], COL, z_pbc=True, **kwargs)['g'])
+    # Without a Box, the z setting still matters (the pair is close only through z).
+    assert not np.array_equal(actual, compute_rdf([legacy], COL, z_pbc=False, **kwargs)['g'])
+    _reject(lambda: compute_rdf([fr], COL, z_pbc=False, **kwargs), 'z_pbc=False')
     _reject(lambda: compute_rdf([fr], COL, pbc=(True, True, False), **kwargs), 'PBC')
 
 
