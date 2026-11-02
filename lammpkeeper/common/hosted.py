@@ -8,7 +8,9 @@ session. Run standalone (`lkpr prep`, `python -m lammps_post`), the switch
 commands only explain that they need the unified session.
 """
 
+import atexit
 import os
+import sys
 
 from lammpkeeper.common.display import C
 
@@ -20,6 +22,42 @@ except ImportError:
 # Maximum history lines kept per shell (OPS-1). Without a cap the history
 # files grow without bound — they reached tens of millions of lines.
 HISTORY_LENGTH = 2000
+
+
+# Standalone shell that currently owns the process-global readline buffer.
+_buffer_owner = None
+
+
+def _snapshot_buffer():
+    """Copy the global readline buffer (oldest first)."""
+    return [readline.get_history_item(i + 1)
+            for i in range(readline.get_current_history_length())]
+
+
+def _replace_buffer(entries):
+    """Replace the global readline buffer with `entries`."""
+    readline.clear_history()
+    for line in entries:
+        readline.add_history(line)
+
+
+def load_history_bounded(path, limit=HISTORY_LENGTH):
+    """Load `path` into a cleared readline buffer, keeping only the newest `limit`.
+
+    A missing or unreadable file yields an empty buffer. Trimming happens on
+    entries after readline has decoded them, so escaped multi-line entries are
+    never split. The file is still read once in full by readline; only the
+    resident buffer (and thus later writes) is bounded.
+    """
+    readline.clear_history()
+    readline.set_history_length(limit)
+    try:
+        readline.read_history_file(path)
+    except (FileNotFoundError, OSError):
+        return
+    if readline.get_current_history_length() > limit:
+        # Keep the newest entries: old ones are the least useful to recall.
+        _replace_buffer(_snapshot_buffer()[-limit:])
 
 
 def history_enabled():
@@ -38,44 +76,73 @@ class HostedShellMixin:
     histfile = None         # readline history file of this shell
     _host = None            # LkprShell when hosted
     _next = None            # what the host should do after cmdloop returns
+    _atexit_callback = None  # per-instance exit hook, registered at most once
+    _detached_entries = None  # this shell's history after another shell took the buffer
 
     def _setup_history(self, histfile):
         """Replace the process-global history; standalone shells save it at exit.
 
-        The configured length bounds file writes, not the number of entries read
-        into memory. A host takes over buffer swapping after setting ``_host``.
+        The loaded buffer is bounded to the history limit (newest kept). A host
+        takes over buffer swapping after setting ``_host``. The readline buffer
+        is process-global, so a previous standalone owner's entries are parked
+        on that instance before this shell clears the buffer.
         """
+        global _buffer_owner
         self.histfile = os.path.expanduser(histfile)
         if readline is None or not history_enabled():
             return
         readline.set_completer_delims(' \t\n')
-        readline.set_history_length(HISTORY_LENGTH)
         # Start from this file alone, as lkpr's _load_history does. Without the
         # clear, every shell created in one process (the test suite makes many)
         # re-appends the file to the shared readline history, and the exit
         # handler writes the sum back, so the file multiplies on every run.
-        readline.clear_history()
+        prev = _buffer_owner
+        if prev is not None and prev is not self:
+            prev._detached_entries = _snapshot_buffer()
+        _buffer_owner = self
+        self._detached_entries = None
+        load_history_bounded(self.histfile)
+        if self._atexit_callback is None:
+            self._atexit_callback = self._run_exit_save
+            atexit.register(self._atexit_callback)
+
+    def _run_exit_save(self):
+        """Exit hook: save this shell's history; report, never raise, on failure.
+
+        atexit already runs later callbacks after an exception, but it prints a
+        traceback per failure; a visible one-line warning keeps other shells'
+        saves unaffected and the failure not silent.
+        """
         try:
-            readline.read_history_file(self.histfile)
-        except (FileNotFoundError, OSError):
-            pass
-        import atexit
-        atexit.register(self._save_history_if_standalone)
+            self._save_history_if_standalone()
+        except Exception as exc:  # noqa: BLE001 - must not block other callbacks
+            print(f"lkpr: could not save history {self.histfile}: {exc!r}",
+                  file=sys.stderr)
 
     def _save_history_if_standalone(self):
-        """Persist the current buffer for a standalone shell, honoring opt-out.
+        """Persist this shell's own history for a standalone shell, honoring opt-out.
 
         Hosted sessions swap the process-global readline buffer themselves;
-        writing it from an atexit child callback would mix the shells' commands.
-        Multiple standalone instances do not have independent in-memory buffers.
+        writing it from an atexit callback would mix the shells' commands. The
+        buffer owner writes the live buffer; any other instance writes the
+        entries parked when it lost the buffer, so files never mix commands.
         """
         # Hosted shells share readline with lkpr, which swaps history per shell.
         if self._host is None and readline is not None and history_enabled():
+            live = None
             try:
                 readline.set_history_length(HISTORY_LENGTH)
+                if _buffer_owner is not self:
+                    if self._detached_entries is None:
+                        return
+                    live = _snapshot_buffer()
+                    _replace_buffer(self._detached_entries)
                 readline.write_history_file(self.histfile)
             except OSError:
                 pass
+            finally:
+                if live is not None:
+                    _replace_buffer(live)
 
     def _leave(self, target):
         """Request host navigation without clearing the current shell's state.
