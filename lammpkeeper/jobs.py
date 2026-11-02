@@ -42,6 +42,10 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
 MAX_STREAM_BYTES = 1024 * 1024
 TERMINATE_GRACE = 0.15
+# Bound on reading a reaped child's remaining output. Reading normally ends
+# at EOF much sooner; the bound only guards against a descendant (for example
+# one that left the process group) holding an inherited pipe open.
+DRAIN_WAIT = 2.0
 KILL_WAIT = 1.0
 POLL_INTERVAL = 0.02
 TERMINAL_STATES = frozenset(('succeeded', 'failed', 'cancelled', 'timed_out'))
@@ -468,7 +472,12 @@ class LocalJob:
             self._data['cleanup'] = {'status': 'complete', 'reaped': True, 'error': None}
 
     def _child(self, phase, args, raw=None):
-        """Concurrently pump three nonblocking pipes with per-stream byte bounds."""
+        """Concurrently pump three nonblocking pipes with per-stream byte bounds.
+
+        After the child is reaped, stdout is read to EOF for at most DRAIN_WAIT.
+        If stdout is still open then, the job fails with invalid_response and a
+        message saying output may be incomplete, not with a JSON parse error.
+        """
         self._interrupt()
         selector = selectors.DefaultSelector()
         outputs = {'stdout': bytearray(), 'stderr': bytearray()}
@@ -477,6 +486,8 @@ class LocalJob:
         cleaned = False
         cleanup_attempted = False
         drain_deadline = None
+        stderr_deadline = None
+        stdout_open = False
         with self._lock:
             previous_cleanup = self._data['cleanup']
             self._data['cleanup'] = {'status': 'pending', 'reaped': False, 'error': None}
@@ -527,12 +538,24 @@ class LocalJob:
                     cleanup_attempted = True
                     self._cleanup_child(process)
                     cleaned = True
-                    # Bounded drain after exit so a grandchild holding the pipe
-                    # cannot hang the job. Output still unread when it expires
-                    # is lost and surfaces as invalid backend JSON (REV-EXEC-3).
-                    drain_deadline = time.monotonic() + TERMINATE_GRACE
-                if cleaned and (not selector.get_map() or time.monotonic() >= drain_deadline):
-                    break
+                    # Read to EOF after exit (a complete response may still sit in
+                    # the pipe), bounded by DRAIN_WAIT so a descendant holding the
+                    # pipe cannot hang the job. The overall deadline still applies
+                    # through _interrupt() on every pass.
+                    drain_deadline = time.monotonic() + DRAIN_WAIT
+                if cleaned:
+                    open_names = {key.data for key in selector.get_map().values()}
+                    if 'stdout' not in open_names and stderr_deadline is None:
+                        # The protocol stream is complete; wait only briefly for
+                        # the remaining diagnostics stream.
+                        stderr_deadline = time.monotonic() + TERMINATE_GRACE
+                    limit = drain_deadline if stderr_deadline is None else min(drain_deadline, stderr_deadline)
+                    if not (open_names & {'stdout', 'stderr'}) or time.monotonic() >= limit:
+                        # Unread stderr only shortens diagnostics; stdout still
+                        # open means the protocol output cannot be confirmed
+                        # complete.
+                        stdout_open = 'stdout' in open_names
+                        break
         finally:
             try:
                 if process is not None and not cleanup_attempted:
@@ -556,6 +579,12 @@ class LocalJob:
         self._interrupt()
         if process.returncode < 0:
             raise _JobError('child_crash', f'{phase} child terminated by signal {-process.returncode}')
+        if stdout_open:
+            # Distinct from a JSON parse error: the bytes read so far may be
+            # complete or not, but EOF was never seen.
+            raise _JobError('invalid_response',
+                            f'{phase} stdout still open {DRAIN_WAIT:g}s after child exit; '
+                            'output may be incomplete (a descendant may hold the pipe)')
         return bytes(outputs['stdout']), process.returncode
 
     def _supervise(self):
