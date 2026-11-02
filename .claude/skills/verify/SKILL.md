@@ -12,8 +12,9 @@ explicit tolerances. A hash match is not a proof here; a value inside tolerance
 is, and what it proves depends on the key's `kind` (see Evidence).
 
 Read `features/README.md` first, then the feature file for what you are verifying.
-Reference values live in `references/<check-id>.json`; a check runs only when its
-file exists. Every reference key has a `kind`: `analytic`, `external`, `fixture`
+Reference values live in `references/<check-id>.json`. Every compute function
+needs its file: a missing file is an ERROR (exit 1), unless the id is listed with
+a reason in `MISSING_REFERENCE_ALLOWED` in the script (it is empty). Every reference key has a `kind`: `analytic`, `external`, `fixture`
 or `snapshot`. Features that still lack reference values are listed in
 `features/README.md` under "Pending references" and are not run.
 
@@ -29,7 +30,8 @@ HOME="$LKPR_HOME" python3 .claude/skills/verify/scripts/verify_refs.py --doctor
 ```
 
 Ready means the doctor prints `ok numpy`, `ok lammpkeeper 1.2.0 from <this repo>`,
-`fixture: present` and a non-empty `reference files` list. Optional modules
+`fixture: present`, a `reference files` list and an empty
+`compute functions with MISSING reference (ERROR)` list. Optional modules
 (scipy, ase, matplotlib, pandas, MDAnalysis) may be MISSING; that only limits
 what can be verified, and the report must say so.
 
@@ -40,8 +42,9 @@ HOME="$LKPR_HOME" python3 .claude/skills/verify/scripts/verify_refs.py --doctor
 ```
 
 Prints repo path, git branch and short SHA, dirty-file count, Python and module
-availability, the fixture path, the active reference files and the compute
-functions that are inactive because their reference file does not exist yet.
+availability, the fixture path, the reference files, the compute functions whose
+reference file is missing (ERROR; `--doctor` exits 2) and any ids on the explicit
+`MISSING_REFERENCE_ALLOWED` list. `--doctor` ignores `--only`.
 Run this first whenever a result looks off. A `MISSING lammpkeeper` line means
 the script is not importing this checkout; fix the working directory before
 trusting any number.
@@ -129,7 +132,12 @@ Evidence under `LKPR_VERIFY_DIR` survives. Do not delete it.
   `reference`, `tolerance` (per key: `abs` and/or `rel`), `kind` (per key:
   `analytic | external | fixture | snapshot`), `source`, `status` and, when any
   key is a snapshot, `baseline_commit`. A malformed file is reported as ERROR,
-  never silently skipped; `--list` prints kinds and schema errors.
+  never silently skipped or crashed on: unreadable JSON, a non-object file, a
+  missing or empty `reference`, non-object `reference`/`kind`/`tolerance`,
+  tolerance keys that match no reference key, unknown tolerance fields, and a
+  kind or snapshot `baseline_commit` problem. A key that the compute function
+  measures but the reference does not list is also an ERROR. `--list` prints
+  kinds and schema errors and exits 1 if any file is bad.
 - `references/*.json`: the maintained reference values. `source` (and the
   optional per-key `sources`) names where each number comes from: the analytic
   formula with its constants, the literature or crystallographic fact, the data

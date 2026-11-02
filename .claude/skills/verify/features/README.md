@@ -11,7 +11,8 @@ recipe. The harness is `scripts/verify_refs.py` in the parent directory.
 - Export `LKPR_HOME="$(mktemp -d)"` and run every command with `HOME="$LKPR_HOME"`.
 - Set `LKPR_VERIFY_DIR` to a directory you keep so evidence survives cleanup.
 - `verify_refs.py --doctor` reports `ok numpy`, `ok lammpkeeper 1.2.0` from this
-  repo, `fixture: present` and six reference files.
+  repo, `fixture: present` and one reference file per compute function (six today).
+  The script enforces this: a missing file is an ERROR.
 - `tests/fixtures/**` is read-only. Never regenerate or edit the fixture.
 
 ## Driving conventions
@@ -47,8 +48,10 @@ justified change that records a new `baseline_commit`.
 - Record the check id, the git SHA from `doctor.txt` and the evidence directory.
 - Report an unrunnable check with the doctor line that blocks it (missing module,
   missing fixture). Do not report it as passed through another path.
-- A skipped or inactive check is not a pass. The doctor lists inactive compute
-  functions explicitly.
+- A skipped or inactive check is not a pass. A compute function without a
+  reference file is an ERROR, not an inactive check. Only ids on the
+  `MISSING_REFERENCE_ALLOWED` list in the script (empty) may lack a file, and the
+  doctor lists them.
 
 ## Feature entry contract
 
