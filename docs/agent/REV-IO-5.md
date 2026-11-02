@@ -1,6 +1,6 @@
 # REV-IO-5: thermo Step counters stay exact or are rejected
 
-Status: fixed; verification below.
+Status: fixed and verified at `c4269aa` (see Verification).
 Branch: `fix/rev-io-5-thermo-step-precision` from main `94e562f`.
 
 ## Problem (measured on unmodified code)
@@ -36,3 +36,13 @@ New `tests/test_thermo_steps.py` (4 tests), registered in `tests/run.py`.
 - Thermo rows remain float64.
 - The result schema and the `step` dtype are unchanged.
 - The execution layer's own check stays as a second guard.
+
+## Verification (measured, `c4269aa`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 726 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io5-native/20261102T205309-c4269aa-full` |
+| Forced-NumPy full verifier | 715 passed, 0 failed, 11 skipped | PASS | PASS | `/tmp/opencode/io5-numpy/20261102T205309-c4269aa-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/io5-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
