@@ -8,7 +8,7 @@ import tempfile
 import _util  # noqa: F401
 
 
-def _run_verifier(case, mode='full'):
+def _run_verifier(case, mode='full', stubs=None, extra_env=None, details=None):
     """Run the real verifier against controlled subprocess outputs in a fake checkout.
 
     The embedded interpreter is a fault-injection fixture, not a solver or
@@ -17,6 +17,13 @@ def _run_verifier(case, mode='full'):
     Nonempty placeholder images and input files test artifact gates, not file
     validity or physics. The returned summary survives temporary cleanup; the
     fake checkout and its generated evidence files do not.
+
+    ``stubs`` maps command names to shell bodies placed first on PATH to
+    inject host faults (failing mktemp or cp); ``extra_env`` feeds them.
+    Every fake-interpreter call is appended to a log through a wrapper so
+    tests can prove which verifier steps ran. When ``details`` (a dict) is
+    given it receives ``calls`` (interpreter argv lines), ``evidence`` (names
+    of surviving evidence files) and ``stderr``.
     """
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='lkpr-verifier-') as tmp:
@@ -71,10 +78,30 @@ else:
         fake.chmod(0o755)
         # Route all verifier Python work to the fixture; isolate HOME and the
         # evidence directory so no real preparation or plot generation runs.
-        env = dict(os.environ, PYTHON=str(fake), VERIFIER_CASE=case,
+        calls = Path(tmp) / 'calls.log'
+        wrapper = Path(tmp) / 'python-wrapper'
+        wrapper.write_text('#!/bin/sh\necho "$*" >> "%s"\nexec "%s" "$@"\n' % (calls, fake))
+        wrapper.chmod(0o755)
+        env = dict(os.environ, PYTHON=str(wrapper), VERIFIER_CASE=case,
                    HOME=tmp, LKPR_VERIFY_DIR=str(Path(tmp) / 'evidence'))
+        if stubs:
+            stub_dir = Path(tmp) / 'stubbin'
+            stub_dir.mkdir()
+            for name, body in stubs.items():
+                (stub_dir / name).write_text('#!/bin/sh\n' + body)
+                (stub_dir / name).chmod(0o755)
+            env['PATH'] = str(stub_dir) + os.pathsep + env['PATH']
+            env['STUB_STATE'] = str(Path(tmp) / 'stub-state')
+        env.update(extra_env or {})
         proc = subprocess.run(['bash', str(script), mode], cwd=checkout,
                               env=env, capture_output=True, text=True, timeout=30)
+        if details is not None:
+            details['calls'] = calls.read_text().splitlines() if calls.exists() else []
+            details['stderr'] = proc.stderr
+            dirs = Path(tmp) / 'stub-state.dirs'
+            details['leftover_dirs'] = [d for d in (dirs.read_text().split() if dirs.exists() else [])
+                                        if os.path.isdir(d)]
+            details['evidence'] = sorted(p.name for p in (Path(tmp) / 'evidence').glob('*/*'))
         summaries = list((Path(tmp) / 'evidence').glob('*/summary.txt'))
         assert len(summaries) == 1, proc.stdout + proc.stderr
         summary = summaries[0].read_text()
@@ -133,3 +160,35 @@ def test_verifier_accepts_quick_analysis_evidence_without_requested_plots():
     """A complete quick summary passes without requiring unrequested plot artifacts."""
     code, summary = _run_verifier('complete', mode='quick')
     assert code == 0 and 'PASS post' in summary and 'FAIL' not in summary, summary
+
+
+# Fails the Nth mktemp call (STUB_FAIL_ON=all fails every call). Created
+# directories are listed in $STUB_STATE.dirs so tests can check cleanup.
+_MKTEMP_STUB = """n=$(cat "$STUB_STATE" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$STUB_STATE"
+if [ "$STUB_FAIL_ON" = all ] || [ "$STUB_FAIL_ON" = "$n" ]; then echo 'mktemp: stub failure' >&2; exit 1; fi
+d=$(/usr/bin/mktemp "$@") || exit 1
+echo "$d" >> "$STUB_STATE.dirs"; echo "$d"
+"""
+
+
+def _assert_setup_refused(fail_on):
+    """Run with a failing mktemp and assert the verifier stops before any work."""
+    details = {}
+    code, summary = _run_verifier('complete', mode='quick', stubs={'mktemp': _MKTEMP_STUB},
+                                  extra_env={'STUB_FAIL_ON': fail_on}, details=details)
+    assert code != 0, summary
+    assert 'mktemp' in details['stderr'] and 'temporary' in details['stderr'], details['stderr']
+    assert details['calls'] == [], details['calls']
+    assert 'FAIL setup' in summary, summary
+    return details
+
+
+def test_verifier_refuses_to_run_when_mktemp_fails():
+    """REV-VERIFY-1: no mktemp means no HOME/WORK, so no tests or post may run."""
+    _assert_setup_refused('all')
+
+
+def test_verifier_refuses_when_second_mktemp_fails_and_cleans_first():
+    """REV-VERIFY-1: a failed WORK mktemp must remove the already-created TMPHOME."""
+    details = _assert_setup_refused('2')
+    assert details['leftover_dirs'] == [], details['leftover_dirs']

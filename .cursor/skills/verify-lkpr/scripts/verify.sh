@@ -18,11 +18,24 @@ EVID="${LKPR_VERIFY_DIR:-$HOME/.cache/lkpr-verify}/$(date +%Y%m%dT%H%M%S)-$SHA-$
 # Timestamp resolution is one second: simultaneous identical-mode runs should
 # use distinct LKPR_VERIFY_DIR roots to avoid sharing an evidence directory.
 mkdir -p "$EVID" || { echo "cannot create evidence dir $EVID" >&2; exit 2; }
-TMPHOME="$(mktemp -d)"; WORK="$(mktemp -d)"
+# Without -e, an unchecked failed mktemp would leave HOME empty and turn
+# "$WORK/post_out" into "/post_out". Refuse to start any isolated work unless
+# both directories exist; the evidence directory survives with a FAIL line.
+TMPHOME=""; WORK=""
+cleanup() { [ -z "$TMPHOME" ] || rm -rf "$TMPHOME"; [ -z "$WORK" ] || rm -rf "$WORK"; }
+trap cleanup EXIT
+setup_fail() {
+  echo "FAIL setup — $1" >&2
+  echo "FAIL setup — $1" > "$EVID/summary.txt" 2>/dev/null || true
+  exit 2
+}
+TMPHOME="$(mktemp -d)" && [ -d "$TMPHOME" ] \
+  || { TMPHOME=""; setup_fail "mktemp failed to create temporary HOME directory"; }
+# If this second call fails, cleanup (via the EXIT trap) removes TMPHOME.
+WORK="$(mktemp -d)" && [ -d "$WORK" ] \
+  || { WORK=""; setup_fail "mktemp failed to create temporary work directory"; }
 # Own only these disposable paths. Evidence is outside them and must survive
 # normal completion and failure so a failed verification can be investigated.
-cleanup() { rm -rf "$TMPHOME" "$WORK"; }
-trap cleanup EXIT
 export HOME="$TMPHOME" LKPR_NO_HISTORY=1
 export MPLCONFIGDIR="$TMPHOME/matplotlib"
 : > "$EVID/outputs.txt"
