@@ -1116,14 +1116,14 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
                          '(no box bounds to derive an automatic range)')
 
     if z_range is None:
-        for fr in frames:
-            _orthogonal_box(fr, 'Density profile')
+        # Use the validator's bounds: a cell-only frame has no 'box' key.
+        checked = [_orthogonal_box(fr, 'Density profile')[0] for fr in frames]
         boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
         if boxes is not None:
             zlo, zhi = float(boxes[:, 2, 0].min()), float(boxes[:, 2, 1].max())
         else:
-            zlo = min(fr['box'][2][0] for fr in frames)
-            zhi = max(fr['box'][2][1] for fr in frames)
+            zlo = min(b[2][0] for b in checked)
+            zhi = max(b[2][1] for b in checked)
         # A zero-thickness union of box bounds is as unusable as an explicit
         # equal-endpoint range; reject it rather than emit NaN/inf densities.
         z_range = _density_options((zlo, zhi), n_bins)[1] if zlo < zhi else None
@@ -1138,7 +1138,7 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
 
     selected_types = None if species_type is None else _type_ids(species_type, 'species_type')
     for fr in frames:
-        _orthogonal_box(fr, 'Density profile')
+        box, _ = _orthogonal_box(fr, 'Density profile')
         atoms = fr['atoms']
         if species_type is not None:
             mask = np.isin(atoms[:, ti], list(selected_types))
@@ -1149,8 +1149,8 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
         # z is not a legitimate "outside the range" atom, so reject it first.
         _require_finite_z(z_coords, fr, 'Density profile')
 
-        Lx = fr['box'][0][1] - fr['box'][0][0]
-        Ly = fr['box'][1][1] - fr['box'][1][0]
+        Lx = box[0][1] - box[0][0]
+        Ly = box[1][1] - box[1][0]
         area = Lx * Ly
 
         # Normalize before accumulating to preserve equal configuration weight
@@ -1159,6 +1159,11 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
         density_sum += h / (area * dz)
         n_used += 1
 
+    if n_used == 0:
+        # An explicit range makes an empty trajectory legal, but the zeros are
+        # "no data", not a measured vacuum; say so (cf. the RDF empty warning).
+        warnings.warn('Density profile: no frames; returning zero density with n_frames=0',
+                      RuntimeWarning)
     density_avg = density_sum / n_used if n_used > 0 else density_sum
 
     return {'z': z_bins, 'density': density_avg, 'species': species_name,
