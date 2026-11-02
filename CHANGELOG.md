@@ -12,6 +12,13 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Thermo steps beyond 2^53 are rejected (REV-IO-5)
+
+- `parse_log` rejects a thermo Step that is not a whole number below 2^53 in
+  absolute value. Larger counters cannot be stored exactly as float64:
+  2^53 and 2^53+1 used to become the same value with zero elapsed steps and
+  no warning. Ordinary logs are unchanged.
+
 ### Short or long dump rows are rejected (REV-IO-3)
 
 - Every atom row must have exactly the header's number of columns, on the
