@@ -12,6 +12,18 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### CLI flag and display-setting failures are reported (REV-UI-4)
+
+- `lammps_post --dpi/--theme/--save-format` with a bad value now exits 1 with
+  a one-line error instead of a traceback; `--dpi 0` is rejected, not ignored.
+- An explicit `--find` that finds nothing exits 1 (interactive `find` is
+  unchanged).
+- `--batch` together with `--analyze` or `--plot` is now a usage error
+  (exit 2); before, the batch script was silently skipped.
+- `set dpi|fontsize|linewidth|markersize|grid_alpha|figsize|z_focus` reject
+  nonfinite, non-positive, out-of-range or reversed values without changing
+  the session.
+
 ### Parser edge cases fail or work visibly (REV-IO-8)
 
 - `parse_log` rejects a thermo header pair that maps to the same quantity
