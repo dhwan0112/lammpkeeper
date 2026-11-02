@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Prep reads Masses in conventional data files (REV-PREP-4)
+
+- The prep data-file inspector now reads a `Masses` section followed by a
+  blank line, as LAMMPS and prep's own writer lay it out. Before, it reported
+  no masses for such files. Generated structures are unchanged.
+
 ### Plot redo/edit accept the plot names users type (REV-UI-2)
 
 - `plot redo charge` (and `spin`, `oar`, `penetration`, `dissociation`,

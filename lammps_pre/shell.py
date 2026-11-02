@@ -386,21 +386,34 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
 
         This lightweight inspector is not a validating data reader: missing or
         malformed count fields can retain zero defaults, and tilt/PBC is not
-        interpreted. Blank/comment lines end its Masses state, so conventional
-        blank-separated mass sections may not populate the returned dictionary.
-        Never use this result to reconstruct coordinates or prove box support.
+        interpreted. The Masses section may have blank lines before its entries
+        (the LAMMPS convention, and prep's own writer). A blank line after at
+        least one entry, a comment line or the next section keyword ends it.
+        Inline `# label` text is ignored. Never use this result to reconstruct
+        coordinates or prove box support.
         """
         info = {'n_atoms': 0, 'n_types': 0, 'masses': {},
                 'xlo': 0, 'xhi': 0, 'ylo': 0, 'yhi': 0,
                 'zlo': 0, 'zhi': 0, 'atom_style': None}
         in_masses = False
+        masses_started = False
         with open(filepath) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
-                    if in_masses:
+                    if in_masses and (line.startswith('#') or masses_started):
                         in_masses = False
                     continue
+                if in_masses:
+                    parts = line.split()
+                    try:
+                        info['masses'][int(parts[0])] = float(parts[1])
+                    except (ValueError, IndexError):
+                        # A keyword or malformed line ends the section; fall through.
+                        in_masses = False
+                    else:
+                        masses_started = True
+                        continue
                 if 'atoms' in line and 'atom' not in line.split()[0]:
                     try:
                         info['n_atoms'] = int(line.split()[0])
@@ -422,14 +435,8 @@ class LammpsPreShell(HostedShellMixin, cmd.Cmd):
                     info['zlo'], info['zhi'] = float(parts[0]), float(parts[1])
                 elif line == 'Masses':
                     in_masses = True
+                    masses_started = False
                     continue
-                elif in_masses:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        try:
-                            info['masses'][int(parts[0])] = float(parts[1])
-                        except ValueError:
-                            in_masses = False
                 elif line.startswith('Atoms'):
                     # Detect atom_style from comment
                     if '# charge' in line:
