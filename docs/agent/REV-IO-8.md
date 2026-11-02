@@ -1,6 +1,6 @@
 # REV-IO-8: parser edge cases (2026-11-01 audit, P3)
 
-Status: fixed; verification below.
+Status: fixed and verified at `06c3aed` (see Verification).
 
 Branch `fix/rev-io-8-parser-edges`, base `main` 8d29ae5. Tests:
 `tests/test_parser_edges.py` (5 tests). All numbers below are *measured*.
@@ -76,3 +76,13 @@ Per-module command (`sh` wrapper in /tmp; isolated HOME, `LKPR_NO_HISTORY=1`):
 
 Goldens, fixtures, Rust, `_density_options`, other analysis functions,
 BACKLOG, CHANGELOG, `tests/run.py` (parent registers `test_parser_edges`).
+
+## Verification (measured, `06c3aed`, worktree untouched during runs)
+
+| Run | Tests | post | prep | Evidence |
+| --- | --- | --- | --- | --- |
+| Native full verifier | 704 passed, 0 failed, 0 skipped | PASS | PASS | `/tmp/opencode/io8-native/20261102T193535-06c3aed-full` |
+| Forced-NumPy full verifier | 695 passed, 0 failed, 9 skipped | PASS | PASS | `/tmp/opencode/io8-numpy/20261102T193535-06c3aed-full` |
+| Reference checks | 6/6 PASS, exit 0 | | | `/tmp/opencode/io8-refs/` |
+
+The forced-NumPy skips are the named native-parity tests.
