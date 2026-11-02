@@ -1276,6 +1276,15 @@ def parse_log(filepath):
                         values = [float(field) for field in fields]
                     except ValueError as exc:
                         raise ValueError(f"{context}; nonnumeric value; row={line!r}") from exc
+                    # Rows are float64; from 2**53 on, adjacent signed-64-bit
+                    # counters collapse to one value and elapsed steps become
+                    # wrong. Same rule as the execution layer (application._steps):
+                    # finite, integral, abs < 2**53, or reject (REV-IO-5).
+                    step = values[0]   # a thermo header always starts with Step
+                    if not (np.isfinite(step) and step == np.trunc(step) and abs(step) < 2**53):
+                        raise ValueError(f"{filepath}:{lineno}: thermo Step {fields[0]!r} is not an "
+                                         "integral counter with abs(Step) < 2**53; float64 cannot "
+                                         f"represent it exactly; row={line!r}")
                     current_data.append(values)
                     current_stages.append(stage)
                     continue
