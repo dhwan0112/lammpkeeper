@@ -183,6 +183,10 @@ neighborhood. One valid bound is:
   raise. Triclinic RDF uses Box PBC when `pbc=None`. Orthogonal RDF instead
   retains the legacy `z_pbc` switch when no three-axis mask is supplied, including
   Box-aware frames; reader opt-in must not erase an established caller override.
+  **Amended 2026-11-01 (REV-ANALYSIS-9, maintainer approved):** the legacy
+  `(True, True, z_pbc)` still applies to orthogonal frames without a mask, but
+  if a Box has resolved flags that differ from it, RDF raises (as MSD and pair
+  detection do) instead of overriding the Box.
   Direct triclinic MSD callers supply a matching PBC mask because its existing
   signature retains the legacy slab default; shell supplies the resolved mask.
 - Display true cell kind, physical parameters, tilt and resolved/unknown PBC in

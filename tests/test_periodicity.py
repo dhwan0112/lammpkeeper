@@ -311,13 +311,25 @@ def test_shell_msd_and_rdf_follow_dump_flags():
             # z_pbc settings give different g(r).
             from lammps_post.analysis import compute_rdf
 
-            def ref(flag):
+            def ref(flag, frames=None):
                 """Compare shell routing to a direct API call with explicit z PBC."""
-                return compute_rdf(s.dump_frames, s.dump_col_idx, 1, 2, max_frames=4,
+                return compute_rdf(s.dump_frames if frames is None else frames,
+                                   s.dump_col_idx, 1, 2, max_frames=4,
                                    label_a='Fe', label_b='O', z_pbc=flag)['g']
             got = s.cache['rdf_Fe-O']['g']
             # This is a routing check; direct API agreement alone does not validate g(r).
             assert np.array_equal(got, ref(z_pbc)), bounds
-            assert not np.array_equal(got, ref(not z_pbc)), bounds
+            # The other z setting must give a different g. Since REV-ANALYSIS-9
+            # it may not be applied over the frames' Box flags, so compare on
+            # Box-free copies and check that a Box-carrying call refuses it.
+            bare = [{k: v for k, v in fr.items() if k != 'cell'} for fr in s.dump_frames]
+            assert not np.array_equal(got, ref(not z_pbc, bare)), bounds
+            if any('cell' in fr for fr in s.dump_frames):
+                try:
+                    ref(not z_pbc)
+                except ValueError as exc:
+                    assert 'z_pbc' in str(exc), exc
+                else:
+                    raise AssertionError("legacy z_pbc overrode the frames' Box PBC")
         finally:
             os.remove(path)

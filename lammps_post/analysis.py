@@ -475,9 +475,10 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
                                  Set to False for slab geometries (boundary p p f).
         pbc:        three bools or None — Explicit lattice-vector flags must
                     agree with known Box metadata. None uses resolved flags for
-                    a tilted Box, but preserves (True, True, z_pbc) for ALL
-                    orthogonal inputs, including typed ones. Triclinic Box
-                    flags must already be resolved.
+                    a tilted Box. For orthogonal inputs None means
+                    (True, True, z_pbc); if a typed Box has resolved flags that
+                    differ from it, ValueError is raised (REV-ANALYSIS-9).
+                    Triclinic Box flags must already be resolved.
 
     Returns:
         dict with keys:
@@ -534,10 +535,18 @@ def compute_rdf(frames, col_idx, type_a=1, type_b=2, r_max=6.0, n_bins=200,
 
     for fr in use_frames:
         cell = _typed_cell(fr, 'RDF')
-        # The legacy z_pbc switch remains authoritative for orthogonal inputs
-        # when no explicit three-axis mask is supplied, including typed frames.
-        frame_periodic = (periodic if cell is not None and cell.is_orthogonal and pbc is None
-                          else _cell_periodic(cell, pbc, periodic, 'RDF'))
+        if cell is not None and cell.is_orthogonal and pbc is None:
+            # Legacy z_pbc applies to orthogonal frames without an explicit mask,
+            # but must not override resolved Box flags (REV-ANALYSIS-9; MSD and
+            # pair detection reject the same disagreement).
+            if cell.pbc is not None and tuple(bool(f) for f in cell.pbc) != periodic:
+                raise ValueError(
+                    f"RDF timestep {fr['timestep']}: legacy z_pbc={z_pbc} gives PBC {periodic}, "
+                    f'but the frame Box declares {tuple(bool(f) for f in cell.pbc)}; '
+                    'pass pbc= explicitly (it must match the Box)')
+            frame_periodic = periodic
+        else:
+            frame_periodic = _cell_periodic(cell, pbc, periodic, 'RDF')
         triclinic = cell is not None and not cell.is_orthogonal
         if triclinic:
             box, L = cell.bounds, cell.lengths

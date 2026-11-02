@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### RDF no longer overrides a dump's periodic z (REV-ANALYSIS-9)
+
+- `compute_rdf(..., pbc=None)` applied the legacy `z_pbc=False` default even to
+  frames whose Box declares periodic z (for example a `pp pp pp` dump), so
+  direct API callers silently got slab geometry. It now raises and asks for an
+  explicit `pbc=`. The shell already passed the dump's flags and is unchanged.
+  ADR-0003 is amended accordingly.
+
 ### Reference checks cannot pass by omission (VERIFY-REF-2)
 
 - `.claude/skills/verify/scripts/verify_refs.py` reports a missing reference

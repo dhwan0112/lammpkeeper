@@ -153,7 +153,8 @@ reconstruction, deforming triclinic MSD and tilted slab/O₂ consumers remain ou
 of scope. Wrapped MSD requires true successive displacements inside the periodic
 Voronoi cell; image aliasing cannot be diagnosed from arbitrary wrapped samples.
 Orthogonal RDF keeps the legacy `z_pbc` switch when `pbc=None`; explicit three-axis
-masks must agree with resolved typed metadata. No fixture/golden, mapping,
+masks must agree with resolved typed metadata. Since REV-ANALYSIS-9 (2026-11-01)
+the legacy switch must agree with resolved Box flags too, or RDF raises. No fixture/golden, mapping,
 generated prep/job/structure or thesis-baseline change is included. Detailed
 synthetic checks and measured verification are in `docs/agent/GEN-3.md`.
 
