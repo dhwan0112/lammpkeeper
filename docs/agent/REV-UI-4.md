@@ -1,5 +1,7 @@
 # REV-UI-4 — CLI style flags, `--find` and `--batch` failures
 
+Status: fixed; verification below.
+
 Audit 2026-11-01, P3. Tests: `tests/test_cli_flags.py` (7 tests).
 
 ## Part 1 — style flags and `--find` bypassed `onecmd`
