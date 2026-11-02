@@ -185,6 +185,62 @@ def _require_finite_z(z, frame, analysis):
                          'the analysis requires finite z')
 
 
+def _is_real(value):
+    """Return True for a real Python/NumPy number; bool and str are not numbers here."""
+    return (not isinstance(value, (bool, np.bool_, str))
+            and isinstance(value, (int, float, np.integer, np.floating)))
+
+
+def _finite_param(value, name, analysis, positive=False):
+    """Return ``value`` as a finite float, or raise ValueError naming the parameter.
+
+    ``positive`` also requires value > 0 (timesteps). Booleans and strings are
+    rejected so a flag or a text value is never read as a number.
+    """
+    if not _is_real(value) or not np.isfinite(value) or (positive and value <= 0):
+        need = 'a finite number > 0' if positive else 'a finite number'
+        raise ValueError(f'{analysis}: {name} must be {need}, got {value!r}')
+    return float(value)
+
+
+def _dt_param(dt_fs, analysis):
+    """Validate a timestep in femtoseconds: finite and strictly positive.
+
+    Zero, negative or nonfinite values give a degenerate or reversed time axis.
+    """
+    return _finite_param(dt_fs, 'dt_fs', analysis, positive=True)
+
+
+def _range_param(z_range, name, analysis):
+    """Validate an optional ``(lo, hi)`` pair: two finite reals with lo < hi.
+
+    Return a float tuple, or None when ``z_range`` is None. Inclusivity of the
+    ends stays with the caller. A reversed or NaN range would select nothing
+    and report zeros, so it raises.
+    """
+    if z_range is None:
+        return None
+    try:
+        ends = tuple(z_range)
+    except TypeError:
+        ends = ()
+    if len(ends) != 2 or not all(_is_real(e) for e in ends):
+        raise ValueError(f'{analysis}: {name} must be two finite (lo, hi) numbers, '
+                         f'got {z_range!r}')
+    lo, hi = float(ends[0]), float(ends[1])
+    if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
+        raise ValueError(f'{analysis}: {name} must be finite with lo < hi, got {z_range!r}')
+    return lo, hi
+
+
+def _count_param(value, name, analysis):
+    """Validate a positive integer count (bool, float and str are rejected)."""
+    if (isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer))
+            or value < 1):
+        raise ValueError(f'{analysis}: {name} must be a positive integer, got {value!r}')
+    return int(value)
+
+
 def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_OXIDIZED_E,
                              fe_type=1):
     """
@@ -226,6 +282,9 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
             'frac_oxidized': np.array — Fraction of oxidized Fe atoms
         Returns None if no charge column is found.
     """
+    z_range = _range_param(z_range, 'z_range', 'Charge evolution')
+    q_thr = _finite_param(q_thr, 'q_thr', 'Charge evolution')
+    dt_fs = _dt_param(dt_fs, 'Charge evolution')
     zi = col_idx.get('z')    # z-coordinate column index
     if z_range is not None and zi is None:
         raise ValueError("Charge evolution region z_range requires a 'z' column")
@@ -307,6 +366,7 @@ def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
             'o_count'   : np.array — Number of O atoms per bin
         Returns None if charge or z columns are missing.
     """
+    z_bins = _count_param(z_bins, 'z_bins', 'Charge z profile')
     zi = col_idx.get('z')
     qi = col_idx.get('q')
     ti = col_idx['type']
@@ -684,6 +744,8 @@ def compute_oar(frames, col_idx, z_surf, dt_fs=0.25, o_type=2):
             'n_absorbed' : np.array — Count of O atoms below surface
             'n_total'    : np.array — Total O atom count per frame
     """
+    z_surf = _finite_param(z_surf, 'z_surf', 'OAR')
+    dt_fs = _dt_param(dt_fs, 'OAR')
     ti = col_idx['type']
     zi = col_idx['z']
 
@@ -740,6 +802,9 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
             'or'   : np.array — Oxidation rate (0 to 1) per frame
         Returns None if no charge column is available.
     """
+    z_range = _range_param(z_range, 'z_range', 'Oxidation rate')
+    q_thr = _finite_param(q_thr, 'q_thr', 'Oxidation rate')
+    dt_fs = _dt_param(dt_fs, 'Oxidation rate')
     zi = col_idx.get('z')
     if z_range is not None and zi is None:
         raise ValueError("Oxidation rate region z_range requires a 'z' column")
@@ -809,6 +874,8 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
             'frac_near_surface' : np.array — Fraction of O near surface
             'surface_z'         : float    — The surface z used
     """
+    surface_z = _finite_param(surface_z, 'surface_z', 'Penetration')
+    dt_fs = _dt_param(dt_fs, 'Penetration')
     ti = col_idx['type']
     zi = col_idx['z']
 
@@ -890,6 +957,10 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
         Returns None if no O atoms found.
         Frames without selected atoms retain NaN spatial/ratio measurements.
     """
+    surface_z = _finite_param(surface_z, 'surface_z', 'Penetration trend')
+    dt_fs = _dt_param(dt_fs, 'Penetration trend')
+    if window is not None:
+        window = _count_param(window, 'window', 'Penetration trend')
     ti = col_idx['type']
     zi = col_idx['z']
 
@@ -1142,6 +1213,7 @@ def detect_o2_dissociation(frames, col_idx, bond_cutoff=O2_BOND_CUTOFF_A, dt_fs=
             'frac_in_o2'      : np.array — Fraction of O atoms in O₂ (0 to 1)
             'frac_dissociated': np.array — Fraction of dissociated O atoms
     """
+    dt_fs = _dt_param(dt_fs, 'O2 detection')
     try:
         pbc = tuple(pbc)
     except TypeError:
@@ -1311,6 +1383,7 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
             'down_fraction' : np.array — n_down / total_fe
             'o_fraction'    : np.array — n_o / total_atoms
     """
+    dt_fs = _dt_param(dt_fs, 'Spin evolution')
     ti = col_idx['type']
     ace = label_to_type('ace')   # {'Fe_up': 1, 'Fe_down': 2, 'O': 3}
 
@@ -1380,6 +1453,7 @@ def analyze_msd(frames, col_idx, species_type=None, dt_fs=1.0, pbc=(True, True, 
         ValueError: IDs are absent, invalid, duplicated or missing from the
             cohort; PBC, box bounds or selected positions are malformed.
     """
+    dt_fs = _dt_param(dt_fs, 'MSD')
     if len(frames) < 2:
         return None
 
@@ -1639,6 +1713,7 @@ def analyze_penetration_profile(frames, col_idx, dt_fs=1.0, o_type=2,
             'initial_cross_times': np.array          — First-below times for initial IDs only
         Returns None if no O atoms found or fewer than 2 frames.
     """
+    dt_fs = _dt_param(dt_fs, 'Penetration profile')
     ti = col_idx['type']
     zi = col_idx['z']
     idi = col_idx.get('id')
