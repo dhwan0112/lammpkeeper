@@ -12,6 +12,17 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Failed exports and pressure plots fail the command (REV-UI-3)
+
+- `export csv|latex` with no cached data, no pandas, no exportable columns, an
+  unknown format or bad usage now fails the command, so `--batch` and one-shot
+  runs exit 1. Nothing is created when an export fails.
+- `export summary [filename]` follows its help text: no name writes
+  `summary.txt` in the output directory, a name is used as given. Before, a
+  name not ending in `.txt` was silently replaced by `summary.txt`.
+- `plot pressure` on a log without Press or Pxx/Pyy/Pzz fails; `plot all`
+  skips that plot with a notice.
+
 ### Analysis parameters are validated (REV-ANALYSIS-8)
 
 - Charge evolution, oxidation rate, OAR, penetration (summary, trend and

@@ -2886,7 +2886,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                                 unit_system=unit_system)
         self._save_recipe('thermostat', {'pressure_unit': s.pressure_unit})
 
-    def _iplot_pressure(self, opts, _batch=False, _edit_mode=False):
+    def _iplot_pressure(self, opts, _batch=False, _edit_mode=False, _optional=False):
         """Render pressure/stress, optionally correcting a user-selected slab volume.
 
         The slab interval is in Angstrom and comes from a prompt or saved recipe.
@@ -2903,6 +2903,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # Check if stress tensor components are available
         d = s.log_data
         has_stress = all(k in d for k in ('pxx', 'pyy', 'pzz'))
+        if not has_stress and 'press' not in d:
+            # Nothing to draw. A direct request fails (REV-UI-3); `plot all`
+            # (_optional) skips this plot deliberately and says so.
+            if _optional:
+                print(C.warn("  Skipping pressure plot: log has no Press or Pxx/Pyy/Pzz columns."))
+                return
+            raise ValueError('Cannot plot pressure: the log has no Press or Pxx/Pyy/Pzz columns '
+                             '(add press pxx pyy pzz to thermo_style)')
         if not has_stress:
             print(C.warn("  Pxx/Pyy/Pzz not found in log data."))
             print(f"  {C.DIM}Add to your LAMMPS input: thermo_style custom step temp pe ke etotal press pxx pyy pzz vol{C.RESET}")
@@ -3588,7 +3596,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         # Log-dependent
         self._iplot_thermo([], _batch=True)
         self._iplot_thermostat([], _batch=True)
-        self._iplot_pressure([], _batch=True)
+        self._iplot_pressure([], _batch=True, _optional=True)
 
         # Cache-dependent: iterate over all cached analysis results
         for key in list(s.cache.keys()):
@@ -3638,32 +3646,51 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     # ─── EXPORT ───
 
     def do_export(self, arg):
-        """Dispatch export csv|latex|summary <analysis> [filename] without analysis.
+        """Dispatch export csv|latex <analysis> [filename] | export summary [filename].
 
-        Preserve cache-key case for grouped/spin labels. Summary interprets its
-        positional value as a filename, unlike tabular exports. Missing data,
-        pandas or unsupported formats are printed by legacy handlers rather
-        than consistently raised as command failures.
+        Preserve cache-key case for grouped/spin labels. Every explicit export
+        request either writes its file or raises, so batch and one-shot runs
+        exit nonzero instead of reporting success without an artifact
+        (REV-UI-3). Checks run before any directory or file is created.
         """
+        usage = 'Usage: export csv|latex <analysis> [filename] | export summary [filename]'
         parts = shlex.split(arg)
-        if len(parts) < 2:
-            print("  Usage: export csv|latex|summary <analysis> [filename]")
-            return
-
+        if not parts:
+            raise ValueError(usage)
         fmt = parts[0].lower()
+        if fmt not in ('csv', 'latex', 'summary'):
+            raise ValueError(f'Unknown export format {parts[0]!r}. {usage}')
+        if fmt == 'summary':
+            if len(parts) > 2:
+                raise ValueError(usage)
+            self.state.verify_trajectory_source()
+            # As in the help text: an optional filename, used as given.
+            self._export_summary(parts[1] if len(parts) > 1 else None)
+            return
+        if len(parts) not in (2, 3):
+            raise ValueError(usage)
         what = parts[1]  # keep original case for cache key matching
         fname = parts[2] if len(parts) > 2 else None
-        s = self.state
-        s.verify_trajectory_source()
-
+        self.state.verify_trajectory_source()
         if fmt == 'csv':
             self._export_csv(what, fname)
-        elif fmt == 'latex':
-            self._export_latex(what, fname)
-        elif fmt == 'summary':
-            self._export_summary(fname or what)
         else:
-            print(f"  Unknown format: {fmt}. Use csv|latex|summary.")
+            self._export_latex(what, fname)
+
+    @staticmethod
+    def _require_pandas(fmt):
+        """Raise when the pandas-based tabular export is unavailable."""
+        if not HAS_PANDAS:
+            raise RuntimeError(f'export {fmt} needs pandas, which is not installed '
+                               '(pip install pandas)')
+
+    @staticmethod
+    def _export_columns(what, data):
+        """Return the 1-D array columns of a cached result, or raise if there are none."""
+        columns = {k: v for k, v in data.items() if isinstance(v, np.ndarray) and v.ndim == 1}
+        if not columns:
+            raise ValueError(f"Cached result '{what}' has no 1-D array data to export")
+        return columns
 
     def _export_csv(self, what, fname):
         """Export one cached result's 1-D arrays through pandas, without an index.
@@ -3675,43 +3702,32 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         filenames are used as given; defaults live under output_dir.
         """
         s = self.state
-        if not HAS_PANDAS:
-            print(C.err("  pandas not available. Install with: pip install pandas"))
-            return
+        self._require_pandas('csv')
 
         # Find data
         data = s.cache.get(what)
         if data is None:
             # Check partial matches
             matches = [k for k in s.cache if k.startswith(what)]
-            if matches:
-                data = s.cache[matches[0]]
-                what = matches[0]
-            else:
-                print(C.err(f"  No cached data for '{what}'. Run 'analyze {what}' first."))
-                return
+            if not matches:
+                raise ValueError(f"No cached data for '{what}'. Run 'analyze {what}' first.")
+            data = s.cache[matches[0]]
+            what = matches[0]
 
+        # Do not flatten atom histories or nested results: their axes cannot be
+        # represented safely as columns without an analysis-specific schema.
+        import pandas as pd
+        df = pd.DataFrame(self._export_columns(what, data))
+        # Build the complete text before touching the filesystem, so a failure
+        # cannot leave an empty directory or a truncated file behind.
+        text = ''.join(f'# {line}\n' for line in self._export_header_lines(data))
+        text += df.to_csv(index=False)
         os.makedirs(s.output_dir, exist_ok=True)
         if fname is None:
             fname = os.path.join(s.output_dir, f'{what}.csv')
-
-        # Convert to DataFrame
-        # Do not flatten atom histories or nested results: their axes cannot be
-        # represented safely as columns without an analysis-specific schema.
-        df_data = {}
-        for k, v in data.items():
-            if isinstance(v, np.ndarray) and v.ndim == 1:
-                df_data[k] = v
-        if df_data:
-            import pandas as pd
-            df = pd.DataFrame(df_data)
-            with open(fname, 'w', encoding='utf-8', newline='') as f:
-                for line in self._export_header_lines(data):
-                    f.write(f'# {line}\n')
-                df.to_csv(f, index=False)
-            progress_msg(f"Exported: {C.ok(fname)}")
-        else:
-            print(C.warn("  No exportable array data found."))
+        with open(fname, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        progress_msg(f"Exported: {C.ok(fname)}")
 
     @staticmethod
     def _export_header_lines(data):
@@ -3736,46 +3752,40 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """Write exact-key cached 1-D arrays as a four-decimal pandas LaTeX table.
 
         Unlike CSV, no prefix lookup is attempted. Metadata/scalars and nested
-        arrays are omitted; columns must have compatible lengths. Missing pandas
-        or cache data prints a message, while conversion/write errors propagate.
+        arrays are omitted; columns must have compatible lengths. Missing
+        pandas, missing data or no exportable columns raise before any write.
         """
         s = self.state
-        if not HAS_PANDAS:
-            print(C.err("  pandas not available. Install with: pip install pandas"))
-            return
+        self._require_pandas('latex')
 
         data = s.cache.get(what)
         if data is None:
-            print(C.err(f"  No cached data for '{what}'."))
-            return
+            raise ValueError(f"No cached data for '{what}'. Run 'analyze {what}' first.")
 
+        import pandas as pd
+        df = pd.DataFrame(self._export_columns(what, data))
+        # Complete text first; only then create the directory and the file.
+        text = ''.join(f'% {line}\n' for line in self._export_header_lines(data))
+        text += df.to_latex(index=False, float_format='%.4f')
         os.makedirs(s.output_dir, exist_ok=True)
         if fname is None:
             fname = os.path.join(s.output_dir, f'{what}.tex')
-
-        df_data = {}
-        for k, v in data.items():
-            if isinstance(v, np.ndarray) and v.ndim == 1:
-                df_data[k] = v
-        if df_data:
-            import pandas as pd
-            df = pd.DataFrame(df_data)
-            with open(fname, 'w', encoding='utf-8') as f:
-                for line in self._export_header_lines(data):
-                    f.write(f'% {line}\n')
-                f.write(df.to_latex(index=False, float_format='%.4f'))
-            progress_msg(f"Exported: {C.ok(fname)}")
+        with open(fname, 'w', encoding='utf-8') as f:
+            f.write(text)
+        progress_msg(f"Exported: {C.ok(fname)}")
 
     def _export_summary(self, fname):
         """Write session metadata and numeric cache summaries, not full raw results.
 
-        A name ending in .txt is used verbatim; other values select the default
-        output_dir/summary.txt. Array min/max/mean reductions assume nonempty
-        numeric data; unsupported cache layouts are not normalized here.
+        ``fname`` is used as given; None selects output_dir/summary.txt (the
+        help text's `export summary [filename]`). Before REV-UI-3 a name not
+        ending in .txt was silently replaced by the default. Array
+        min/max/mean reductions assume nonempty numeric data; unsupported
+        cache layouts are not normalized here.
         """
         s = self.state
-        os.makedirs(s.output_dir, exist_ok=True)
-        if not fname.endswith('.txt'):
+        default = fname is None
+        if default:
             fname = os.path.join(s.output_dir, 'summary.txt')
 
         lines = []
@@ -3813,6 +3823,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 for k, v in data.items():
                     lines.append(f"  {k}: {v}")
 
+        # Built in full above; create the default directory only now. A path
+        # given by the user is used as is, without creating its parent.
+        if default:
+            os.makedirs(s.output_dir, exist_ok=True)
         with open(fname, 'w') as f:
             f.write('\n'.join(lines))
         progress_msg(f"Summary exported: {C.ok(fname)}")
