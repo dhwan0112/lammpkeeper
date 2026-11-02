@@ -603,6 +603,37 @@ class _ArgumentParser(argparse.ArgumentParser):
         raise ValueError(message)
 
 
+def _cancel_owned_job(job):
+    """Cancel this CLI's own job and return its snapshot after a bounded wait.
+
+    SIGINT is ignored meanwhile so a second interrupt cannot abandon live
+    children during cleanup. If the wait expires, return a detached nonterminal
+    observation with explicit incomplete cleanup, never a fabricated terminal
+    event.
+    """
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        job.cancel()
+        try:
+            return job.wait(2 * (TERMINATE_GRACE + KILL_WAIT) + 1)
+        except TimeoutError:
+            snapshot = job.snapshot()
+            if snapshot['state'] not in TERMINAL_STATES:
+                failure = {'code': 'cleanup_wait_timeout', 'message':
+                           'CLI cleanup wait expired; supervisor may still be active and children unconfirmed'}
+                # This is a detached observation, not terminal publication:
+                # do not alter the job, invent an event, or claim completion.
+                if snapshot['cleanup']['error'] is None:
+                    snapshot['cleanup'] = {'status': 'incomplete',
+                                           'reaped': False, 'error': failure}
+                snapshot['error'] = failure
+                snapshot['backend_response'] = None
+                LOGGER.warning('Local job %s: %s', snapshot['job_id'], failure['message'])
+            return snapshot
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def main(argv=None):
     """Wait for this invocation's job and print one JSON snapshot (Ctrl-C: 130).
 
@@ -612,6 +643,9 @@ def main(argv=None):
     If that wait expires, emit a nonterminal snapshot with explicit incomplete
     cleanup, not a fabricated terminal event. The non-daemon worker may still
     keep the interpreter alive if an OS operation cannot be interrupted.
+    A local error after the job started (for example an event write failure)
+    cancels the owned job the same way, reports its real snapshot (a job
+    cancelled by this cleanup carries error code transport_error) and exits 1.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _ArgumentParser(prog='lkpr run', description=
@@ -626,8 +660,10 @@ def main(argv=None):
         parser.print_help()
         return 0
     job = None
+    options = None
     emitted = 0
     interrupted = False
+    local_failure = False
     try:
         # Help with other flags is not a successful job submission.
         if '-h' in argv or '--help' in argv:
@@ -649,55 +685,50 @@ def main(argv=None):
             signal.signal(signal.SIGINT, previous)
         if submission_interrupted:
             raise KeyboardInterrupt
-        while True:
-            snapshot = job.snapshot()
-            if options.events:
-                for event in snapshot['events'][emitted:]:
-                    print(json.dumps(event, allow_nan=False, separators=(',', ':')), file=sys.stderr, flush=True)
-                emitted = len(snapshot['events'])
-            try:
-                snapshot = job.wait(POLL_INTERVAL)
-                break
-            except TimeoutError:
-                continue
+        try:
+            while True:
+                snapshot = job.snapshot()
+                if options.events:
+                    for event in snapshot['events'][emitted:]:
+                        print(json.dumps(event, allow_nan=False, separators=(',', ':')), file=sys.stderr, flush=True)
+                    emitted = len(snapshot['events'])
+                try:
+                    snapshot = job.wait(POLL_INTERVAL)
+                    break
+                except TimeoutError:
+                    continue
+        except (ValueError, OSError, UnicodeError, RecursionError) as exc:
+            # The job already exists and owns a live worker and children: this
+            # is not a submission failure. Cancel it, report its real state,
+            # and exit nonzero. KeyboardInterrupt is handled by the outer clause.
+            local_failure = True
+            snapshot = _cancel_owned_job(job)
+            message = f'CLI failed after job start: {type(exc).__name__}: {exc}'[:execution.MAX_DIAGNOSTIC]
+            LOGGER.warning('Local job %s: %s', snapshot['job_id'], message)
+            # Only our own cancellation may be annotated; a job that finished
+            # on its own keeps its genuine error (or none) untouched.
+            if snapshot['state'] == 'cancelled' and snapshot['error'] is not None \
+                    and snapshot['error']['code'] == 'cancelled':
+                snapshot['error'] = {'code': 'transport_error', 'message': message}
     except KeyboardInterrupt:
         interrupted = True
         if job is None:
             snapshot = _submission_failure('cancelled', 'Interrupted before job submission',
                                            state='cancelled')
         else:
-            # A second interrupt must not abandon live children during cleanup.
-            previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
-            try:
-                job.cancel()
-                try:
-                    snapshot = job.wait(2 * (TERMINATE_GRACE + KILL_WAIT) + 1)
-                except TimeoutError:
-                    snapshot = job.snapshot()
-                    if snapshot['state'] not in TERMINAL_STATES:
-                        failure = {'code': 'cleanup_wait_timeout', 'message':
-                                   'CLI cleanup wait expired; supervisor may still be active and children unconfirmed'}
-                        # This is a detached observation, not terminal publication:
-                        # do not alter the job, invent an event, or claim completion.
-                        if snapshot['cleanup']['error'] is None:
-                            snapshot['cleanup'] = {'status': 'incomplete',
-                                                   'reaped': False, 'error': failure}
-                        snapshot['error'] = failure
-                        snapshot['backend_response'] = None
-                        LOGGER.warning('Local job %s: %s', snapshot['job_id'], failure['message'])
-            finally:
-                signal.signal(signal.SIGINT, previous)
+            snapshot = _cancel_owned_job(job)
     except (ValueError, OSError, UnicodeError, RecursionError) as exc:
-        # Known gap (REV-EXEC-2): this also catches errors raised after the job
-        # started, which then reports a submission failure without cancelling.
+        # Reached only before a job exists (parse/read/submission); errors
+        # after start are handled around the wait loop above.
         snapshot = _submission_failure('invalid_request', exc)
-    # `options` is unbound when argument parsing itself failed.
-    if job is not None and 'options' in locals() and options.events:
+    # Skip after a post-start local failure: stderr may be the broken sink, and
+    # the events already emitted are what the caller could receive.
+    if job is not None and options is not None and options.events and not local_failure:
         for event in snapshot['events'][emitted:]:
             print(json.dumps(event, allow_nan=False, separators=(',', ':')),
                   file=sys.stderr, flush=True)
     print(json.dumps(snapshot, allow_nan=False, separators=(',', ':'), ensure_ascii=True))
-    return 130 if interrupted else (0 if snapshot['state'] == 'succeeded' else 1)
+    return 130 if interrupted else (0 if snapshot['state'] == 'succeeded' and not local_failure else 1)
 
 
 def _submission_failure(code, message, state='failed'):
