@@ -8,7 +8,8 @@ import tempfile
 import _util  # noqa: F401
 
 
-def _run_verifier(case, mode='full', stubs=None, extra_env=None, details=None):
+def _run_verifier(case, mode='full', stubs=None, extra_env=None, details=None,
+                  precreate=(), runs=1):
     """Run the real verifier against controlled subprocess outputs in a fake checkout.
 
     The embedded interpreter is a fault-injection fixture, not a solver or
@@ -93,9 +94,17 @@ else:
             env['PATH'] = str(stub_dir) + os.pathsep + env['PATH']
             env['STUB_STATE'] = str(Path(tmp) / 'stub-state')
         env.update(extra_env or {})
-        proc = subprocess.run(['bash', str(script), mode], cwd=checkout,
-                              env=env, capture_output=True, text=True, timeout=30)
+        for rel in precreate:
+            sentinel = Path(tmp) / 'evidence' / rel
+            sentinel.parent.mkdir(parents=True, exist_ok=True)
+            sentinel.write_text('sentinel\n')
+        procs = [subprocess.Popen(['bash', str(script), mode], cwd=checkout, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for _ in range(runs)]
+        outs = [p.communicate(timeout=60) for p in procs]
+        proc = subprocess.CompletedProcess(procs[0].args, procs[0].returncode, *outs[0])
         if details is not None:
+            details['returncodes'] = [p.returncode for p in procs]
             details['calls'] = calls.read_text().splitlines() if calls.exists() else []
             details['stderr'] = proc.stderr
             dirs = Path(tmp) / 'stub-state.dirs'
@@ -103,7 +112,13 @@ else:
                                         if os.path.isdir(d)]
             details['evidence'] = sorted(p.name for p in (Path(tmp) / 'evidence').glob('*/*'))
         summaries = list((Path(tmp) / 'evidence').glob('*/summary.txt'))
-        assert len(summaries) == 1, proc.stdout + proc.stderr
+        assert len(summaries) == runs, (proc.stdout, proc.stderr)
+        if details is not None:
+            details['summaries'] = sorted(str(x.parent.name) for x in summaries)
+            details['stdout'] = proc.stdout
+            details['sentinels'] = {rel: (Path(tmp) / 'evidence' / rel).read_text()
+                                    if (Path(tmp) / 'evidence' / rel).exists() else None
+                                    for rel in precreate}
         summary = summaries[0].read_text()
         if proc.returncode:
             summary += proc.stderr
@@ -209,3 +224,30 @@ def test_verifier_fails_when_post_summary_evidence_cannot_be_retained():
     assert code != 0, summary
     assert 'FAIL evidence' in summary and 'post-summary.txt' in summary, summary
     assert 'post-summary.txt' not in details['evidence'], details['evidence']
+
+
+# Freezes the verifier timestamp so every run in a test computes the same
+# evidence stamp, which forces the same-second collision.
+_DATE_STUB = "echo 20260101T000000\n"
+
+
+def test_verifier_does_not_reuse_existing_evidence_directory():
+    """REV-VERIFY-2: a pre-existing same stamp/SHA/mode directory must survive untouched."""
+    details = {}
+    first = '20260101T000000-nogit-quick/tests.log'
+    code, summary = _run_verifier('complete', mode='quick', stubs={'date': _DATE_STUB},
+                                  details=details, precreate=[first, '20260101T000000-2-nogit-quick/x.log'])
+    assert code == 0, summary
+    assert details['sentinels'][first] == 'sentinel\n', details['sentinels']
+    assert details['summaries'] == ['20260101T000000-3-nogit-quick'], details['summaries']
+    assert 'evidence: ' in details['stdout'] and '20260101T000000-3-nogit-quick' in details['stdout']
+
+
+def test_verifier_concurrent_same_second_runs_keep_independent_evidence():
+    """REV-VERIFY-2: simultaneous identical runs each retain their own summary."""
+    details = {}
+    code, summary = _run_verifier('complete', mode='quick', stubs={'date': _DATE_STUB},
+                                  details=details, runs=3)
+    assert details['returncodes'] == [0, 0, 0], details['returncodes']
+    assert len(set(details['summaries'])) == 3, details['summaries']
+    assert all(n.endswith('-nogit-quick') for n in details['summaries']), details['summaries']
