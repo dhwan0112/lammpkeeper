@@ -108,11 +108,13 @@ def execute_request(request):
         _fail(response, 'invalid_input', exc)
     except Exception as exc:
         _fail(response, 'internal_error', f'{type(exc).__name__}: {exc}')
-    response['warnings'] = [str(item)[:MAX_DIAGNOSTIC] for item in diagnostics[:MAX_WARNINGS]]
-    # Bound the response size. Known gap (REV-EXEC-3): the notice replaces the
-    # last kept warning and does not say how many were dropped.
+    # Keep the list at MAX_WARNINGS entries: MAX_WARNINGS - 1 real warnings plus
+    # a final notice that states how many were dropped.
+    kept = diagnostics if len(diagnostics) <= MAX_WARNINGS else diagnostics[:MAX_WARNINGS - 1]
+    response['warnings'] = [str(item)[:MAX_DIAGNOSTIC] for item in kept]
     if len(diagnostics) > MAX_WARNINGS:
-        response['warnings'][-1] = 'Additional warnings omitted (warning count bound reached)'
+        omitted = len(diagnostics) - len(kept)
+        response['warnings'].append(f'{omitted} additional warnings omitted (warning count bound reached)')
     return response
 
 
