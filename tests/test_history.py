@@ -143,3 +143,82 @@ def test_no_history_env_leaves_home_untouched():
         finally:
             lk._HISTFILE = saved
         assert os.listdir(home) == [], f'history written despite LKPR_NO_HISTORY: {os.listdir(home)}'
+
+
+def _buffer():
+    """Return the process-global readline buffer as a list, oldest first."""
+    return [readline.get_history_item(i + 1)
+            for i in range(readline.get_current_history_length())]
+
+
+class _menu_session:
+    """Build an LkprShell on an isolated HOME whose menu buffer has unsaved input.
+
+    Yields (lk_module, shell, menu_file, home). The menu file holds only
+    'menu_old'; 'menu_unsaved' exists in memory alone, as after typing it at the
+    prompt. The prior process-global readline buffer is restored on exit.
+    """
+
+    def __enter__(self):
+        """Create the isolated home, post history file and unsaved menu buffer."""
+        import lammpkeeper.shell as lk
+        self.home_ctx = _patched_home()
+        home = self.home_ctx.__enter__()
+        self.lk = lk
+        self.saved_hist = _buffer()
+        self.saved_file = lk._HISTFILE
+        self.menu_file = os.path.join(home, '.lkpr_history')
+        lk._HISTFILE = self.menu_file
+        with open(self.menu_file, 'w') as f:
+            f.write('menu_old\n')
+        with open(os.path.join(home, '.lammps-post_history'), 'w') as f:
+            f.write('post_a\npost_b\n')
+        self.sh = lk.LkprShell()
+        readline.add_history('menu_unsaved')
+        return self.lk, self.sh, self.menu_file, home
+
+    def __exit__(self, *exc):
+        """Restore module globals, readline buffer and environment."""
+        self.lk._HISTFILE = self.saved_file
+        readline.clear_history()
+        for line in self.saved_hist:
+            readline.add_history(line)
+        self.home_ctx.__exit__(*exc)
+
+
+def test_inline_hosted_command_keeps_menu_history():
+    """REV-OPS-1: `post info` must not replace the menu buffer with post history."""
+    _require_readline()
+    with _menu_session() as (lk, sh, menu_file, home):
+        assert _buffer() == ['menu_old', 'menu_unsaved']
+        assert sh._enter('post', 'info') is False
+        assert _buffer() == ['menu_old', 'menu_unsaved'], _buffer()
+        sh.postloop()
+        assert _lines(menu_file) == ['menu_old', 'menu_unsaved'], _lines(menu_file)
+
+
+def test_inline_hosted_command_restores_menu_history_when_child_raises():
+    """REV-OPS-1: a failing inline child must still leave the menu buffer intact."""
+    _require_readline()
+    with _menu_session() as (lk, sh, menu_file, home):
+        child = sh._shell('post')
+        # Constructing the child swapped the buffer; re-establish the menu state.
+        readline.clear_history()
+        readline.add_history('menu_old')
+        readline.add_history('menu_unsaved')
+
+        def boom(line):
+            """Simulate a child command that crashes after history was swapped."""
+            readline.add_history('child_cmd')
+            raise RuntimeError('boom')
+
+        child.onecmd = boom
+        try:
+            sh._enter('post', 'info')
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('child exception was swallowed')
+        assert _buffer() == ['menu_old', 'menu_unsaved'], _buffer()
+        sh.postloop()
+        assert _lines(menu_file) == ['menu_old', 'menu_unsaved'], _lines(menu_file)
