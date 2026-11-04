@@ -12,6 +12,15 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### `lkpr-rs` stops stragglers that keep the backend's stdout open (REV-RS-3)
+
+- When the Python backend exits but a process in its group still holds the
+  stdout pipe, `lkpr-rs` now stops that process group (SIGTERM, 2 s grace,
+  SIGKILL) after the existing 5 s wait instead of leaving it running. The run
+  still fails with `backend_stdout_held_open` (exit 1); the message now says
+  the process group was signalled. A straggler also held the inherited stderr
+  open, which blocked any pipeline reading `lkpr-rs` output until it exited.
+
 ### `lkpr-rs` human mode survives closed pipes and escapes control characters (REV-RS-2)
 
 - `lkpr-rs` without `--json` now reports a stdout write failure (closed pipe,

@@ -470,36 +470,57 @@ fn ctrl_c_works_while_the_backend_never_reads_a_large_request() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("cancelled"));
 }
 
-/// A grandchild holding stdout open after exit is reported, not waited on.
+/// A grandchild holding stdout open after exit is reported, not waited on,
+/// and is stopped with the backend's process group (REV-RS-3, audit E-4): a
+/// holder that honours SIGTERM and one that ignores it (SIGKILL after the
+/// grace) are both gone when `lkpr-rs` returns. The holder also inherits the
+/// stderr pipe, so a consumer of `lkpr-rs` is unblocked only once it is gone.
 #[test]
-fn stdout_held_open_after_exit_is_reported_not_waited_forever() {
-    let dir = tempdir("heldopen");
-    // Prints a complete snapshot, then leaves a background process holding stdout.
-    let py = fake(
-        &dir,
-        "cat >/dev/null\necho '{\"job_schema_version\":1,\"state\":\"succeeded\"}'\n(sleep 30) 2>/dev/null &\nexit 0",
-    );
-    let child = Command::new(bin())
-        .args([
-            "thermo-summary",
-            "--python",
-            py.to_str().unwrap(),
-            "--log",
-            "a",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let start = Instant::now();
-    let o = wait_bounded(child, Duration::from_secs(20));
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert!(
-        stderr(&o).contains("backend_stdout_held_open"),
-        "{}",
-        stderr(&o)
-    );
-    assert!(start.elapsed() < Duration::from_secs(10));
+fn stdout_held_open_after_exit_is_reported_and_the_holder_stopped() {
+    for (tag, holder) in [
+        ("term", "exec sleep 20"),
+        ("kill", "trap '' TERM; exec sleep 20"),
+    ] {
+        let dir = tempdir(&format!("heldopen-{tag}"));
+        let pid_file = dir.join("pid");
+        // Prints a complete snapshot, then leaves a background process holding stdout.
+        let py = fake(
+            &dir,
+            &format!(
+                "cat >/dev/null\necho '{{\"job_schema_version\":1,\"state\":\"succeeded\"}}'\n\
+                 ({holder}) &\necho $! > '{}'\nexit 0",
+                pid_file.display()
+            ),
+        );
+        let child = Command::new(bin())
+            .args([
+                "thermo-summary",
+                "--python",
+                py.to_str().unwrap(),
+                "--log",
+                "a",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let holder_pid = await_pid(&pid_file);
+        let o = wait_bounded(child, Duration::from_secs(40));
+        let elapsed = start.elapsed();
+        assert_eq!(o.status.code(), Some(1), "{tag}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("backend_stdout_held_open")
+                && stderr(&o).contains("process group was signalled"),
+            "{tag}: {}",
+            stderr(&o)
+        );
+        // STDOUT_CLOSE_WAIT (5 s) plus at most KILL_GRACE (2 s) for the TERM-ignoring
+        // holder; a surviving holder keeps stderr open for its full 20 s instead.
+        assert!(elapsed < Duration::from_secs(15), "{tag}: {elapsed:?}");
+        assert!(wait_gone(holder_pid), "{tag}: holder {holder_pid} survived");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// A non-UTF-8 argument is a usage error (exit 2) that names the argument and

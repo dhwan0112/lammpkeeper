@@ -4,7 +4,8 @@
 //! deadline, cancellation and cleanup of its own children. This module only
 //! starts that process in its own process group, feeds stdin, collects stdout
 //! (bounded), forwards one SIGINT on Ctrl-C, and as a last resort terminates an
-//! unresponsive process. A forced kill is never reported as cancellation.
+//! unresponsive process or a straggler that kept stdout open after the backend
+//! exited. A forced kill is never reported as cancellation.
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
@@ -25,7 +26,8 @@ pub const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 pub const KILL_GRACE: Duration = Duration::from_secs(2);
 /// After the backend exits, wait this long for its stdout pipe to close. Only
 /// a stray process still holding the pipe could delay it (EXEC-2 gives its own
-/// children separate pipes), so a timeout is reported, never waited out.
+/// children separate pipes), so a timeout is reported, never waited out; the
+/// backend's process group is then stopped so no straggler is left behind.
 pub const STDOUT_CLOSE_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(20);
 
@@ -75,7 +77,9 @@ pub struct Outcome {
     pub interrupted: bool,
     /// Set when this supervisor terminated the backend by force.
     pub forced: Option<Forced>,
-    /// The backend exited but something kept its stdout open; `stdout` is empty.
+    /// The backend exited but a member of its process group kept its stdout
+    /// open past [`STDOUT_CLOSE_WAIT`]; the group was stopped and `stdout` is
+    /// empty.
     pub stdout_held_open: bool,
 }
 
@@ -148,6 +152,16 @@ fn terminate(child: &mut Child) -> Option<ExitStatus> {
     child.wait().ok()
 }
 
+/// Stop the stragglers of a backend that already exited on its own: SIGTERM
+/// its group, wait up to a grace for the stdout pipe to close, then SIGKILL the
+/// group. The leader must still be unreaped so that its group id is reserved.
+/// A holder that left the group (`setsid`) is out of reach and stays reported.
+fn stop_group(pid: u32, reader: &mpsc::Receiver<Vec<u8>>) {
+    signal_group(pid, libc::SIGTERM);
+    let _ = reader.recv_timeout(KILL_GRACE);
+    signal_group(pid, libc::SIGKILL);
+}
+
 /// Supervise a started backend until it exits or must be stopped.
 ///
 /// `deadline` bounds the whole run; it should exceed the backend's own timeout
@@ -186,8 +200,10 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
     // Ctrl-C forwarding, then output overflow, then the deadline. Overflow that
     // happens in the same poll as the exit is caught after the loop.
     let status = loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            break Some(status);
+        // Detect the exit without reaping: the leader's pid keeps the group id
+        // reserved until the group is known to be gone or has been stopped.
+        if exited_unreaped(child.id()) {
+            break None;
         }
         if interrupted() && !forwarded {
             // One SIGINT to `lkpr run` itself (not its group): it cancels its
@@ -212,8 +228,19 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
     // Bounded: a stray process holding the pipe must not hang the CLI.
     let (stdout, stdout_held_open) = match receiver.recv_timeout(STDOUT_CLOSE_WAIT) {
         Ok(bytes) => (bytes, false),
-        Err(_) => (Vec::new(), true),
+        Err(_) => {
+            // The leader exited on its own, but a member of its group still
+            // holds the pipe. Stop the group as the forced paths do, so the CLI
+            // leaves no orphan behind; the run is still reported as held open.
+            if forced.is_none() {
+                stop_group(child.id(), &receiver);
+            }
+            (Vec::new(), true)
+        }
     };
+    // The forced paths reaped the leader in `terminate`; the normal path reaps
+    // it here, after any group signal that needed its id reserved.
+    let status = status.or_else(|| child.wait().ok());
     // The backend may exit in the same poll in which it overflowed; the reader
     // has then finished, so this final check sees every dropped chunk.
     if forced.is_none() && overflow.load(Ordering::SeqCst) {
