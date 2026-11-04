@@ -15,10 +15,15 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 ### Dump atom rows reject non-standard separators (REV-IO-10)
 
 - `DumpReader` raises `ValueError` (file, step, row, code point) when an atom
-  row is separated by anything other than space, tab, CR, LF or FF, for
+  row uses a whitespace character other than space or tab as a separator, for
   example a no-break space or a vertical tab. Before, such a row passed the
   width check and the native parser and the NumPy fallback returned different
-  columns without warning. Dumps written by LAMMPS are unaffected.
+  columns without warning. CR or FF inside a row keeps raising the existing
+  row-count error. Dumps written by LAMMPS are unaffected.
+- Follow-up (PR #85): the streaming reader opens the dump as UTF-8 whatever
+  the locale, as `read_frame` already decoded it, so a C locale no longer turns
+  the report into `UnicodeDecodeError`; the row number counts CR and CRLF line
+  ends like LF.
 
 ### Concurrent verifier runs keep separate evidence (REV-VERIFY-2)
 
