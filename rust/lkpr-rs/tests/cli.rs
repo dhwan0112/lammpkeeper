@@ -749,3 +749,34 @@ fn human_mode_makes_backend_control_characters_visible() {
     let o = run(&["doctor", "--python", py.to_str().unwrap(), "--json"]);
     assert_eq!(String::from_utf8(o.stdout).unwrap(), format!("{caps}\n"));
 }
+
+#[test]
+/// `tui` on a pipe, without a terminal or on a dumb one is a usage error (2)
+/// that names the scriptable command; nothing is written to stdout, so a
+/// mistaken `lkpr-rs tui | tool` never sees escape sequences.
+fn tui_without_a_terminal_is_a_usage_error() {
+    for term in [Some("xterm-256color"), Some("dumb"), Some(""), None] {
+        let mut cmd = Command::new(bin());
+        cmd.arg("tui")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_remove("LKPR_PYTHON");
+        match term {
+            Some(t) => cmd.env("TERM", t),
+            None => cmd.env_remove("TERM"),
+        };
+        let o = cmd.output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "TERM={term:?}: {}", stderr(&o));
+        assert!(o.stdout.is_empty(), "TERM={term:?}: stdout not empty");
+        let err = stderr(&o);
+        assert!(
+            err.contains("interactive terminal") && err.contains("thermo-summary"),
+            "TERM={term:?}: {err}"
+        );
+    }
+    // `--json` is not a TUI mode; `--python` and `--log` only prefill the form.
+    let o = run(&["tui", "--json"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--json"), "{}", stderr(&o));
+}

@@ -12,6 +12,36 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### `lkpr-rs tui`: interactive terminal front end (UI-2)
+
+- New subcommand `lkpr-rs tui [--python PATH] [--log FILE] [--timeout SECONDS]`:
+  Setup → Check → Confirm → Running → Result/Error on one screen, driving the
+  same `exec --capabilities` and `run --events` backend commands as `doctor`
+  and `thermo-summary`. Each run sends a complete request with a fresh UUID
+  `request_id` and the Result screen shows only the snapshot that answers it
+  (a mismatch is `stale_snapshot`); lifecycle events from the backend's stderr
+  are listed with elapsed seconds (no percentage), other stderr lines are kept
+  as a bounded tail with control characters escaped. `c` or Ctrl-C cancels
+  through the backend (SIGINT) and shows the backend's own final state; `s`
+  writes the raw snapshot (and `<name>.stderr.txt` for the tail) to a new file
+  only. The Result report is the `thermo-summary` text; `--json` is rejected.
+- Without an interactive terminal on stdin and stdout, or with `TERM` unset or
+  `dumb`, `tui` exits 2 with a message pointing to `thermo-summary`. Raw mode
+  and the alternate screen are restored on quit (0), Ctrl-C (130), SIGTERM or
+  SIGHUP (1), a terminal that hung up (1, `terminal_error: the terminal hung
+  up`; detected with `poll(2)` before crossterm reads the dead tty, which would
+  spin forever) and panic; whatever is still in flight is cancelled through the
+  backend and waited for before the process leaves. `doctor` and
+  `thermo-summary` are unchanged (stderr inherited).
+- Confirm, Result and Error scroll with Up/Down and PgUp/PgDn; backend stderr
+  lines longer than the body are clipped; the event list (64) and the stderr
+  tail (200 lines) are bounded; a worker thread that panics is shown as
+  `internal_error` instead of hanging the screen; `s` refuses before writing
+  anything when `<name>.stderr.txt` already exists. Below 80x24 the notice
+  names Ctrl-C as the way out.
+- Dependencies added: `ratatui` 0.30.2, `crossterm` 0.29.0 (`rust-version`
+  stays 1.98). See `docs/agent/UI-2.md`.
+
 ### `lkpr-rs` stops stragglers that keep the backend's stdout open (REV-RS-3)
 
 - When the Python backend exits but a process in its group still holds the

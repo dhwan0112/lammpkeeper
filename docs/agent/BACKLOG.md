@@ -42,8 +42,9 @@ not available in this harness and are not claimed as executed.
 
 Detailed execution steps, requirements and completion gates:
 [`INTERFACE-ROADMAP.md`](INTERFACE-ROADMAP.md). ARCH-1, EXEC-1/2, AGENT-1 and
-UI-1 (PR #46) are merged. UI-2 and AGENT-2 remain unimplemented; the next item is
-the maintainer's choice (see the 2026-11-02 checkpoint under Suggested order).
+UI-1 (PR #46) and UI-2 (PR #89) are merged. AGENT-2 remains unimplemented; the
+next item is the maintainer's choice (see the 2026-11-02 checkpoint under
+Suggested order).
 
 | Item | Depends on | Done when |
 | --- | --- | --- |
@@ -51,7 +52,7 @@ the maintainer's choice (see the 2026-11-02 checkpoint under Suggested order).
 | EXEC-2 · P3 · Headless worker and local lifecycle · merged PR #30 | EXEC-1; six native-only skips audited and rerun **6/0/0** | Explicit environment, handshake, state logs, cancel/deadline/cleanup and bounded transport; 32 regressions. Full native **493/0/0**, NumPy **487/0/6** (all six pass native), pytest **493 passed**; installed-venv check passes. See `docs/agent/EXEC-2.md`. |
 | AGENT-1 · P3 · Portable workflow skill · merged PR #31 | EXEC-2 (merged PR #30) | Canonical Skill and Claude link; paired evaluations **12/12** vs baseline **7/12** (strict wording caveat in log); full verifier **487/0/6**, all six native PASS records checked. OpenCode discovery/load measured; Claude/Codex live untested. See `docs/agent/AGENT-1.md`. |
 | UI-1 · P3 · Additive Rust CLI · done (PR #46; Python native **589/0/0**, NumPy **580/0/9**; cargo 17/17) | EXEC-2 | Distinct executable and packaging plan preserve Python-owned `lkpr`; direct/backend/client contract parity and missing-environment diagnostics pass |
-| UI-2 · P3 · Rust TUI / interactive workflow · design record proposed 2026-11-04 (`docs/agent/UI-2.md`, awaiting approval; no code) | UI-1 | Shared load/configure/run/status/results/cancel operations; nonblocking progress and failure/cancellation behavior tested; Python CLI/API stay usable |
+| UI-2 · P3 · Rust TUI / interactive workflow · done (PR #89; cargo 38 unit + 20 CLI; Python runner 738/725 passed, the 1 failure is pre-existing REV-TEST-4) | UI-1 | `lkpr-rs tui` drives check → confirm → run → result → save and cancel against the real backend (PTY tests); progress is the backend's lifecycle events, no percentage; stale snapshots, forced failures and cancellation are tested in the reducer and with fake backends; the Result report equals `thermo-summary`'s; Python CLI/API unchanged. See `docs/agent/UI-2.md`. |
 | AGENT-2 · P3 · Optional MCP adapter | AGENT-1, EXEC-2 | Local stdio tools share backend schemas and lifecycle, report unsupported operations visibly and pass parity/error/artifact checks; optional dependencies and host evidence documented |
 
 ### Maintainer tooling and provenance (2026-10-31/11-01)
@@ -212,6 +213,7 @@ The P1 input-integrity/data-loss risks deserve attention before further generali
 | REV-PREP-8 | P3; found during REV-VERIFY-2, exclusive mkdir in generated job scripts | The generated job script's scratch/destination setup uses `mkdir` (no -p) as an exclusive claim. That is safe with GNU coreutils but not with uutils `mkdir` 0.8.0 (measured on the dev host: 2/30 three-way races reported success twice). After generated-script approval, either check that the target is new and empty after `mkdir`, or claim with noclobber, and test with a uutils shim. |
 | REV-PREP-6 | P3; prior review, nondefault API O2 endpoints | After generated-structure/protocol approval, validate all gas endpoints against initial wall/integration regions. Parent measured accepted bond=3/vacuum=3.1 placing one O outside every static integration group; standard default bond not implicated. |
 
+| REV-TEST-4 | P3; found during UI-2 verification, export test needs pandas | `test_stale_cache.test_unchanged_source_plot_and_export_still_work` fails on main `b59f50e` when pandas is not installed (`export csv needs pandas`) instead of skipping like the other pandas-dependent tests; measured in both runner modes on 2026-11-04. Done when the test skips visibly without pandas (or exports a format that needs none) and the full runner has no environment-caused failure. |
 | REV-TEST-3 · done (AUDIT-20261101 PR) | P2; Ctrl-C CLI test depends on inherited SIGINT disposition | `test_jobs.test_cli_ctrl_c_cancels_owned_job_and_emits_final_snapshot` timed out whenever the runner inherited SIGINT=SIG_IGN (verifier launched as a background job of a non-interactive shell): Python keeps the inherited ignore, so `lkpr run` never saw the signal. Production behaviour is correct (`nohup` semantics). The test now starts the CLI with SIG_DFL: before, 1/1 failures with the runner set to SIG_IGN; after, 0/5. See `docs/agent/AUDIT-20261101.md`. |
 | REV-EXEC-1 · done (PR #54) | P2; AUDIT-20261101, backend can forge cleanup failure | `LocalJob._finish` no longer infers a cleanup failure from the error code; only `_cleanup_child` records one. A backend `failed` envelope with code `cleanup_failed` keeps its response and leaves cleanup `complete` (fail → pass). Schema and codes unchanged. See `docs/agent/REV-EXEC-1.md`. |
 | REV-EXEC-2 · done (PR #58) | P2; AUDIT-20261101, CLI error after job start | An `lkpr run` error after the job started (e.g. an events write failure) now cancels the owned job through the same bounded Ctrl-C cleanup, reports the job's real snapshot (our cancellation carries `transport_error`) and exits 1; errors before submission keep `invalid_request`. Fail → pass regression; schema and codes unchanged. See `docs/agent/REV-EXEC-2.md`. |

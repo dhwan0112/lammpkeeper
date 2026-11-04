@@ -18,7 +18,7 @@ ARCH-1 설계 승인 [완료]
           ├─ AGENT-1 공통 Skill [완료: 호스트별 미검증 범위 별도]
           │   └─ AGENT-2 선택적 MCP [미착수]
           └─ UI-1 Rust CLI [완료: lkpr-rs doctor/thermo-summary]
-              └─ UI-2 Rust TUI [미착수]
+              └─ UI-2 Rust TUI [완료: lkpr-rs tui]
 ```
 
 공통 실행 계약이 제공하는 작업은 아직 `thermo.summary` v1 하나다. 모든 분석 기능의 서비스화가
@@ -32,7 +32,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
 | UI-1 | 구현·검증·머지 (`lkpr-rs`) | PR #46, `f752337`; [UI-1 개발로그](UI-1.md) | 새 backend operation 추가 시 확장, Linux x86_64 외 미검증 |
-| UI-2 | 설계 기록 제안(2026-11-04), 승인 대기 | 아래 8절, [UI-2 설계 기록](UI-2.md) | Rust TUI 전체(코드 미착수) |
+| UI-2 | 구현·검증·머지 (`lkpr-rs tui`) | PR #89; [UI-2 설계 기록·개발로그](UI-2.md) | 두 번째 backend operation 추가 시 확장, xterm 계열·Linux x86_64 외 미검증 |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
 ## 2. 요청 조건과 반영 위치
@@ -41,7 +41,7 @@ ARCH-1 설계 승인 [완료]
 | --- | --- | --- |
 | Python 호환성 필수 | Python API·NumPy·과학 패키지 생태계 유지; EXEC-1/2, 모든 UI | 실제 Python 실행 및 설치 wheel 검증 |
 | 기존 conda/venv 활용 | 명시 Python 경로, symlink 보존, 호환성 확인, 실패 후 환경 자동 변경 금지 | 실제 venv·공백 경로 검증; 모든 conda 조합을 검증한 것은 아님 |
-| Rust CLI 및 대화형 TUI | UI-1 → UI-2; 계산 커널은 Python 재사용 | CLI `lkpr-rs`(doctor, thermo-summary) 구현·머지, Linux x86_64만 실측; TUI 미착수 |
+| Rust CLI 및 대화형 TUI | UI-1 → UI-2; 계산 커널은 Python 재사용 | CLI `lkpr-rs`(doctor, thermo-summary)와 TUI(`lkpr-rs tui`) 구현·머지, Linux x86_64만 실측 |
 | Claude/Codex/OpenCode 연동 | AGENT-1 공통 Skill + 얇은 호스트 안내; AGENT-2 MCP | OpenCode 발견·명시적 로딩 확인; 나머지 실호스트 미검증 |
 | CLI·API·에이전트 결과 일치 | 동일 operation/schema/오류 계약과 직접 Python 기준값 대조 | 현재 thermo.summary 경로 검증 |
 | 주석·코멘팅 항상 유지 | 새/중요 변경 함수·클래스·테스트에 영문 설명, 비자명한 분기에 이유 기록 | AGENTS.md 상시 규칙; 신규 Python 정의 점검 기록 |
@@ -177,7 +177,7 @@ backend 종료 시 overflow 누락과 `--json` 출력 실패 시 exit 0 문제�
 - Python-only 설치·기존 lkpr·기존 imports가 그대로 작동한다.
 - 측정한 플랫폼만 지원으로 표기한다. Rust 설치가 Python core 필수 조건이 되지 않는다.
 
-## 8. UI-2 — Rust TUI / 대화형 로컬 워크플로 [설계 기록 제안: 2026-11-04, docs/agent/UI-2.md]
+## 8. UI-2 — Rust TUI / 대화형 로컬 워크플로 [구현 완료: 2026-11-04, PR #89, docs/agent/UI-2.md]
 
 **선행 조건:** UI-1의 실행 client 및 중단/정리 계약이 검증되어야 한다.
 
@@ -197,6 +197,13 @@ backend 종료 시 overflow 누락과 `--json` 출력 실패 시 exit 0 문제�
 잘못된 입력·중단된 작업에서 stale success가 없다. 이벤트에 없는 % 진행률을 만들지
 않는다. 터미널 복구·비차단 동작·단위/경고 표시를 자동/수동 검증으로 구분해 기록한다.
 첫 TUI의 완료는 전체 prep/post 기능 이식을 뜻하지 않는다.
+
+**완료 근거:** PR #89, [UI-2 개발로그](UI-2.md). `lkpr-rs tui`가 실제 backend에 대해
+check → confirm → run → result → save 경로와 FIFO로 막힌 backend의 cancel 경로를 PTY
+테스트로 통과했고, 결과 화면의 표는 `thermo-summary` 출력과 같은 줄이다. 진행률 %는 없고
+backend의 lifecycle 이벤트만 표시한다. 터미널 복구는 정상 종료·Ctrl-C·SIGTERM·비TTY를 자동
+PTY 테스트로 확인했고, panic 경로는 같은 복구 함수를 쓰지만 유발 테스트는 없다(미검증으로
+기록). 지원 범위는 Linux x86_64, xterm 계열 터미널, 80×24 이상으로 실측한 것만이다.
 
 ## 9. AGENT-1 / AGENT-2 — Skill과 MCP
 
