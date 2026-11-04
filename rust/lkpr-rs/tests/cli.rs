@@ -478,8 +478,8 @@ fn ctrl_c_works_while_the_backend_never_reads_a_large_request() {
 #[test]
 fn stdout_held_open_after_exit_is_reported_and_the_holder_stopped() {
     for (tag, holder) in [
-        ("term", "exec sleep 30"),
-        ("kill", "trap '' TERM; exec sleep 30"),
+        ("term", "exec sleep 20"),
+        ("kill", "trap '' TERM; exec sleep 20"),
     ] {
         let dir = tempdir(&format!("heldopen-{tag}"));
         let pid_file = dir.join("pid");
@@ -511,13 +511,15 @@ fn stdout_held_open_after_exit_is_reported_and_the_holder_stopped() {
         assert_eq!(o.status.code(), Some(1), "{tag}: {}", stderr(&o));
         assert!(
             stderr(&o).contains("backend_stdout_held_open")
-                && stderr(&o).contains("process group was stopped"),
+                && stderr(&o).contains("process group was signalled"),
             "{tag}: {}",
             stderr(&o)
         );
-        // STDOUT_CLOSE_WAIT (5 s) plus at most KILL_GRACE (2 s) for the TERM-ignoring holder.
-        assert!(elapsed < Duration::from_secs(12), "{tag}: {elapsed:?}");
+        // STDOUT_CLOSE_WAIT (5 s) plus at most KILL_GRACE (2 s) for the TERM-ignoring
+        // holder; a surviving holder keeps stderr open for its full 20 s instead.
+        assert!(elapsed < Duration::from_secs(15), "{tag}: {elapsed:?}");
         assert!(wait_gone(holder_pid), "{tag}: holder {holder_pid} survived");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

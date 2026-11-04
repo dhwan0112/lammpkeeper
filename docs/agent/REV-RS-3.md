@@ -33,7 +33,7 @@ blocked until the straggler exits, which the bounded report alone did not fix.
   unchanged.
 - The run is still a failure (exit 1); the message now reads
   `backend_stdout_held_open: the backend exited but another process kept its
-  output open; its process group was stopped and no result was read`.
+  output open; the backend's process group was signalled and no result was read`.
 - Docs: module header, `STDOUT_CLOSE_WAIT`, `Outcome::stdout_held_open`.
 
 ## Decisions
@@ -48,7 +48,13 @@ blocked until the straggler exits, which the bounded report alone did not fix.
   the backend broke the contract either way. Nothing in the Python backend
   produces this situation in normal operation.
 - Timing: at most `STDOUT_CLOSE_WAIT` + `KILL_GRACE` = 7 s after the backend
-  exits, versus 5 s before.
+  exits, versus 5 s before. A Ctrl-C during that wait is recorded but not
+  acted on, as before; the backend has already exited and the run fails
+  regardless (review finding, no change).
+- Out of scope: a holder that left the backend's process group or session
+  (`setsid`, Python's `start_new_session=True`) is not reachable by a group
+  signal; it stays reported as held open and keeps running. The message
+  therefore says the group was signalled, not that every holder was stopped.
 - `jobs.py` (the Python side) is consistent with this: `_cleanup` signals
   the job's group and `start_new_session=True` puts the LAMMPS child in its
   own session; the module docstring and the constants describe that
@@ -60,6 +66,10 @@ blocked until the straggler exits, which the bounded report alone did not fix.
 |---|---|
 | `cargo fmt`, `cargo clippy --offline --all-targets` | clean |
 | `cargo test --offline` | 6 unit + 19 integration passed, 0 failed |
-| `tests/cli.rs::stdout_held_open_after_exit_is_reported_and_the_holder_stopped` | passes in 12.06 s for both holders (`exec sleep 30`; `trap '' TERM; exec sleep 30`): exit 1, message contains `process group was stopped`, each holder gone; the holders also inherit stderr, so `wait_with_output` returning proves a pipeline consumer is unblocked |
+| `tests/cli.rs::stdout_held_open_after_exit_is_reported_and_the_holder_stopped` | passes in about 12 s for both holders (`exec sleep 20`; `trap '' TERM; exec sleep 20`): exit 1, message contains `process group was signalled`, elapsed under 15 s, each holder gone; the holders also inherit stderr, so `wait_with_output` returning proves a pipeline consumer is unblocked, and a surviving holder would make the elapsed time about 20 s |
 | Same fake against the `22d4ff5` binary | exit 1 after 5.03 s with the old message; holder `sleep 30` still alive (the survivor the old test did not check) |
+
+## Review round
+
+One `worker-readonly` review of the PR diff: four nits. Applied: the message and docs say the group was *signalled* (a holder outside the group is out of reach, noted above); the test holders sleep 20 s and the bound is 15 s so a regression fails fast instead of hanging on the inherited stderr; the test removes its temp dirs. Not applied: polling Ctrl-C during the post-exit wait (no effect on the outcome).
 | `HOME=$(mktemp -d) /usr/bin/python3 tests/run.py` module `test_rust_cli` | all PASS |

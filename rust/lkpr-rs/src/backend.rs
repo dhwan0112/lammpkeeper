@@ -155,6 +155,7 @@ fn terminate(child: &mut Child) -> Option<ExitStatus> {
 /// Stop the stragglers of a backend that already exited on its own: SIGTERM
 /// its group, wait up to a grace for the stdout pipe to close, then SIGKILL the
 /// group. The leader must still be unreaped so that its group id is reserved.
+/// A holder that left the group (`setsid`) is out of reach and stays reported.
 fn stop_group(pid: u32, reader: &mpsc::Receiver<Vec<u8>>) {
     signal_group(pid, libc::SIGTERM);
     let _ = reader.recv_timeout(KILL_GRACE);

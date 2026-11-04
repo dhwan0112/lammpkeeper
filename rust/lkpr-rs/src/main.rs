@@ -226,7 +226,7 @@ fn run_backend(
     if outcome.stdout_held_open {
         return Err(failure(
             "backend_stdout_held_open: the backend exited but another process kept its \
-             output open; its process group was stopped and no result was read",
+             output open; the backend's process group was signalled and no result was read",
         ));
     }
     match serde_json::from_slice::<Value>(&outcome.stdout) {

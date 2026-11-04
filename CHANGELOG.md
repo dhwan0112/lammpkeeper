@@ -18,7 +18,7 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   stdout pipe, `lkpr-rs` now stops that process group (SIGTERM, 2 s grace,
   SIGKILL) after the existing 5 s wait instead of leaving it running. The run
   still fails with `backend_stdout_held_open` (exit 1); the message now says
-  the process group was stopped. A straggler also held the inherited stderr
+  the process group was signalled. A straggler also held the inherited stderr
   open, which blocked any pipeline reading `lkpr-rs` output until it exited.
 
 ### `lkpr-rs` human mode survives closed pipes and escapes control characters (REV-RS-2)
