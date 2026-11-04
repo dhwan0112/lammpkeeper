@@ -280,6 +280,7 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
             'n_oxidized'   : np.array — Count of Fe atoms with q > q_thr
             'n_total_fe'   : np.array — Total Fe atom count per frame
             'frac_oxidized': np.array — Fraction of oxidized Fe atoms
+            'q_thr'        : float    — Charge cutoff (e) that defined "oxidized"
         Returns None if no charge column is found.
     """
     z_range = _range_param(z_range, 'z_range', 'Charge evolution')
@@ -331,7 +332,8 @@ def analyze_charge_evolution(frames, col_idx, dt_fs=0.25, z_range=None, q_thr=Q_
 
     return {'time': np.array(time), 'avg': np.array(avg),
             'max': np.array(mx), 'n_oxidized': n_ox,
-            'n_total_fe': n_fe, 'frac_oxidized': frac_ox}
+            'n_total_fe': n_fe, 'frac_oxidized': frac_ox,
+            'q_thr': float(q_thr)}
 
 
 def analyze_charge_z(frame, col_idx, z_bins=50, fe_type=1, o_type=2):
@@ -836,6 +838,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
         dict with keys:
             'time' : np.array — Time in picoseconds
             'or'   : np.array — Oxidation rate (0 to 1) per frame
+            'q_thr': float    — Charge cutoff (e) that defined "oxidized"
         Returns None if no charge column is available.
     """
     z_range = _range_param(z_range, 'z_range', 'Oxidation rate')
@@ -868,7 +871,7 @@ def compute_or(frames, col_idx, dt_fs=0.25, q_thr=Q_OXIDIZED_E, z_range=None,
         time.append(fr['timestep'] * dt_fs / 1000)
         vals.append(np.sum(qs > q_thr) / len(qs) if len(qs) > 0 else 0)
 
-    return {'time': np.array(time), 'or': np.array(vals)}
+    return {'time': np.array(time), 'or': np.array(vals), 'q_thr': float(q_thr)}
 
 
 def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
