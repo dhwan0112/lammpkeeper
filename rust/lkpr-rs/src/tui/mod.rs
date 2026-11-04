@@ -259,8 +259,12 @@ mod tests {
     /// A fresh (read, write) pipe pair.
     fn pipe() -> (libc::c_int, libc::c_int) {
         let mut fds = [0; 2];
-        // SAFETY: `fds` is a valid array of two ints for pipe(2) to fill.
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // O_CLOEXEC: other tests spawn child processes in parallel, and a
+        // plain pipe(2) end leaks into them. A child holding the write end
+        // keeps the pipe open after we close ours, so the hang-up below was
+        // intermittently reported as "data ready" instead.
+        // SAFETY: `fds` is a valid array of two ints for pipe2(2) to fill.
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
         (fds[0], fds[1])
     }
 
@@ -278,12 +282,28 @@ mod tests {
         assert_eq!(unsafe { libc::close(writer) }, 0);
         // The byte is still readable, but the far end is gone: report the
         // hang-up rather than letting crossterm spin on an endless EOF.
-        let err = input_ready(reader, short).unwrap_err();
+        // A child forked by a parallel test can still hold a copy of the
+        // write end between fork and exec (O_CLOEXEC closes it only at exec),
+        // so allow a short grace period before requiring the hang-up.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let err = loop {
+            match input_ready(reader, short) {
+                Err(err) => break err,
+                Ok(_) if std::time::Instant::now() < deadline => continue,
+                Ok(ready) => panic!("no hang-up after the writer closed (ready={ready})"),
+            }
+        };
         assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
         assert_eq!(err.to_string(), "the terminal hung up");
         // SAFETY: closing the read end we own.
         assert_eq!(unsafe { libc::close(reader) }, 0);
-        let err = input_ready(reader, short).unwrap_err();
+        // Probe POLLNVAL on a descriptor that is never open. Re-polling the
+        // just-closed `reader` number raced with parallel tests: the kernel
+        // hands out the lowest free fd, so another test's pipe could reuse it
+        // between close and poll (seen once in six full `cargo test` runs).
+        // Descriptors are allocated lowest-first, so 1 << 30 is never reached.
+        let never_open: libc::c_int = 1 << 30;
+        let err = input_ready(never_open, short).unwrap_err();
         assert_eq!(
             err.kind(),
             std::io::ErrorKind::ConnectionAborted,

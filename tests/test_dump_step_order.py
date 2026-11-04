@@ -55,6 +55,7 @@ def _access_paths(path):
 
 
 def test_repeated_and_backward_steps_warn_once_on_every_path():
+    """A backward step and a repeat give one warning per read; frames keep file order."""
     require_numpy()
     path = _write([0, 100, 50, 50, 200])
     try:
@@ -70,6 +71,7 @@ def test_repeated_and_backward_steps_warn_once_on_every_path():
 
 
 def test_duplicate_restart_frame_warns():
+    """A restart frame that repeats the previous step warns on stream and index."""
     require_numpy()
     from lammps_post.parsers import DumpReader
     path = _write([0, 100, 100, 200])
@@ -83,6 +85,7 @@ def test_duplicate_restart_frame_warns():
 
 
 def test_increasing_steps_do_not_warn():
+    """Strictly increasing steps, including a single frame, stay silent."""
     require_numpy()
     for steps in ([0, 10, 20], [5], [0, 1000, 1001]):
         path = _write(steps)
@@ -95,6 +98,7 @@ def test_increasing_steps_do_not_warn():
 
 
 def test_shell_load_reports_the_warning():
+    """`load dump` surfaces the step-order warning and keeps the frames as read."""
     require_numpy()
     from lammps_post.shell import LammpsPostShell
     path = _write([0, 100, 50])
@@ -105,5 +109,38 @@ def test_shell_load_reports_the_warning():
             _, texts = _order_warnings(lambda: shell.do_load(f'dump {shlex.quote(path)}'))
         assert len(texts) == 1 and 'step 50 follows step 100' in texts[0], texts
         assert [f['timestep'] for f in shell.state.dump_frames] == [0, 100, 50]
+    finally:
+        os.unlink(path)
+
+
+def test_reloading_the_same_dump_warns_again_in_the_shell():
+    """Each shell command re-arms warnings, so a reload repeats the provenance warnings.
+
+    Under Python's default filter a warning with the same text and location
+    is shown once per process: before, the second `load` of the same dump in a
+    session printed neither the step-order nor the heuristic-metadata warning.
+    The filter itself is left at its default here, as in a real session.
+    """
+    require_numpy()
+    from lammps_post.shell import LammpsPostShell
+    path = _write([0, 100, 50])
+    try:
+        shell = LammpsPostShell()
+        seen = []
+        with warnings.catch_warnings():
+            warnings.resetwarnings()
+            warnings.simplefilter('default')
+            old_show = warnings.showwarning
+            warnings.showwarning = lambda message, *a, **k: seen.append(str(message))
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    for _ in range(2):
+                        shell.onecmd(f'load dump {shlex.quote(path)}')
+                        shell.onecmd('unload dump')
+            finally:
+                warnings.showwarning = old_show
+        order = [m for m in seen if 'not strictly increasing' in m]
+        guessed = [m for m in seen if 'heuristic guesses' in m]
+        assert len(order) == 2 and len(guessed) == 2, seen
     finally:
         os.unlink(path)

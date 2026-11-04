@@ -98,6 +98,15 @@ UI-2 and the REV-RS fixes: 48 in `rust/lkpr-rs/src/tui/{app,client,mod,view}.rs`
 `src/backend.rs` 15, `src/main.rs` 34, `src/tui/app.rs` 54, `src/tui/client.rs` 25,
 `src/tui/mod.rs` 12, `src/tui/view.rs` 24, `tests/cli.rs` 30.
 
+### Review of PRs #97–#99 (2026-11-04)
+
+Measured on the review branch (base main `96df725`), devlog
+[`AUDIT-20261104-REVIEW.md`](AUDIT-20261104-REVIEW.md): **122 tracked Python files /
+1822 function and class definitions, 0 without a docstring** (before: 21 test
+definitions added by #97–#99 lacked one: 4 in `tests/test_dump_step_order.py`, 13 in
+`tests/test_dump_units_time.py`, 4 in `tests/test_z_range_prompt.py`). Rust: **197
+`fn`s in 8 files, 0 without a `//`/`///` comment**; per-file counts unchanged.
+
 Existing docstrings and comments in `lammps_post/` were read against the code
 they describe; the ones that had drifted were corrected (CLI mode list and
 preload order, `parse_cif`/`_lattice_image_offsets` error contracts, `parse_input`
