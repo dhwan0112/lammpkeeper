@@ -3,7 +3,9 @@
 //! forced-termination paths without needing Python or lammpkeeper. The real
 //! backend is exercised by `tests/test_rust_cli.py` in the Python suite.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -498,4 +500,48 @@ fn stdout_held_open_after_exit_is_reported_not_waited_forever() {
         stderr(&o)
     );
     assert!(start.elapsed() < Duration::from_secs(10));
+}
+
+/// A non-UTF-8 argument is a usage error (exit 2) that names the argument;
+/// before REV-RS-1 `std::env::args()` panicked (exit 101) on it.
+#[test]
+fn non_utf8_arguments_are_usage_errors() {
+    let o = Command::new(bin())
+        .arg("thermo-summary")
+        .arg("--log")
+        .arg(OsStr::from_bytes(b"run\xff.log"))
+        .arg("--python")
+        .arg("/nonexistent/lkpr-python")
+        .env_remove("LKPR_PYTHON")
+        .output()
+        .unwrap();
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(err.contains("argument 3 is not valid UTF-8"), "{err}");
+    assert!(err.contains("usage:"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+}
+
+/// A non-UTF-8 `LKPR_PYTHON` is named as such (exit 2); before REV-RS-1 it
+/// was reported as "no Python environment selected". An empty value still is.
+#[test]
+fn non_utf8_or_empty_lkpr_python_is_named() {
+    let o = Command::new(bin())
+        .arg("doctor")
+        .env("LKPR_PYTHON", OsStr::from_bytes(b"/opt/py\xff/bin/python"))
+        .output()
+        .unwrap();
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(err.contains("LKPR_PYTHON is not valid UTF-8"), "{err}");
+    assert!(!err.contains("no Python environment selected"), "{err}");
+
+    let o = Command::new(bin())
+        .arg("doctor")
+        .env("LKPR_PYTHON", "")
+        .output()
+        .unwrap();
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(err.contains("LKPR_PYTHON is empty"), "{err}");
 }

@@ -134,12 +134,46 @@ fn select_python(options: &Options) -> Result<String, Failure> {
     if let Some(python) = &options.python {
         return Ok(python.clone());
     }
-    match std::env::var("LKPR_PYTHON") {
-        Ok(value) if !value.is_empty() => Ok(value),
-        _ => Err(usage_error(
+    // `var_os`, not `var`: a non-UTF-8 value is named as such instead of being
+    // reported as "no environment selected" (REV-RS-1). The path must be UTF-8
+    // because it is echoed in messages and passed to the backend as text.
+    match std::env::var_os("LKPR_PYTHON") {
+        None => Err(usage_error(
             "no Python environment selected: pass --python PATH or set LKPR_PYTHON",
         )),
+        Some(value) => match value.into_string() {
+            Ok(path) if !path.is_empty() => Ok(path),
+            Ok(_) => Err(usage_error(
+                "no Python environment selected: LKPR_PYTHON is empty; \
+                 pass --python PATH or set LKPR_PYTHON",
+            )),
+            Err(raw) => Err(usage_error(format!(
+                "LKPR_PYTHON is not valid UTF-8: {:?}",
+                raw.to_string_lossy()
+            ))),
+        },
     }
+}
+
+/// Command-line arguments after the program name, as UTF-8.
+///
+/// `std::env::args()` panics (exit 101) on a non-UTF-8 argument; Linux paths
+/// are arbitrary bytes, so a `--log` or `--python` value can be one. Such an
+/// argument is a usage error (exit 2) naming its position (REV-RS-1).
+fn utf8_args() -> Result<Vec<String>, Failure> {
+    std::env::args_os()
+        .skip(1)
+        .enumerate()
+        .map(|(index, arg)| {
+            arg.into_string().map_err(|raw| {
+                usage_error(format!(
+                    "argument {} is not valid UTF-8: {:?}",
+                    index + 1,
+                    raw.to_string_lossy()
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Run one backend command and require a JSON object on stdout.
@@ -442,7 +476,10 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
 
 /// Parse arguments, install the Ctrl-C handler and run the chosen command.
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match utf8_args() {
+        Ok(args) => args,
+        Err(err) => return exit_with(err),
+    };
     match args.first().map(String::as_str) {
         Some("--help" | "-h") if args.len() == 1 => {
             println!("{USAGE}");
@@ -464,16 +501,19 @@ fn main() -> ExitCode {
     });
     match result {
         Ok(code) => ExitCode::from(code),
-        Err(err) => {
-            eprintln!("lkpr-rs: {}", err.message);
-            // A Ctrl-C that ended in a backend failure still reports interruption.
-            ExitCode::from(if backend::interrupted() && err.code == 1 {
-                130
-            } else {
-                err.code
-            })
-        }
+        Err(err) => exit_with(err),
     }
+}
+
+/// Report a failure on stderr and map it to the exit status.
+fn exit_with(err: Failure) -> ExitCode {
+    eprintln!("lkpr-rs: {}", err.message);
+    // A Ctrl-C that ended in a backend failure still reports interruption.
+    ExitCode::from(if backend::interrupted() && err.code == 1 {
+        130
+    } else {
+        err.code
+    })
 }
 
 #[cfg(test)]
