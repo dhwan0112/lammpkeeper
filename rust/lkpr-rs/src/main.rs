@@ -9,6 +9,8 @@
 mod backend;
 
 use serde_json::{json, Value};
+use std::ffi::OsString;
+use std::fmt::Display;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -20,6 +22,8 @@ usage: lkpr-rs doctor --python PATH [--json]
 
 The Python environment is required: --python PATH, or the LKPR_PYTHON
 environment variable. It must have the lammpkeeper package installed.
+Options, paths and LKPR_PYTHON must be valid UTF-8: they are echoed in
+messages and sent to the backend as text.
 
 doctor          check the Python backend, its versions and supported operations
 thermo-summary  thermo column statistics of a LAMMPS log (operation thermo.summary v1)
@@ -129,17 +133,59 @@ fn deadline_after(seconds: f64) -> Option<Instant> {
     Instant::now().checked_add(backend.checked_add(DEADLINE_SLACK)?)
 }
 
+/// How to select the Python environment, for the usage errors below.
+const SELECT_PYTHON_HINT: &str = "pass --python PATH or set LKPR_PYTHON";
+
 /// Explicit environment only: --python, then LKPR_PYTHON. No PATH guessing.
+/// An empty path from either source is a usage error, as is a non-UTF-8 one.
 fn select_python(options: &Options) -> Result<String, Failure> {
-    if let Some(python) = &options.python {
-        return Ok(python.clone());
+    let path = match &options.python {
+        Some(python) => python.clone(),
+        // `var_os`, not `var`: a non-UTF-8 value is named as such instead of
+        // being reported as "no environment selected" (REV-RS-1).
+        None => utf8(
+            std::env::var_os("LKPR_PYTHON").ok_or_else(|| {
+                usage_error(format!(
+                    "no Python environment selected: {SELECT_PYTHON_HINT}"
+                ))
+            })?,
+            "LKPR_PYTHON",
+        )?,
+    };
+    if path.is_empty() {
+        return Err(usage_error(format!(
+            "the Python environment path is empty: {SELECT_PYTHON_HINT}"
+        )));
     }
-    match std::env::var("LKPR_PYTHON") {
-        Ok(value) if !value.is_empty() => Ok(value),
-        _ => Err(usage_error(
-            "no Python environment selected: pass --python PATH or set LKPR_PYTHON",
-        )),
-    }
+    Ok(path)
+}
+
+/// `value` as a `String`, or a usage error naming `what` (for example
+/// "argument 3" or "LKPR_PYTHON"). `lkpr-rs` requires UTF-8 because every
+/// path is echoed in messages and sent to the backend as JSON text; the
+/// message says so and names a remedy that fits any argument, a command
+/// name as well as a path (REV-RS-1).
+fn utf8(value: OsString, what: impl Display) -> Result<String, Failure> {
+    value.into_string().map_err(|raw| {
+        usage_error(format!(
+            "{what} is not valid UTF-8: {:?}; lkpr-rs accepts only UTF-8 options, paths and \
+             LKPR_PYTHON (for a file, use a UTF-8 name or a symlink with one)",
+            raw.to_string_lossy()
+        ))
+    })
+}
+
+/// Command-line arguments after the program name, as UTF-8.
+///
+/// `std::env::args()` panics (exit 101) on a non-UTF-8 argument; Linux paths
+/// are arbitrary bytes, so a `--log` or `--python` value can be one. Such an
+/// argument is a usage error (exit 2) naming its position (REV-RS-1).
+fn utf8_args() -> Result<Vec<String>, Failure> {
+    std::env::args_os()
+        .skip(1)
+        .enumerate()
+        .map(|(index, arg)| utf8(arg, format!("argument {}", index + 1)))
+        .collect()
 }
 
 /// Run one backend command and require a JSON object on stdout.
@@ -442,7 +488,10 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
 
 /// Parse arguments, install the Ctrl-C handler and run the chosen command.
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match utf8_args() {
+        Ok(args) => args,
+        Err(err) => return exit_with(err),
+    };
     match args.first().map(String::as_str) {
         Some("--help" | "-h") if args.len() == 1 => {
             println!("{USAGE}");
@@ -464,16 +513,19 @@ fn main() -> ExitCode {
     });
     match result {
         Ok(code) => ExitCode::from(code),
-        Err(err) => {
-            eprintln!("lkpr-rs: {}", err.message);
-            // A Ctrl-C that ended in a backend failure still reports interruption.
-            ExitCode::from(if backend::interrupted() && err.code == 1 {
-                130
-            } else {
-                err.code
-            })
-        }
+        Err(err) => exit_with(err),
     }
+}
+
+/// Report a failure on stderr and map it to the exit status.
+fn exit_with(err: Failure) -> ExitCode {
+    eprintln!("lkpr-rs: {}", err.message);
+    // A Ctrl-C that ended in a backend failure still reports interruption.
+    ExitCode::from(if backend::interrupted() && err.code == 1 {
+        130
+    } else {
+        err.code
+    })
 }
 
 #[cfg(test)]
