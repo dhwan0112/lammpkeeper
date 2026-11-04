@@ -32,7 +32,7 @@ ARCH-1 설계 승인 [완료]
 | EXEC-2 | 구현·검증·머지 | PR #30, `07983bd` | 영속 작업·원격 실행은 범위 밖 |
 | AGENT-1 | 구현·검증·머지 | PR #31, `f473ff8` | Claude/Codex 실호스트 검증·자동 호출 평가 |
 | UI-1 | 구현·검증·머지 (`lkpr-rs`) | PR #46, `f752337`; [UI-1 개발로그](UI-1.md) | 새 backend operation 추가 시 확장, Linux x86_64 외 미검증 |
-| UI-2 | 미착수 | 아래 8절 | Rust TUI 전체 |
+| UI-2 | 설계 기록 제안(2026-11-04), 승인 대기 | 아래 8절, [UI-2 설계 기록](UI-2.md) | Rust TUI 전체(코드 미착수) |
 | AGENT-2 | 미착수 | 아래 9절 | MCP 어댑터 전체 |
 
 ## 2. 요청 조건과 반영 위치
@@ -177,7 +177,7 @@ backend 종료 시 overflow 누락과 `--json` 출력 실패 시 exit 0 문제�
 - Python-only 설치·기존 lkpr·기존 imports가 그대로 작동한다.
 - 측정한 플랫폼만 지원으로 표기한다. Rust 설치가 Python core 필수 조건이 되지 않는다.
 
-## 8. UI-2 — Rust TUI / 대화형 로컬 워크플로 [미착수]
+## 8. UI-2 — Rust TUI / 대화형 로컬 워크플로 [설계 기록 제안: 2026-11-04, docs/agent/UI-2.md]
 
 **선행 조건:** UI-1의 실행 client 및 중단/정리 계약이 검증되어야 한다.
 
