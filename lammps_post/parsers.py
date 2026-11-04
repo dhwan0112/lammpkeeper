@@ -142,6 +142,31 @@ _INDEX_RELEASE_BYTES = 32 * 1024 ** 2
 
 
 # One boundary token per axis in 'ITEM: BOX BOUNDS': a lo-face and a hi-face letter.
+# Atom-row separators both backends tokenize identically (REV-IO-10). The
+# native parser splits on ASCII whitespace; `str.split()` and `np.loadtxt`
+# split on Unicode whitespace, which also covers VT, FS-US, NBSP and the
+# Unicode spaces. A row using one of those passed the shared width check and
+# parsed differently per backend, so it is rejected before either backend runs.
+# LAMMPS itself writes single spaces only.
+_SEPARATORS = ' \t\n\r\x0c'
+_ODD_ASCII_SPACE = '\x0b\x1c\x1d\x1e\x1f'
+_FOREIGN_SPACE = re.compile(r'[^\S \t\n\r\x0c]')
+
+
+def _foreign_separator(text):
+    """Return (row_number, char) of the first whitespace outside _SEPARATORS, else None.
+
+    `str.isascii` and substring tests keep the common all-ASCII block on fast
+    C paths; the regex (its whitespace class is `str.isspace`) runs only on suspects.
+    """
+    if text.isascii() and not any(ch in text for ch in _ODD_ASCII_SPACE):
+        return None
+    match = _FOREIGN_SPACE.search(text)
+    if match is None:
+        return None
+    return text.count('\n', 0, match.start()) + 1, match.group()
+
+
 _BOUNDARY_TOKEN = re.compile(r'^[pfsm]{2}$')
 # One word of an input-script 'boundary' command: one letter (both faces) or two.
 _INPUT_BOUNDARY_WORD = re.compile(r'^[pfsm]{1,2}$')
@@ -641,7 +666,14 @@ class DumpReader:
         # Validate the complete supplied block before either backend: blank,
         # missing or surplus rows are errors, not silently skipped observations.
         n_numeric = len(self._numeric_pos)
-        lines = block.decode().splitlines()
+        text = block.decode()
+        foreign = _foreign_separator(text)
+        if foreign is not None:
+            number, char = foreign
+            raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: "
+                             f"row {number} contains U+{ord(char):04X} as a separator; only "
+                             f"space, tab, CR, LF and FF separate dump columns")
+        lines = text.splitlines()
         if len(lines) != natoms or any(not row.strip() for row in lines):
             raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "
                              f"expected {natoms} (truncated or surplus dump?)")

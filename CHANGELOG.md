@@ -12,6 +12,14 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Dump atom rows reject non-standard separators (REV-IO-10)
+
+- `DumpReader` raises `ValueError` (file, step, row, code point) when an atom
+  row is separated by anything other than space, tab, CR, LF or FF, for
+  example a no-break space or a vertical tab. Before, such a row passed the
+  width check and the native parser and the NumPy fallback returned different
+  columns without warning. Dumps written by LAMMPS are unaffected.
+
 ### Concurrent verifier runs keep separate evidence (REV-VERIFY-2)
 
 - Two `verify.sh` runs in the same second for the same commit and mode no

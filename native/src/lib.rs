@@ -56,7 +56,9 @@ fn parse(
 
     let mut rows = 0usize;
     // Split borrowed bytes on LF and ASCII whitespace; do not decode/copy entire
-    // rows. Python validates complete row counts before invoking this fast path.
+    // rows. Python validates complete row counts and rejects any separator
+    // outside space/tab/CR/LF/FF (REV-IO-10) before invoking this fast path, so
+    // this byte split tokenizes exactly as the NumPy reference does.
     for line in buf.split(|&b| b == b'\n').take(natoms) {
         let mut tokens = line
             .split(|b| b.is_ascii_whitespace())
