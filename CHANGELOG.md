@@ -12,6 +12,20 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Interactive RDF reference overlays use each curve's own pair (REV-PLOT-1)
+
+- `plot rdf` derived the reference element pair by splitting the first
+  selected cache key on `_`; cached keys are hyphenated (`rdf_O-O`), so the
+  overlay always fell back to Fe-O references and every selected curve shared
+  that one list, also on `plot redo rdf`. The pair is now read per curve from
+  its species label, its pair label or the key, with no default: curves whose
+  pair cannot be read warn and get no overlay. One reference menu lists the
+  built-in phases that contain any selected pair (tagged with the pairs they
+  serve when several are selected) or says that none does; a CIF/COD crystal
+  serves every pair. References are computed per curve for its own pair and
+  saved per cache key, so a redo replays the right references on each curve.
+  No change to the computed RDF data or output file names.
+
 ### Stale-cache export test skips without pandas (REV-TEST-4)
 
 - `tests/test_stale_cache.py`: the unchanged-source scenario is now two tests.
