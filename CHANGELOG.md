@@ -12,6 +12,22 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Review of the 2026-11-04 fixes (AUDIT-20261104-REVIEW)
+
+- Dump step-order and heuristic-metadata warnings are shown on every shell
+  command that triggers them, not only the first time in a Python session
+  (reloading the same dump warns again). Caller warning filters still apply.
+- The z-focus prompt of the other spatial interactive plots (`charge_z`,
+  `oar`, `penetration`, `penetration_trend`, `dissociation`) accepts the
+  same signed range forms as REV-UI-6; a malformed answer keeps the current
+  focus and says so.
+- A blank line between `ITEM: UNITS`/`ITEM: TIME` and its value raises on the
+  indexed and lazy paths as it already did on the streaming path.
+- `help` lists the z-range forms and every `set figsize` preset; docstrings
+  describe the UNITS/TIME errors and the step-order warning.
+- Two intermittent `lkpr-rs` unit-test failures fixed (pipe fds inherited by
+  parallel tests; "Text file busy" on the fake backend).
+
 ### z-range prompts parse signed ranges and reject typos (REV-UI-6)
 
 - The `plot pressure` slab prompt and the `plot density|structure|snapshot`

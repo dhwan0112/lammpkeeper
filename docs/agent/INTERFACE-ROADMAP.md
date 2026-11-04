@@ -1,6 +1,6 @@
 # 상세 실행 로드맵 — Python 기반 · Rust CLI/TUI · 에이전트 연동
 
-작성일: 2026-10-30. 최종 갱신: 2026-11-04, 기준 코드 `main` `faf078a`(PR #95).
+작성일: 2026-10-30. 최종 갱신: 2026-11-04, 기준 코드 `main` `96df725`(PR #99).
 설계 근거: [승인된 ADR-0004](../adr/0004-rust-frontends-python-execution-agent-access.md).
 이 문서는 승인된 방향의 구현 순서와 검증 기준을 구체화한다. 새로운 패키지
 이동, 과학 계산 변경, 기존 명령 교체를 승인하는 문서는 아니다.
@@ -256,9 +256,9 @@ Python-only 설치에 MCP 의존성이 들어오지 않는다. artifact 생산 �
 5. 직접 Python과 각 공개 client의 일치 및 실패/취소 검증 후 순차 공개한다.
 
 charge 관련 수정 PR #26/#27은 2026-11-01에 충돌 해결·재검증 후 머지됐다.
-리뷰 표 기준 2026-11-04 현재 **49개 완료, 9개 미해결**이다. 새 operation을 공개할 때는
+리뷰 표 기준 2026-11-04 현재 **53개 완료, 9개 미해결**이다(PR #100 포함). 새 operation을 공개할 때는
 그 분석에 관련된 미해결 REV 항목(예: RDF 참조는 REV-REF-5, 배치 플롯은 REV-UI-5)과
-`AUDIT-20261104.md`의 미분류 P2 발견(A-1, B-1, B-2, B-R1, C-1, C-2, D-1, D-2)을 먼저 확인한다. GEN-2 metadata는 완료됐고, GEN-4 domain 분리 및
+`AUDIT-20261104.md`의 미분류 P2 발견(B-1, B-2, C-2, D-1, D-2)을 먼저 확인한다. GEN-2 metadata는 완료됐고, GEN-4 domain 분리 및
 GEN-8 비Fe 참조계는 기존 별도 로드맵을 유지한다. GEN-9 전면 이동을 UI 작업의
 선행 조건으로 만들지 않는다.
 
@@ -315,13 +315,15 @@ AUDIT-20261104(#82, 문서)와 그 E 항목 REV-IO-10(#83·#85)·REV-RS-1/2/3(#8
 #89 구현), REV-TEST-4(#90), REV-PLOT-1/2(#91·#92), REV-REF-3/2/4(#93–#95)를 머지했다.
 2026-11-04의 주석·로드맵 감사(#96, AUDIT-20261104-DOCS)는 코드 동작을 바꾸지 않았다(사용자
 노출 문자열 2건만 변경: penetration_trend 범례 "√t guide", `help`의 plot 항목). 그 PR의
-full verifier: native 769/0/26, NumPy 756/0/39.
+full verifier: native 769/0/26, NumPy 756/0/39. 이어서 AUDIT-20261104의 A-1을 REV-IO-11(#97),
+B-R1을 REV-IO-12(#98), C-1을 REV-UI-6(#99)로 고쳤고, 세 PR의 검수 결과(낮은 등급 3건,
+Rust 테스트 flaky 2건)를 AUDIT-20261104-REVIEW(#100)에서 고쳤다.
 
 **현재 상태(2026-11-04):** 열린 PR 없음. 다음 순서는 사용자가 정한다. 후보:
 
 1. **무결성 P2/P3(승인 불필요):** REV-UI-5(배치 플롯 recipe 저장), REV-OPS-1 part 2,
    REV-TEST-1(oracle 범위 근거), REV-REF-5(CIF 대소문자·seam), 그리고 `AUDIT-20261104.md`의
-   미분류 P2 발견 A-1·B-1·B-2·B-R1·C-1·C-2(BACKLOG 행을 추가한 뒤 진행). 무결성 우선 원칙상 기본 추천.
+   미분류 P2 발견 B-1·B-2·C-2(BACKLOG 행을 추가한 뒤 진행). 무결성 우선 원칙상 기본 추천.
 2. **무결성 P2/P3(사람 승인 필요, AGENTS.md §8):** REV-PREP-2/3/5/6/8과 AUDIT-20261104 D-1·D-2.
    생성 input·구조·job script 변경이 따르므로 승인 후 진행한다.
 3. **GEN-4:** Fe/O 전용 분석을 domain pack으로 분리. 범용화의 다음 단계.
@@ -342,6 +344,12 @@ AUDIT-20261104-DOCS). 코드 설명과 실제 동작이 어긋난 docstring·주
 코드·리뷰 표 집계(25/26 → 49/9)·UI-2 상태·다음 실행 순서, MIGRATION.md의 UI-2 상태, README의
 GEN-2 문구, BACKLOG의 REV-PLOT-2 행 형식과 표 안의 빈 줄을 실제 상태로 고치고 2026-11-04
 checkpoint를 추가했다. 코드 동작은 바꾸지 않았다.
+
+2026-11-04(2차): PR #97–#99 검수와 로깅·문서 정비(PR #100, AUDIT-20261104-REVIEW). 새 테스트
+definition 21개에 docstring을 채우고(122개 파일 / 1822개 정의, 누락 0; Rust fn 197개, 누락 0),
+`DumpReader`·`parse_dump`·`index`·`load` docstring에 UNITS/TIME 오류와 timestep 순서 경고를,
+`help`에 z-range 입력 형식과 `set figsize` preset 전체를 반영했다. 이 문서의 기준 코드·집계·미분류
+목록과 AUDIT 표의 수정 상태를 갱신했다.
 
 2026-11-02: 사용자 요청으로 원격 변경을 모두 받아오고(`a974563` → `196f597`, PR #33–#61),
 머지 완료·대체된 원격 브랜치 61개와 로컬 브랜치 10개를 삭제했다. `fix/hpc-1-job-script-safety`는

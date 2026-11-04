@@ -64,3 +64,9 @@ import; `-5-80` gives `slab_z_range None`, the default offered is
 
 Full runner: native 795 passed / 0 failed / 26 skipped; NumPy (`LKPR_NO_NATIVE=1`)
 782 / 0 / 39 (main: 786/0/26 and 773/0/39; +9 each).
+
+## Follow-up
+
+The review in AUDIT-20261104-REVIEW (PR #100) found that `_iplot_common_opts` still parsed its
+z-focus answer by hand; it now uses `_parse_z_range` too (a typo keeps the current focus with a
+message, since those options are optional).

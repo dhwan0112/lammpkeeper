@@ -79,6 +79,7 @@ def _all_paths_raise(path, needle):
 
 
 def test_units_and_time_items_load_identically_on_every_path():
+    """ITEM: UNITS and ITEM: TIME give the same units and times on all read paths."""
     require_numpy()
     import numpy as np
     from lammps_post.parsers import DumpReader, LazyFrames, parse_dump
@@ -104,6 +105,7 @@ def test_units_and_time_items_load_identically_on_every_path():
 
 
 def test_frames_without_time_keep_the_old_key_set():
+    """Without ITEM: TIME, frames carry no `time` key, as before."""
     require_numpy()
     import numpy as np
     from lammps_post.parsers import DumpReader
@@ -121,6 +123,7 @@ def test_frames_without_time_keep_the_old_key_set():
 
 
 def test_appended_dump_repeats_its_units_item():
+    """A repeated, matching ITEM: UNITS from an appended dump is accepted."""
     # Dump::openfile resets unit_count, so each reopen writes ITEM: UNITS again.
     require_numpy()
     path = _write(_frame(0, 0.0, 'real') + _frame(10, 5.0)
@@ -134,6 +137,7 @@ def test_appended_dump_repeats_its_units_item():
 
 
 def test_crlf_dump_with_units_and_time():
+    """CRLF line endings do not affect UNITS/TIME parsing."""
     require_numpy()
     from lammps_post.parsers import DumpReader
     path = _write(_frame(0, 0.5, 'metal', crlf=True) + _frame(10, 1.5, crlf=True))
@@ -146,6 +150,7 @@ def test_crlf_dump_with_units_and_time():
 
 
 def test_box_model_frames_carry_time_with_cell():
+    """Box-model frames keep `time` next to `cell` and `tilt`."""
     require_numpy()
     path = _write(_frame(0, 0.0, 'metal') + _frame(10, 0.01))
     try:
@@ -157,6 +162,7 @@ def test_box_model_frames_carry_time_with_cell():
 
 
 def test_inconsistent_items_raise_on_every_path():
+    """Changed units, late units and bad time values raise the same error on all paths."""
     require_numpy()
     cases = [
         (_frame(0, 0.0, 'metal') + _frame(10, 0.01, 'real'), 'ITEM: UNITS changes before frame 1'),
@@ -184,6 +190,7 @@ def test_inconsistent_items_raise_on_every_path():
 
 
 def test_blank_lines_between_items_agree_on_every_path():
+    """Blank lines between preamble items parse the same on all paths."""
     require_numpy()
     second = _frame(10, 1.5, 'metal').replace('ITEM: TIME', '\nITEM: TIME').replace(
         '1.5\nITEM: TIMESTEP', '1.5\n\nITEM: TIMESTEP')
@@ -202,6 +209,7 @@ def test_blank_lines_between_items_agree_on_every_path():
 
 
 def test_repeated_and_trailing_items_raise_on_every_path():
+    """Duplicate items and items dangling at end of file raise on all paths."""
     require_numpy()
     cases = [
         (_frame(0, 0.0, 'metal') + 'ITEM: UNITS\nmetal\n' + _frame(10, 1.0, 'metal'),
@@ -218,6 +226,7 @@ def test_repeated_and_trailing_items_raise_on_every_path():
 
 
 def test_units_item_without_timestep_is_still_invalid():
+    """ITEM: UNITS alone does not make a header without ITEM: TIMESTEP valid."""
     require_numpy()
     from lammps_post.parsers import DumpReader
     path = _write('ITEM: UNITS\nmetal\nITEM: ATOMS id type x y z\n' + ROWS)
@@ -269,6 +278,7 @@ def _write_input(tmp, units=None, timestep=None, name='in.run'):
 
 
 def test_session_takes_dump_units_as_explicit_evidence():
+    """Dump ITEM: UNITS becomes explicit session units, converts the input timestep and clears on unload."""
     require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         dump = os.path.join(tmp, 'run.dump')
@@ -289,6 +299,7 @@ def test_session_takes_dump_units_as_explicit_evidence():
 
 
 def test_dump_units_conflicting_with_input_units_roll_back():
+    """Dump units that contradict input units fail the load and roll it back, in either order."""
     require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         dump = os.path.join(tmp, 'run.dump')
@@ -318,6 +329,7 @@ def test_dump_units_conflicting_with_input_units_roll_back():
 
 
 def test_guessed_dt_is_dropped_when_dump_units_contradict_the_guess():
+    """A heuristic dt guess is dropped when dump units say otherwise."""
     require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         for units in ('metal', 'real', 'lj'):
@@ -338,6 +350,7 @@ def test_guessed_dt_is_dropped_when_dump_units_contradict_the_guess():
 
 
 def test_dump_units_without_fs_conversion_leave_dt_unresolved():
+    """Units with no fs conversion (lj) leave dt unresolved instead of guessing."""
     require_numpy()
     with tempfile.TemporaryDirectory() as tmp:
         dump = os.path.join(tmp, 'run.dump')
@@ -349,3 +362,21 @@ def test_dump_units_without_fs_conversion_leave_dt_unresolved():
         assert md.units.value == 'lj' and md.units.status == 'explicit'
         assert md.dt_fs.value is None and md.dt_fs.status == 'unresolved', md.dt_fs
         assert 'no supported femtosecond conversion' in md.dt_fs.note, md.dt_fs.note
+
+
+def test_blank_line_between_item_and_value_raises_on_both_paths():
+    """A blank line after ITEM: UNITS/TIME is rejected by the index path too.
+
+    The streaming path reads the blank line as the value. The index path used
+    to stop its walk-back there, leaving the lines inside the previous frame's
+    atom block, so the error surfaced only when that frame was read.
+    """
+    require_numpy()
+    for item, value in (('UNITS', 'real'), ('TIME', '1.5')):
+        bad = f'ITEM: {item}\n\n{value}\n'
+        text = _frame(0, units='real' if item == 'UNITS' else None) + bad + _frame(100)
+        path = _write(text)
+        try:
+            _all_paths_raise(path, f'ITEM: {item}')
+        finally:
+            os.unlink(path)

@@ -101,7 +101,8 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
 
     All frames are held in memory; iterate a DumpReader instead to process
     one frame at a time. The unit style of an 'ITEM: UNITS' item is not
-    returned here; it is `DumpReader(filepath).units`.
+    returned here; it is `DumpReader(filepath).units`. UNITS/TIME errors and
+    the non-increasing-timestep RuntimeWarning are DumpReader's.
 
     Returns:
         frames:  list[dict] — One dict per frame with keys:
@@ -111,7 +112,7 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
                                           (ps for metal, fs for real); present
                                           only for frames that carry the item
                    'natoms'   (int)     — Number of atoms in this frame
-                    'box'      (ndarray) — Physical bounds, shape (3, 2); in
+                   'box'      (ndarray) — Physical bounds, shape (3, 2); in
                                           Box-aware mode, 'cell' and 'tilt'
                                           retain the complete restricted cell
                    'atoms'    (ndarray) — Shape (N, n_cols): all numeric atom data
@@ -349,8 +350,12 @@ class DumpReader:
                     every frame; accept restricted-triclinic cells only with
                     complete literal Cartesian x, y, z in the raw layout.
 
-    Raises ValueError on a malformed or truncated atom block, or when a later
-    frame changes the column layout.
+    Raises ValueError on a malformed or truncated atom block, when a later
+    frame changes the column layout, or on an inconsistent UNITS/TIME
+    preamble (units that change or first appear after frame 0, a duplicate
+    item, a non-finite or non-numeric time, an item dangling at end of file).
+    Emits one RuntimeWarning per read when a timestep does not increase
+    (restart overlap or out-of-order frames); frames keep file order.
     """
 
     # Snapshot source identity and fix the retained column layout for this reader.
@@ -488,7 +493,9 @@ class DumpReader:
         them as the streaming path does, never before `floor` (the current atom
         block's start, or 0). Returns (offset where the items start, time or
         None); `pos` itself when there are none. A repeated item raises as a
-        duplicate, and the unit style is checked as in the streaming path.
+        duplicate, and the unit style is checked as in the streaming path. A
+        blank line between an item and its value raises the same "invalid
+        value" error the streaming path gives.
         """
         end = pos
         time = None
@@ -503,6 +510,21 @@ class DumpReader:
             value = _line_before(mm, floor, probe)
             key = None if value is None else _line_before(mm, floor, value[0])
             if key is None:
+                break
+            if not key[1].strip():
+                # A blank line between an item and its value: the streaming
+                # path reads that blank line as the value and rejects it, so
+                # raise the same error here rather than leaving the lines in
+                # the previous frame's atom block (where they would fail only
+                # when that frame is read).
+                above = key
+                while above is not None and not above[1].strip():
+                    above = _line_before(mm, floor, above[0])
+                name = None if above is None else above[1].decode().strip()
+                if name == _UNITS_ITEM:
+                    self._accept_units('', frame)
+                elif name == _TIME_ITEM:
+                    self._parse_time('', frame)
                 break
             name = key[1].decode().strip()
             if name not in _PREAMBLE_ITEMS:
@@ -681,6 +703,8 @@ class DumpReader:
         which read_frame() uses for random access.
         The index is bound to this unchanged source and header interpretation;
         compatible readers may share it despite different projections/dtypes.
+        UNITS/TIME preamble errors raise ValueError exactly as iteration does,
+        and a non-increasing timestep emits the same single RuntimeWarning.
         """
         # Index every source frame; stride/max_frames belong to the later view.
         # This validates headers, not atom payloads: malformed rows fail on load.

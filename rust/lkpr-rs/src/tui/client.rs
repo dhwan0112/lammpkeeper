@@ -317,7 +317,6 @@ fn write_new(path: &str, bytes: &[u8], newline: bool) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
@@ -421,10 +420,25 @@ mod tests {
 
     /// Write an executable bash script that stands in for the Python backend;
     /// returns its path.
+    ///
+    /// The executable is written by a separate `install` process, not by this
+    /// test process. A write fd opened here is inherited by any child that a
+    /// parallel test forks before its exec, and while that copy is open
+    /// running the script fails with ETXTBSY ("Text file busy"), which made
+    /// the fake-backend tests fail intermittently. `install` opens and closes
+    /// the file in its own process, where no test thread can inherit it.
     fn fake(dir: &Path, body: &str) -> String {
+        let source = dir.join("fake python.src");
+        fs::write(&source, format!("#!/bin/bash\n{body}\n")).unwrap();
         let path = dir.join("fake python");
-        fs::write(&path, format!("#!/bin/bash\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("install")
+            .arg("-m")
+            .arg("755")
+            .arg(&source)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "install failed: {status}");
         path.to_str().unwrap().to_string()
     }
 

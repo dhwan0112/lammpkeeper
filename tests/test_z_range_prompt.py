@@ -4,6 +4,8 @@ Before REV-UI-6 the slab and z-focus prompts split on the first '-' under
 ``except ValueError: pass``: a negative lower bound, ``0:80`` or ``0 80`` was
 dropped without a message and the pressure recipe saved ``slab_z_range None``.
 """
+import contextlib
+import io
 import shlex
 import tempfile
 from pathlib import Path
@@ -59,6 +61,7 @@ def test_pressure_default_from_small_or_negative_surface():
 
 
 def _pressure_shell(root):
+    """Return a shell with a loaded dump and a minimal pressure log."""
     _dump(root / 'traj.dump')
     shell = _shell(root)
     _quiet(lambda: shell.do_load(f"dump {shlex.quote(str(root / 'traj.dump'))}"))
@@ -76,6 +79,7 @@ def _interactive(answer):
 
 
 def _run_pressure(shell, answer):
+    """Run the pressure prompt with *answer* and return the mocked plot call."""
     p1, p2 = _interactive(answer)
     with p1, p2, patch.object(shell_module, 'plot_pressure') as plot:
         _quiet(lambda: shell._iplot_pressure([]))
@@ -132,6 +136,7 @@ def test_snapshot_and_structure_z_focus_accept_negative_lower_bound():
         for method, backend in (('_iplot_snapshot', 'plot_snapshot'),
                                 ('_iplot_structure', 'plot_structure')):
             def answer(prompt, default):
+                """Answer the focus prompt with a signed range; default elsewhere."""
                 return '-10:30' if 'focus' in prompt else default
             p1, p2 = _interactive(answer)
             with p1, p2, patch.object(shell_module, backend) as plot:
@@ -139,6 +144,7 @@ def test_snapshot_and_structure_z_focus_accept_negative_lower_bound():
             assert plot.call_args.kwargs['z_focus'] == (-10, 30), method
 
             def bad(prompt, default):
+                """Answer the focus prompt with a malformed range; default elsewhere."""
                 return '0..30' if 'focus' in prompt else default
             p1, p2 = _interactive(bad)
             with p1, p2, patch.object(shell_module, backend) as plot:
@@ -149,3 +155,34 @@ def test_snapshot_and_structure_z_focus_accept_negative_lower_bound():
                 else:
                     raise AssertionError(f'{method} accepted a typo')
             assert not plot.called, method
+
+
+
+def _common_opts(shell, answer):
+    """Return (opts, printed text) of `_iplot_common_opts('charge_z')` answered by `answer`."""
+    p1, p2 = _interactive(answer)
+    out = io.StringIO()
+    with p1, p2, contextlib.redirect_stdout(out):
+        opts = shell._iplot_common_opts('charge_z')
+    return opts, out.getvalue()
+
+
+def test_common_opts_z_focus_parses_signed_ranges_and_warns_on_typos():
+    """Common-option plots (charge_z, oar, penetration, ...) share the parser.
+
+    Before, this prompt accepted only lo:hi and lo,hi: '-5-80' or '0 80' was
+    dropped silently. Its optional edits still keep the current crop on a
+    typo, but now print why.
+    """
+    with tempfile.TemporaryDirectory(prefix='lk-zrange-') as temp:
+        shell = _pressure_shell(Path(temp))
+        for text, want, warned in (('-5-80', (-5, 80), False), ('0 80', (0, 80), False),
+                                   ('full', None, False), ('0..80', (1.0, 9.0), True)):
+            shell.state.plot_recipes['charge_z'] = {'z_focus': (1.0, 9.0)}
+            opts, printed = _common_opts(
+                shell, lambda prompt, default, t=text: t if 'focus' in prompt else default)
+            assert opts['z_focus'] == want, (text, opts)
+            assert ('keeping the current z-focus' in printed) is warned, (text, printed)
+        shell.state.plot_recipes['charge_z'] = {'z_focus': None}
+        opts, printed = _common_opts(shell, lambda prompt, default: default)
+        assert opts['z_focus'] is None and 'keeping' not in printed, printed

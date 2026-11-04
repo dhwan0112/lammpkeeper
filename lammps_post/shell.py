@@ -201,10 +201,18 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         Exception. last_command_ok describes only this call; command_failures
         is cumulative so a later success cannot mask a batch failure. Keyboard
         interrupts and SystemExit are not swallowed here.
+
+        Each command runs inside `warnings.catch_warnings()`. Entering it
+        invalidates Python's once-per-location warning registry without
+        changing any filter, so a provenance warning (heuristic dump metadata,
+        non-increasing timesteps, ...) is shown again when the same file is
+        reloaded later in the session instead of being suppressed as already
+        seen. Caller filters ('error', 'ignore', -W) still apply.
         """
         self.last_command_ok = True
         try:
-            return super().onecmd(line)
+            with warnings.catch_warnings():
+                return super().onecmd(line)
         except Exception as exc:
             self.last_command_ok = False
             self.command_failures = getattr(self, 'command_failures', 0) + 1
@@ -551,6 +559,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         A manifest explicitly adds species groups/provenance; unresolved group
         IDs remain pending until typed sources arrive. No sidecar is discovered
         automatically. Comma-separated loads commit one source at a time.
+        A failing source (for example dump ITEM: UNITS that contradict the
+        input's `units`) restores the state from before that source.
         """
         if ',' in arg:
             for segment in (part.strip() for part in arg.split(',')):
@@ -601,6 +611,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         Each branch publishes its parsed source and clears derived results.
         Dump metadata starts from detection, then any loaded input overrides it;
+        a dump 'ITEM: UNITS' item is explicit unit evidence that must agree with
+        an input's `units` (a conflict raises ValueError and do_load rolls back).
+        Non-increasing dump timesteps warn once per load (RuntimeWarning).
         log thermo metadata remains attached to the log, not copied into ff_info.
         Loading is not a transaction across comma-separated files: an earlier
         successful segment remains loaded if a later segment raises.
@@ -2744,7 +2757,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         Recipe keys normalize spaces/hyphens to underscores. z_focus is in
         Angstrom and figsize in inches; the actual line-width key is ``lw``.
-        Invalid optional numeric edits retain their previous values. Saving
+        Invalid optional numeric edits retain their previous values; the
+        z-focus range is parsed by `_parse_z_range` and a malformed answer
+        prints a warning before keeping the current crop. Saving
         these preferences does not invalidate any numerical analysis cache.
         Nonspatial time curves neither compute nor offer a z-focus selection.
         """
@@ -2786,22 +2801,15 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             if ans is None:
                 return None
             ans = ans.strip().lower()
-            if ans in ('full', 'none', 'all', ''):
+            if ans in ('full', 'full range', 'none', 'all', ''):
                 opts['z_focus'] = None
-            elif ':' in ans:
+            else:
                 try:
-                    lo, hi = ans.split(':', 1)
-                    opts['z_focus'] = (float(lo), float(hi))
-                except ValueError:
+                    opts['z_focus'] = _parse_z_range(ans, 'z-axis focus range')
+                except ValueError as exc:
                     # Optional display edits retain the existing crop on malformed
-                    # input; this is not scientific-data validation or cache repair.
-                    pass
-            elif ',' in ans:
-                try:
-                    lo, hi = ans.split(',', 1)
-                    opts['z_focus'] = (float(lo), float(hi))
-                except ValueError:
-                    pass
+                    # input (this is not scientific-data validation), but say so.
+                    print(C.warn(f"  {exc}; keeping the current z-focus"))
 
         # Line width
         ans = self._ask(f"Line width", str(opts['lw']))
@@ -4319,6 +4327,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
   plot all                                  All applicable plots (log/structure/snapshots
                                             plus cached analyses)
   plot redo|edit <type>, plot recipes       Re-run / edit / list plot recipes
+  z-range prompts accept lo:hi (also lo,hi / lo hi / lo-hi; signed; 'none'/'full')
 
 {C.bold('EXPORT')}
   export csv <analysis> [filename]          Export to CSV
@@ -4339,7 +4348,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
   set fontsize <int>                        Plot font size (default: 11)
   set grid on|off                           Toggle grid lines
   set grid_alpha <float>                    Grid transparency 0-1
-  set figsize <W> <H> | single_col | double_col | 1.5col  Figure size
+  set figsize <W> <H> | <preset> | reset     Figure size; presets: single_col
+                                            double_col 1.5col slide16x9 slide4x3 a4
   set theme default|publication|presentation  Plot theme preset
   set save_format png|pdf|svg|both           Output file format
   set pressure_unit bar|gpa                  Pressure display unit
