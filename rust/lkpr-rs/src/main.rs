@@ -258,9 +258,11 @@ fn text(value: &Value) -> String {
 
 /// One line of text with control characters made visible (REV-RS-2): `\n`,
 /// `\r` and `\t` by name, every other control character (C0, DEL, C1) as
-/// `\u{..}`. Backend strings (messages, warnings, paths, column names)
-/// reach the terminal only through this in human mode; `--json` is the
-/// backend's bytes unchanged.
+/// `\u{..}`. Every backend string in a human-mode stdout report (messages,
+/// warnings, paths, column names) passes through this. Not covered: `--json`
+/// (the backend's bytes unchanged), the backend's inherited stderr, and the
+/// user's own `--python`, `--log` and `LKPR_PYTHON` values echoed in
+/// `exit_with` messages.
 fn visible(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -388,10 +390,11 @@ fn error_text(error: &Value) -> String {
     format!("{}: {}", text(&error["code"]), text(&error["message"]))
 }
 
-/// Write backend stdout unchanged (plus a newline if it lacked one).
+/// Write bytes to stdout unchanged, adding a trailing newline if there is
+/// none: backend `--json` output, human-mode reports, usage and version text.
 ///
-/// A write failure (for example a closed pipe) is a failure: machine output
-/// that was not delivered must not exit 0.
+/// A write failure (for example a closed pipe or a full disk) is a failure:
+/// output that was not delivered must not exit 0.
 fn print_raw(bytes: &[u8]) -> Result<(), Failure> {
     let mut out = std::io::stdout().lock();
     let mut write = || -> std::io::Result<()> {
@@ -677,6 +680,27 @@ mod tests {
             report.contains("  T\\nemp  K     1    1    1     0\n"),
             "{report}"
         );
+    }
+
+    #[test]
+    /// `diagnostics.<phase>` is printed only when it is a non-empty string;
+    /// an empty string, a number, a list or an object is skipped rather than
+    /// rendered as JSON (recorded decision, REV-RS-2).
+    fn non_string_diagnostics_are_skipped() {
+        let snapshot = json!({"state": "failed", "error": {"code": "x", "message": "m"},
+            "cleanup": {"status": "complete"},
+            "diagnostics": {"handshake": "", "execution": ["a\u{1b}b"]}});
+        let report = summary(&snapshot).0;
+        assert_eq!(report, "thermo.summary  failed\nerror    x: m\n");
+        let snapshot = json!({"state": "failed", "error": {"code": "x", "message": "m"},
+            "cleanup": {"status": "complete"},
+            "diagnostics": {"handshake": {"text": "t"}, "execution": "tb\n\u{1b}[0m"}});
+        let report = summary(&snapshot).0;
+        assert!(
+            report.ends_with("execution stderr:\ntb\n\\u{1b}[0m\n"),
+            "{report}"
+        );
+        assert!(!report.contains("handshake"), "{report}");
     }
 
     #[test]

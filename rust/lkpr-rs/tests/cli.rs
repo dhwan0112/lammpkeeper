@@ -602,9 +602,10 @@ fn non_utf8_or_empty_python_path_is_named() {
 }
 
 /// Human-mode output that cannot be written (here: `/dev/full`) fails with
-/// exit 1 and `output_write_failed`, as `--json` already did (REV-RS-2);
-/// `--help` on a full stdout exits 1 the same way, and a usage error whose
-/// report cannot be written to stderr still exits 2. None of them panic (101).
+/// exit 1 and `output_write_failed`, as `--json` already did (REV-RS-2); the
+/// same for `doctor`, `--help` and `--version` on a full stdout, and a usage
+/// error whose report cannot be written to stderr still exits 2. None of them
+/// panic (101).
 #[test]
 fn human_mode_write_failure_is_not_success() {
     let dir = tempdir("human write fail");
@@ -633,14 +634,30 @@ fn human_mode_write_failure_is_not_success() {
     assert!(err.contains("output_write_failed"), "{err}");
     assert!(!err.contains("panicked"), "{err}");
 
+    let caps = r#"{"status":"succeeded","result":{"protocol_versions":[1],"operations":{"thermo.summary":{"versions":[1]}}},"provenance":{"package_version":"0.1"}}"#;
+    let doctor_py = fake(&dir, &format!("printf '%s' '{caps}'"));
     let o = Command::new(bin())
-        .arg("--help")
+        .args(["doctor", "--python", doctor_py.to_str().unwrap()])
+        .env_remove("LKPR_PYTHON")
         .stdout(full())
         .output()
         .unwrap();
     let err = stderr(&o);
     assert_eq!(o.status.code(), Some(1), "{err}");
     assert!(err.contains("output_write_failed"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+
+    for flag in ["--help", "--version"] {
+        let o = Command::new(bin())
+            .arg(flag)
+            .stdout(full())
+            .output()
+            .unwrap();
+        let err = stderr(&o);
+        assert_eq!(o.status.code(), Some(1), "{flag}: {err}");
+        assert!(err.contains("output_write_failed"), "{flag}: {err}");
+        assert!(!err.contains("panicked"), "{flag}: {err}");
+    }
 
     let o = Command::new(bin())
         .arg("doctor")
@@ -653,15 +670,20 @@ fn human_mode_write_failure_is_not_success() {
 
 /// Backend text reaches the terminal with control characters made visible
 /// (`\u{1b}`, `\r`, `\u{7}`), so a crafted log cannot inject escape sequences
-/// in human mode (REV-RS-2); line feeds survive in the stderr block only, and
-/// `--json` output stays byte-for-byte.
+/// in human mode (REV-RS-2): error, warning, cleanup and provenance lines of
+/// the thermo-summary report and the `doctor` report alike. Line feeds survive
+/// in the stderr block only, and `--json` output stays byte-for-byte.
 #[test]
 fn human_mode_makes_backend_control_characters_visible() {
     let dir = tempdir("control chars");
     let body = concat!(
         r#"{"job_schema_version":1,"state":"failed","#,
         r#""error":{"code":"parse_error","message":"bad\u001b[2Jline\rmore"},"#,
-        r#""backend_response":{"warnings":["\u001b]0;title\u0007w"]},"#,
+        r#""cleanup":{"status":"failed","error":{"code":"rm","message":"\u001bc!"}},"#,
+        r#""backend_response":{"warnings":["\u001b]0;title\u0007w"],"#,
+        r#""provenance":{"package_version":"0.1","python_version":"3.12","#,
+        r#""python_executable":"/usr/bin/python3","numpy_version":"2.0","#,
+        r#""input_fingerprint":{"resolved_path":"/tmp/\u001b[2K.log"}}},"#,
         r#""diagnostics":{"execution":"line1\n\u001b[31mline2\u001b[0m"}}"#
     );
     let py = fake(&dir, &format!("cat >/dev/null\nprintf '%s' '{body}'"));
@@ -678,11 +700,31 @@ fn human_mode_makes_backend_control_characters_visible() {
         "{out}"
     );
     assert!(out.contains("warning  \\u{1b}]0;title\\u{7}w\n"), "{out}");
+    assert!(out.contains("cleanup  failed (rm: \\u{1b}c!)\n"), "{out}");
     assert!(
         out.contains("execution stderr:\nline1\n\\u{1b}[31mline2\\u{1b}[0m\n"),
         "{out}"
     );
+    assert!(out.contains("input    /tmp/\\u{1b}[2K.log\n"), "{out}");
 
     let o = run(&["thermo-summary", "--python", py, "--log", "a", "--json"]);
     assert_eq!(String::from_utf8(o.stdout).unwrap(), format!("{body}\n"));
+
+    let caps = concat!(
+        r#"{"status":"failed","error":{"code":"probe","message":"x\u001b[2Jy"},"#,
+        r#""result":{"protocol_versions":[1],"operations":{"thermo.summary":{"versions":[1]}}},"#,
+        r#""provenance":{"package_version":"0.1","python_executable":"/opt/\u001b]0;t\u0007/python"}}"#
+    );
+    let py = fake(&dir, &format!("printf '%s' '{caps}'"));
+    let o = run(&["doctor", "--python", py.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    let out = String::from_utf8(o.stdout).unwrap();
+    assert!(!out.contains('\u{1b}') && !out.contains('\u{7}'), "{out:?}");
+    assert!(
+        out.contains("python      /opt/\\u{1b}]0;t\\u{7}/python\n"),
+        "{out}"
+    );
+    assert!(out.contains("error       probe: x\\u{1b}[2Jy\n"), "{out}");
+    let o = run(&["doctor", "--python", py.to_str().unwrap(), "--json"]);
+    assert_eq!(String::from_utf8(o.stdout).unwrap(), format!("{caps}\n"));
 }

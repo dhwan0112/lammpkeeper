@@ -70,8 +70,28 @@ Decisions recorded here (user asked for no questions):
 
 | Suite | Result |
 |---|---|
-| `cargo test --offline` | 24 passed, 0 failed |
+| `cargo test --offline` | 25 passed, 0 failed (after the second round) |
 | `tests/test_rust_cli.py` (`HOME` fresh, `/usr/bin/python3`) | 7 PASS, 0 FAIL |
+
+## Second review round
+
+A read-only review of the PR diff found no correctness bugs and six
+non-blocking gaps, all applied:
+
+- Doc comments: `print_raw` now says it writes reports, usage and version
+  text too, not only backend stdout; `visible` names what it does not cover
+  (`--json`, the backend's inherited stderr, and the user's own `--python`,
+  `--log` and `LKPR_PYTHON` values echoed in `exit_with` messages).
+- `human_mode_write_failure_is_not_success` also covers `doctor` (fake
+  backend, full stdout) and `--version`: exit 1, `output_write_failed`, no
+  panic.
+- `human_mode_makes_backend_control_characters_visible` also puts ESC into
+  `cleanup.error.message` and `provenance.input_fingerprint.resolved_path`
+  and checks the `doctor` report (`python_executable`, error message) and
+  `doctor --json` byte-for-byte.
+- New unit test `non_string_diagnostics_are_skipped` pins the recorded
+  decision: an empty, numeric, list or object `diagnostics.<phase>` is
+  skipped, a non-empty string is printed as an escaped block.
 
 Not changed: E-4 (a backend descendant holding stdout after the leader exits
 is reported, not killed) is a design choice recorded in the audit and left as
