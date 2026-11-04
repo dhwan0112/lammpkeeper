@@ -16,8 +16,9 @@ on 2026-10-26; that tag predates the unreleased fixes below.
 
 - `lkpr-rs` exits 2 with a message naming the argument when a command-line
   argument (for example a `--log` path) is not valid UTF-8; before it
-  panicked with exit 101. A non-UTF-8 `LKPR_PYTHON` is reported as such and
-  an empty one as empty, instead of "no Python environment selected".
+  panicked with exit 101. A non-UTF-8 `LKPR_PYTHON` is reported as such, with
+  the remedy, instead of "no Python environment selected", and an empty path
+  from `--python` or `LKPR_PYTHON` is the same usage error (exit 2).
 
 ### Dump atom rows reject non-standard separators (REV-IO-10)
 

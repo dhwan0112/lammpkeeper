@@ -502,8 +502,8 @@ fn stdout_held_open_after_exit_is_reported_not_waited_forever() {
     assert!(start.elapsed() < Duration::from_secs(10));
 }
 
-/// A non-UTF-8 argument is a usage error (exit 2) that names the argument;
-/// before REV-RS-1 `std::env::args()` panicked (exit 101) on it.
+/// A non-UTF-8 argument is a usage error (exit 2) that names the argument and
+/// the UTF-8 requirement; before REV-RS-1 `std::env::args()` panicked (exit 101).
 #[test]
 fn non_utf8_arguments_are_usage_errors() {
     let o = Command::new(bin())
@@ -518,14 +518,16 @@ fn non_utf8_arguments_are_usage_errors() {
     let err = stderr(&o);
     assert_eq!(o.status.code(), Some(2), "{err}");
     assert!(err.contains("argument 3 is not valid UTF-8"), "{err}");
+    assert!(err.contains("accepts only UTF-8"), "{err}");
     assert!(err.contains("usage:"), "{err}");
     assert!(!err.contains("panicked"), "{err}");
 }
 
 /// A non-UTF-8 `LKPR_PYTHON` is named as such (exit 2); before REV-RS-1 it
-/// was reported as "no Python environment selected". An empty value still is.
+/// was reported as "no Python environment selected". An empty path is a usage
+/// error from either source, `LKPR_PYTHON` or `--python`.
 #[test]
-fn non_utf8_or_empty_lkpr_python_is_named() {
+fn non_utf8_or_empty_python_path_is_named() {
     let o = Command::new(bin())
         .arg("doctor")
         .env("LKPR_PYTHON", OsStr::from_bytes(b"/opt/py\xff/bin/python"))
@@ -534,14 +536,21 @@ fn non_utf8_or_empty_lkpr_python_is_named() {
     let err = stderr(&o);
     assert_eq!(o.status.code(), Some(2), "{err}");
     assert!(err.contains("LKPR_PYTHON is not valid UTF-8"), "{err}");
+    assert!(err.contains("pass --python PATH"), "{err}");
     assert!(!err.contains("no Python environment selected"), "{err}");
 
-    let o = Command::new(bin())
-        .arg("doctor")
-        .env("LKPR_PYTHON", "")
-        .output()
-        .unwrap();
-    let err = stderr(&o);
-    assert_eq!(o.status.code(), Some(2), "{err}");
-    assert!(err.contains("LKPR_PYTHON is empty"), "{err}");
+    for (args, env) in [
+        (vec!["doctor"], Some("")),
+        (vec!["doctor", "--python", ""], None),
+    ] {
+        let mut cmd = Command::new(bin());
+        cmd.args(&args).env_remove("LKPR_PYTHON");
+        if let Some(value) = env {
+            cmd.env("LKPR_PYTHON", value);
+        }
+        let o = cmd.output().unwrap();
+        let err = stderr(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(err.contains("path is empty"), "{args:?}: {err}");
+    }
 }

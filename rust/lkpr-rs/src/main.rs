@@ -9,6 +9,8 @@
 mod backend;
 
 use serde_json::{json, Value};
+use std::ffi::OsString;
+use std::fmt::Display;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -20,6 +22,8 @@ usage: lkpr-rs doctor --python PATH [--json]
 
 The Python environment is required: --python PATH, or the LKPR_PYTHON
 environment variable. It must have the lammpkeeper package installed.
+Options, paths and LKPR_PYTHON must be valid UTF-8: they are echoed in
+messages and sent to the backend as text.
 
 doctor          check the Python backend, its versions and supported operations
 thermo-summary  thermo column statistics of a LAMMPS log (operation thermo.summary v1)
@@ -129,30 +133,45 @@ fn deadline_after(seconds: f64) -> Option<Instant> {
     Instant::now().checked_add(backend.checked_add(DEADLINE_SLACK)?)
 }
 
+/// How to select the Python environment, for the usage errors below.
+const SELECT_PYTHON_HINT: &str = "pass --python PATH or set LKPR_PYTHON";
+
 /// Explicit environment only: --python, then LKPR_PYTHON. No PATH guessing.
+/// An empty path from either source is a usage error, as is a non-UTF-8 one.
 fn select_python(options: &Options) -> Result<String, Failure> {
-    if let Some(python) = &options.python {
-        return Ok(python.clone());
+    let path = match &options.python {
+        Some(python) => python.clone(),
+        // `var_os`, not `var`: a non-UTF-8 value is named as such instead of
+        // being reported as "no environment selected" (REV-RS-1).
+        None => utf8(
+            std::env::var_os("LKPR_PYTHON").ok_or_else(|| {
+                usage_error(format!(
+                    "no Python environment selected: {SELECT_PYTHON_HINT}"
+                ))
+            })?,
+            "LKPR_PYTHON",
+        )?,
+    };
+    if path.is_empty() {
+        return Err(usage_error(format!(
+            "the Python environment path is empty: {SELECT_PYTHON_HINT}"
+        )));
     }
-    // `var_os`, not `var`: a non-UTF-8 value is named as such instead of being
-    // reported as "no environment selected" (REV-RS-1). The path must be UTF-8
-    // because it is echoed in messages and passed to the backend as text.
-    match std::env::var_os("LKPR_PYTHON") {
-        None => Err(usage_error(
-            "no Python environment selected: pass --python PATH or set LKPR_PYTHON",
-        )),
-        Some(value) => match value.into_string() {
-            Ok(path) if !path.is_empty() => Ok(path),
-            Ok(_) => Err(usage_error(
-                "no Python environment selected: LKPR_PYTHON is empty; \
-                 pass --python PATH or set LKPR_PYTHON",
-            )),
-            Err(raw) => Err(usage_error(format!(
-                "LKPR_PYTHON is not valid UTF-8: {:?}",
-                raw.to_string_lossy()
-            ))),
-        },
-    }
+    Ok(path)
+}
+
+/// `value` as a `String`, or a usage error naming `what` (for example
+/// "argument 3" or "LKPR_PYTHON"). `lkpr-rs` requires UTF-8 because every
+/// path is echoed in messages and sent to the backend as JSON text; the
+/// message says so and names the remedy (REV-RS-1).
+fn utf8(value: OsString, what: impl Display) -> Result<String, Failure> {
+    value.into_string().map_err(|raw| {
+        usage_error(format!(
+            "{what} is not valid UTF-8: {:?}; lkpr-rs accepts only UTF-8 options, paths and \
+             LKPR_PYTHON (rename the file, or {SELECT_PYTHON_HINT} with a UTF-8 path)",
+            raw.to_string_lossy()
+        ))
+    })
 }
 
 /// Command-line arguments after the program name, as UTF-8.
@@ -164,15 +183,7 @@ fn utf8_args() -> Result<Vec<String>, Failure> {
     std::env::args_os()
         .skip(1)
         .enumerate()
-        .map(|(index, arg)| {
-            arg.into_string().map_err(|raw| {
-                usage_error(format!(
-                    "argument {} is not valid UTF-8: {:?}",
-                    index + 1,
-                    raw.to_string_lossy()
-                ))
-            })
-        })
+        .map(|(index, arg)| utf8(arg, format!("argument {}", index + 1)))
         .collect()
 }
 
