@@ -18,12 +18,15 @@ class _Unread(list):
     """Frame container that fails the test if any frame access is attempted."""
 
     def __iter__(self):
+        """Fail: iteration means a frame was read before validation."""
         raise AssertionError('a frame was read before parameter validation')
 
     def __len__(self):
+        """Fail: len() means the frames were measured before validation."""
         raise AssertionError('frames were measured before parameter validation')
 
     def __getitem__(self, item):
+        """Fail: indexing means a frame was read before validation."""
         raise AssertionError('a frame was read before parameter validation')
 
 

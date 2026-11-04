@@ -32,6 +32,7 @@ def _both(fr, **kw):
     from lammps_post import analysis as a
 
     def run():
+        """g(r) of the frame, or the ValueError compute_rdf raised."""
         try:
             return a.compute_rdf([fr], COL, type_a=TA, type_b=TB, r_max=4.0,
                                  n_bins=40, **kw)['g']

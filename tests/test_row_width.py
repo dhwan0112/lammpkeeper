@@ -52,13 +52,16 @@ def _access_paths(path, columns, force_numpy):
     from lammps_post import parsers
 
     def iterate():
+        """Frame 0 through plain iteration of the reader."""
         return next(iter(_reader(path, columns, force_numpy)))
 
     def indexed():
+        """Frame 0 through the index + read_frame path."""
         reader = _reader(path, columns, force_numpy)
         return reader.read_frame(reader.index(), 0)
 
     def lazy():
+        """Frame 0 through LazyFrames indexing."""
         return parsers.LazyFrames(_reader(path, columns, force_numpy))[0]
 
     yield 'iter', iterate
@@ -69,6 +72,7 @@ def _access_paths(path, columns, force_numpy):
         yield 'parse_dump', lambda: parsers.parse_dump(path, columns=columns)[0][0]
     else:
         def parse_dump():
+            """Frame 0 through parse_dump() with the native parser disabled."""
             with mock.patch.object(parsers, '_native', None):
                 return parsers.parse_dump(path, columns=columns)[0][0]
         yield 'parse_dump', parse_dump
@@ -98,6 +102,7 @@ def test_bad_row_width_rejected_on_every_path():
             for columns in _projections(layout):
                 for backend, force in _backends():
                     def run(path):
+                        """Expect the located width ValueError from every access path."""
                         for name, thunk in _access_paths(path, columns, force):
                             try:
                                 thunk()
@@ -126,6 +131,7 @@ def test_valid_rows_unchanged_without_numpy_fallback():
             results = {}
             for backend, force in _backends():
                 def run(path):
+                    """Collect frame 0 from every access path; native must not fall back."""
                     for name, thunk in _access_paths(path, columns, force):
                         if backend == 'native':
                             with mock.patch.object(np, 'loadtxt',

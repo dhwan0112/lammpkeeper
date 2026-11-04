@@ -85,6 +85,7 @@ fn require_terminal() -> Result<(), Failure> {
     Ok(())
 }
 
+/// A terminal I/O error as the `terminal_error` failure.
 fn terminal_error(err: std::io::Error) -> Failure {
     failure(format!("terminal_error: {err}"))
 }
@@ -255,6 +256,7 @@ fn settle(app: &mut App, rx: &mpsc::Receiver<Msg>) {
 mod tests {
     use super::*;
 
+    /// A fresh (read, write) pipe pair.
     fn pipe() -> (libc::c_int, libc::c_int) {
         let mut fds = [0; 2];
         // SAFETY: `fds` is a valid array of two ints for pipe(2) to fill.
@@ -263,6 +265,8 @@ mod tests {
     }
 
     #[test]
+    /// A pipe with nothing written times out, becomes ready once a byte is
+    /// written, and reports the writer's close as a hang-up.
     fn input_ready_distinguishes_data_timeout_and_hang_up() {
         let (reader, writer) = pipe();
         let short = Duration::from_millis(10);

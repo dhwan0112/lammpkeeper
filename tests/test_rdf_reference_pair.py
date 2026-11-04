@@ -17,6 +17,7 @@ import _util
 
 
 def _shell(shell_module, tmp, cache):
+    """A shell whose RDF cache holds one two-point curve per key in `cache`."""
     shell = shell_module.LammpsPostShell()
     shell.state.output_dir = str(Path(tmp) / 'plots')
     for key, label in cache.items():
@@ -27,6 +28,8 @@ def _shell(shell_module, tmp, cache):
 
 
 def _fake_reference(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0, **_):
+    """Stand-in for compute_reference_rdf returning a minimal result that names
+    the phase and pair; the mock in `_driven` records the calls."""
     name = phase_or_crystal if isinstance(phase_or_crystal, str) else phase_or_crystal['name']
     return {'r': [1.0], 'g': [1.0], 'label': f'{name} {pair[0]}-{pair[1]}', 'phase': name, 'pair': pair}
 
@@ -47,6 +50,8 @@ def _driven(shell_module, shell, answers, references):
 
 
 def test_reference_pair_reads_labels_and_legacy_keys_without_a_default():
+    """_rdf_reference_pair reads the pair from display_label, label or a legacy
+    key, and returns None (never Fe-O) when there are not exactly two names."""
     from lammps_post import shell as shell_module
     read = shell_module.LammpsPostShell._rdf_reference_pair
     assert read('rdf_O-O', {'label': 'O-O'}) == ('O', 'O')
@@ -63,6 +68,8 @@ def test_reference_pair_reads_labels_and_legacy_keys_without_a_default():
 
 
 def test_recipe_references_only_come_from_a_per_key_dict():
+    """_rdf_recipe_references returns the saved list for the exact cache key and
+    None for bare lists, empty lists, missing keys or missing recipes."""
     from lammps_post import shell as shell_module
     read = shell_module.LammpsPostShell._rdf_recipe_references
     ref = _fake_reference('FeO', ('O', 'O'))
@@ -78,6 +85,8 @@ def test_recipe_references_only_come_from_a_per_key_dict():
 
 
 def test_each_selected_curve_gets_references_for_its_own_pair():
+    """'plot rdf' with two curves computes references per curve pair, tags each
+    offered phase with the pairs it serves, and saves them per cache key."""
     _util.require_numpy()
     from lammps_post import references, shell as shell_module
 
@@ -111,6 +120,8 @@ def test_each_selected_curve_gets_references_for_its_own_pair():
 
 
 def test_redo_replays_each_curves_saved_references_and_ignores_unattributed_lists():
+    """'plot redo rdf' replays the per-key saved references without prompting,
+    reports curves outside the saved selection, and ignores a bare list."""
     _util.require_numpy()
     from lammps_post import references, shell as shell_module
 
@@ -141,6 +152,8 @@ def test_redo_replays_each_curves_saved_references_and_ignores_unattributed_list
 
 
 def test_generic_or_unreadable_pairs_get_no_fe_o_fallback():
+    """Raw type ids, an empty selection and an unreadable pair all plot without
+    a reference and say why; none silently falls back to Fe-O."""
     _util.require_numpy()
     from lammps_post import references, shell as shell_module
 
@@ -185,6 +198,8 @@ def test_generic_or_unreadable_pairs_get_no_fe_o_fallback():
 
 
 def test_cif_reference_is_computed_for_every_selected_pair():
+    """One CIF crystal yields a reference for each distinct selected pair, and
+    curves that resolve to the same pair share that computation."""
     _util.require_numpy()
     from lammps_post import references, shell as shell_module
 

@@ -83,6 +83,31 @@ reviewers found non-obvious lifecycle, rollback or numerical logic without one
 `verify.sh`). The one Korean string in Python sources
 (`tests/test_display.py`) is test data for display width, not a comment.
 
+### Comment and roadmap audit (2026-11-04)
+
+Measured on the audit branch (base main `faf078a`), devlog
+[`AUDIT-20261104-DOCS.md`](AUDIT-20261104-DOCS.md): **119 tracked Python files /
+1765 function and class definitions, 0 without a docstring** (before: 33 test
+helpers lacked one, in `tests/test_analysis_params.py`, `test_cell_validation.py`,
+`test_dump_whitespace.py`, `test_rdf_extreme_wrap.py`, `test_rdf_reference_pair.py`,
+`test_recipe_alias.py`, `test_reference_images.py`, `test_row_width.py` and
+`test_rust_cli.py`). Rust: **197 `fn`s in 8 files, 0 without a `//`/`///`
+comment** (before: 51 lacked one, all introduced after the 2026-11-01 audit by
+UI-2 and the REV-RS fixes: 48 in `rust/lkpr-rs/src/tui/{app,client,mod,view}.rs`,
+2 in `src/main.rs`, 1 test in `src/tui/mod.rs`). Per file: `native/src/lib.rs` 3,
+`src/backend.rs` 15, `src/main.rs` 34, `src/tui/app.rs` 54, `src/tui/client.rs` 25,
+`src/tui/mod.rs` 12, `src/tui/view.rs` 24, `tests/cli.rs` 30.
+
+Existing docstrings and comments in `lammps_post/` were read against the code
+they describe; the ones that had drifted were corrected (CLI mode list and
+preload order, `parse_cif`/`_lattice_image_offsets` error contracts, `parse_input`
+raises, `detect_forcefield` empty-frame path, density-profile and penetration
+result keys, `ff_info` field meanings, `do_plot`/`do_analyze` type lists, `plot all`
+and `analyze all` prompting, stress/performance/3D plot panel descriptions). The
+scans are the same AST walk (`ast.get_docstring` on every module, class and
+function, nested ones included) and the same `fn` regex with attributes allowed
+between the comment and the `fn` as in the 2026-11-01 audit.
+
 ## Agreed scope
 
 The maintainer selected **every file, function/class and major logic**, rather

@@ -30,8 +30,9 @@ not imply support for a tilted slab or a correct slab-coordinate conversion.
 
 Dependencies:
   Required : numpy; matplotlib is optional at import but required for plotting
-  Uses     : WONG_PALETTE, BAR_TO_GPA, DENSITY_CONVERSION from __init__
-             progress_msg, C from display
+  Uses     : WONG_PALETTE, BAR_TO_GPA, ATM_TO_GPA, DENSITY_CONVERSION,
+             Q_OXIDIZED_E from __init__; FORCE_FIELDS from
+             lammpkeeper.common.mapping; progress_msg, C from display
 ═══════════════════════════════════════════════════════════════
 """
 
@@ -255,6 +256,8 @@ def resolve_plot_species(atom_types, species=None):
     labels = {t: label for t, label, _element in rows}
 
     def pick(name, label_set, elements):
+        """Resolve one species name to a sorted type tuple: the explicit species
+        map wins; otherwise rows whose label or element matches exactly."""
         if species is not None and name in species:
             return tuple(sorted(int(t) for t in species[name]))
         return tuple(sorted(t for t, label, element in rows
@@ -297,7 +300,8 @@ def _thermo_time(log_data, dt_fs):
 
 
 def _pressure_scale(unit_system, pressure_unit):
-    """Return multiplicative native-to-display pressure scale and axis label.
+    """Return the native-to-display pressure scale and the display unit string
+    ('bar' or 'GPa').
 
     LAMMPS metal pressure is bar and real pressure is atm; both can be shown
     in bar or GPa. Reject unsupported styles/displays rather than applying a
@@ -372,7 +376,8 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
     Running means weight samples, not elapsed intervals; they are visual
     summaries rather than equilibrium tests. Mass/box-volume density includes
     vacuum in slab cells. All pressure here is uncorrected box pressure; an
-    explicit slab range only adds a note. Missing scalar pressure is synthesized
+    explicit slab range adds a title note only when a volume series is
+    present. Missing scalar pressure is synthesized
     in the supplied dictionary when all diagonal components are available.
 
     Args:
@@ -380,7 +385,9 @@ def plot_thermo(log_data, output_dir, dpi=150, dt_fs=None,
         output_dir:      str  — Output directory for saved plot
         dpi:             int  — Plot resolution
         dt_fs:           float or None — Timestep in fs for time axis;
-                         if None, uses log_data['time_ps'] or fallback 1.0 fs
+                         if None, uses log_data['time_ps'] when present,
+                         otherwise 1.0 fs with a RuntimeWarning; an invalid
+                         timeline raises ValueError
         pressure_unit:   str  — 'bar' or 'gpa'; controls pressure axis label/scale
         total_mass_amu:  float or None — Total system mass for density calculation
         figsize:         tuple or None — (width, height); None uses adaptive default
@@ -535,8 +542,6 @@ def plot_thermostat_summary(log_data, output_dir, dpi=150, dt_fs=None,
     independent axis scales do not imply a quantitative temperature-pressure
     correlation. Time validation is shared with the full thermo overview.
 
-    Reference: md_stats_plot.py plot_thermostat()
-
     Args:
         log_data:       dict — Parsed log data
         output_dir:     str  — Output directory
@@ -665,7 +670,8 @@ def plot_pressure(log_data, output_dir, dpi=150, dt_fs=None,
     w = max(10, len(press) // 100)
 
     if has_stress:
-        # ── 3-panel layout for full stress tensor ──
+        # ── Stress-tensor layout: panels (a) and (b); a third panel (c) only
+        # when slab_z_range is given ──
         n_cols = 3 if slab_z_range is not None else 2
         fig, axes = plt.subplots(1, n_cols, figsize=figsize or (6 * n_cols, 5))
         if n_cols == 1:
@@ -1243,7 +1249,8 @@ def plot_msd(data, species_name, output_dir, dpi=150, figsize=None):
 def plot_performance(stage_times, output_dir, dpi=150, figsize=None):
     """
     Plot stage-wise wall time breakdown as a bar chart.
-    Left: absolute time per stage (hours). Right: percentage distribution.
+    Left: absolute time per stage (hours). Right: the same stage bars in
+    hours, annotated with each stage's percentage of the total wall time.
     Useful for identifying computational bottlenecks.
     Parser stage times are seconds, converted to hours only for display. The
     second panel is drawn for multiple stages, and percentages use their total
@@ -1456,12 +1463,12 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
     2. o_kymograph.png          — 2D heatmap (time x z) of O density
     3. o_zdist_evolution.png    — Ridge/waterfall of z-histograms over time
     4. o_adsorption_timeline.png — Cumulative O surface crossing count
-    5. o_penetration_3d.png     — 3D surface plot (time x z x density)
+    5. o_penetration_3d.png     — 3D surface plot (time x z x O count per bin)
     6. o_penetration_metrics.png — 4 quantitative trend lines:
        (a) Mean O z-position with std band
        (b) Adsorption ratio (% below surface)
        (c) O distribution width (sigma_z)
-       (d) Max penetration depth with sqrt(t) fit
+       (d) Max penetration depth with a median d/sqrt(t) scaling guide
 
     Input columns are ID-union trajectories with NaNs for absence/type exit;
     trajectory lines preserve those gaps. Histograms/position statistics use
@@ -1707,7 +1714,8 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
            title='(c) O Distribution Width')
     ax.legend()
 
-    # (d) Penetration depth (surface - deepest O) + rate
+    # (d) Penetration depth (surface - deepest O), zero-clipped, with a
+    # d/sqrt(t) scaling guide
     # Unlike plot_penetration's signed depth, this display clips above-surface
     # samples to zero. Missing minima/surfaces stay NaN, not zero-depth evidence.
     depth = np.maximum(surface - min_z, 0)
@@ -1729,7 +1737,7 @@ def plot_penetration_profile(data, output_dir, dpi=150, figsize=None,
             A = np.median(d_rel[valid] / np.sqrt(t_rel[valid]))
             t_model = np.linspace(0, t_rel[-1], 200)
             ax.plot(t_model + t_onset, A * np.sqrt(t_model), color=CLR['press'],
-                    ls=':', lw=1.5, label=f'√t fit: d={A:.1f}√t')
+                    ls=':', lw=1.5, label=f'√t guide: d={A:.1f}√t')
     ax.set(xlabel='Time (ps)', ylabel='Depth (Å)',
            title='(d) Max Penetration Depth')
     ax.legend()

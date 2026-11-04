@@ -80,9 +80,11 @@ class SessionState:
         # Detection supplies initial values, not authoritative run metadata;
         # loading input or setting values may replace them afterwards.
         self.ff_info = {
-            'forcefield': 'unknown',    # 'reaxff', 'ace', or 'hdnnp'
-            'unit_system': 'metal',     # 'real' (ReaxFF) or 'metal' (ACE/HDNNP)
-            'dt_fs': 1.0,              # Timestep in femtoseconds
+            'forcefield': 'unknown',    # 'reaxff', 'ace', 'hdnnp', 'generic' or 'unknown'
+            'unit_system': 'metal',     # 'real'/'metal'; None when the input declares other
+                                        # fields but not units and no dump heuristic
+                                        # supplies one (ADR-0005)
+            'dt_fs': 1.0,              # Timestep in fs; None when unresolved (see dt_fs property)
             'has_charge': False,        # True if 'q' column exists
             'has_velocity': False,      # True if 'vx','vy','vz' columns exist
             'has_element': False,       # True if 'element' column exists
@@ -224,8 +226,9 @@ class SessionState:
                                atom_style=base.atom_style, units=units,
                                timestep=base.timestep, dt_fs=dt_fs)
         values = {'forcefield': ff_family.value or 'unknown',
-                  # None when the input declares other fields but not units:
-                  # consumers must report it, never assume metal (ADR-0005).
+                  # None when the input declares other fields but not units and
+                  # no dump heuristic supplies a guess: consumers must report
+                  # it, never assume metal (ADR-0005).
                   'unit_system': units.value,
                   'dt_fs': dt_fs.value}
         if with_overrides:

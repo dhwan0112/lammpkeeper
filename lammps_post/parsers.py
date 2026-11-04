@@ -2,10 +2,14 @@
 ═══════════════════════════════════════════════════════════════
 Section 2: File Parsers
 ═══════════════════════════════════════════════════════════════
-Three parsers for the main LAMMPS output file types:
+Core parsers for the main LAMMPS output file types:
   1. parse_dump()      — Trajectory files (.dump, .lammpstrj)
   2. parse_log()       — Log files (thermodynamic data)
   3. parse_data_file() — Data files (final structure snapshots)
+Also: parse_input() (input scripts), read_data_file()/parse_data_species()
+(typed data reads), parse_run_manifest() (JSON manifests),
+classify_pair_style() and the boundary helpers (parse_boundary_flags,
+parse_input_boundary, pbc_from_boundary).
 
 Dump columns are header-driven; only 'element' is split out as text.
 Data-file atom layouts use a supported atom-style table, and logs use
@@ -42,7 +46,8 @@ from lammpkeeper.io.metadata import RunMetadata
 # triclinic cells, but does not convert scaled/unwrapped dump coordinate families.
 # Units and species provenance come from input/log metadata when available;
 # detect_forcefield retains a visibly warned, domain-specific legacy guess.
-# Optional Rust atom-block parser (native/build.sh); LKPR_NO_NATIVE=1 disables it.
+# Optional Rust atom-block parser (native/build.sh); any non-empty LKPR_NO_NATIVE
+# value (e.g. LKPR_NO_NATIVE=1) disables it.
 _native = None
 if not os.environ.get('LKPR_NO_NATIVE'):
     try:
@@ -1847,7 +1852,7 @@ def parse_input(filepath):
             'type_groups'  : dict         — {name: [type_ints]} for groups defined by type
             'variables'    : dict         — {name: value_string}
             'fixes'        : list[str]    — Fix definition strings
-            'dumps'        : list[dict]   — [{'name', 'group', 'every', 'file', 'columns'}]
+            'dumps'        : list[dict]   — [{'name', 'group', 'style', 'every', 'file', 'columns'}]
             'log_file'     : str or None
             'write_data'   : str or None
             'write_restart': str or None
@@ -1861,8 +1866,10 @@ def parse_input(filepath):
             'metadata'     : RunMetadata  — Immutable explicit pair_style/family/units/
                              timestep/dt_fs with per-field provenance (ADR-0005)
 
-    Raises ValueError if the input repeats `timestep`, `pair_style` or
-    `atom_style` with differing values; equal repeats are accepted.
+    Raises ValueError for conflicting repeats of `units`, `boundary`,
+    `timestep`, `pair_style` or `atom_style` (equal repeats are accepted), for
+    unsupported units styles, a non-positive timestep, and for unresolvable
+    includes, substitutions, expressions or `pair_coeff` species maps.
     """
     # Static extraction is deliberately not a LAMMPS interpreter: no loops,
     # jumps, functions or simulation-dependent equal-variable evaluation run.
@@ -2281,8 +2288,8 @@ def parse_input(filepath):
             warnings.warn(f"{filepath}: timestep present without explicit units; dt_fs remains unknown", RuntimeWarning)
 
     # Additive explicit-evidence record. Only commands the input declared fill
-    # fields, so `units` without `timestep` (or the reverse) leaves dt_fs
-    # unresolved even though the legacy dt_fs key above keeps its old value.
+    # fields; dt_fs is derived only when both `units` and `timestep` are
+    # explicit (the legacy dt_fs key above follows the same rule).
     config['metadata'] = RunMetadata.from_explicit(
         filepath,
         pair_style=config['pair_style'] or None,
@@ -2337,7 +2344,11 @@ def detect_forcefield(columns, col_idx, frames):
     Args:
         columns: list[str]       — Dump file column names (from parse_dump)
         col_idx: dict[str, int]  — Column name to array index mapping
-        frames:  list[dict]      — Parsed trajectory frames (needs at least 1)
+        frames:  list[dict]      — Parsed trajectory frames; only the first is
+                 inspected. An empty list disables rules 2 and 3; a missing
+                 'type' column disables rule 3 only, so a charge column (rule
+                 1) or a registry proxy-element label set (rule 2) still
+                 decides before the HDNNP default.
 
     Returns:
         dict with keys:
