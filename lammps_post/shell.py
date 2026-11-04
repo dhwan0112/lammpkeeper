@@ -2806,8 +2806,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """Merge options into a normalized recipe and record hidden output metadata.
 
         _output_dir/_dpi document the last save but are not automatically replayed
-        into global settings. Recipes may hold in-memory reference RDF arrays;
-        they are not a serialized or source-independent reproducibility record.
+        into global settings. Recipes may hold in-memory reference RDF arrays
+        (`rdf` stores `_ref_rdfs` as `{cache_key: [reference dicts] | None}` or
+        None); they are not a serialized or source-independent reproducibility
+        record.
         """
         s = self.state
         recipe_key = plot_name.lower().replace(' ', '_').replace('-', '_')
@@ -3075,18 +3077,55 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                       normalize=popts['normalize'], z_focus=popts['z_focus'],
                       figsize=s.figsize_override)
 
+    @staticmethod
+    def _rdf_reference_pair(key, data):
+        """Element pair a cached RDF curve is compared against, or None.
+
+        Reads the curve's display label (resolved species names), then its
+        requested label, then the cache key itself (legacy ``rdf_X_Y`` keys
+        join the pair with an underscore). A pair is accepted only when the
+        text splits into exactly two non-empty names. There is no default
+        pair: a curve whose pair cannot be read gets no reference overlay
+        (REV-PLOT-1: every curve was compared against Fe-O before).
+        """
+        candidates = []
+        if isinstance(data, dict):
+            candidates.extend([data.get('display_label'), data.get('label')])
+        stem = key[len('rdf_'):] if key.startswith('rdf_') else key
+        candidates.append(stem.replace('_', '-'))
+        for text in candidates:
+            if not isinstance(text, str):
+                continue
+            parts = [part.strip() for part in text.split('-')]
+            if len(parts) == 2 and all(parts):
+                return (parts[0], parts[1])
+        return None
+
+    @staticmethod
+    def _rdf_recipe_references(recipe, key):
+        """Reference curves a saved RDF recipe holds for one cache key, or None.
+
+        `_ref_rdfs` maps each cache key to the references computed for that
+        curve's own pair. Any other shape cannot be attributed to a curve and
+        yields no overlay rather than a wrong-pair one.
+        """
+        if not isinstance(recipe, dict):
+            return None
+        refs = recipe.get('_ref_rdfs')
+        if isinstance(refs, dict):
+            return refs.get(key) or None
+        return None
+
     def _iplot_rdf(self, opts, _batch=False, _edit_mode=False):
         """Render requested/cached RDF pairs and optionally overlay crystal references.
 
         An explicit pair targets its exact requested cache label and can trigger
         analysis. Otherwise interactive selection chooses cached curves and
-        built-in/CIF references; batch renders all cached pairs using any stored
-        reference arrays. Those arrays are reused, not recomputed on redo.
+        built-in/CIF references, computed per curve for that curve's own pair
+        (`_rdf_reference_pair`); batch renders all cached pairs using the
+        per-key reference arrays stored in the recipe. Those arrays are reused,
+        not recomputed on redo.
         """
-        from lammps_post.references import (
-            compute_reference_rdf, get_available_phases, get_phases_for_pair, parse_cif
-        )
-
         s = self.state
         rdf_keys = [k for k in s.cache if k.startswith('rdf_')]
 
@@ -3113,12 +3152,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 return
 
         if _batch:
-            # Use saved recipe for reference overlays
+            # Use the saved recipe's per-key reference overlays
             recipe = s.plot_recipes.get('rdf', {})
-            ref_rdfs = recipe.get('_ref_rdfs')
+            saved = recipe.get('_ref_rdfs') if isinstance(recipe, dict) else None
             for k in rdf_keys:
-                plot_rdf(s.cache[k], s.output_dir, s.dpi,
-                         figsize=s.figsize_override, ref_rdfs=ref_rdfs)
+                if isinstance(saved, dict) and k not in saved:
+                    print(C.dim(f"  {k}: not part of the saved reference selection; plotted without overlay."))
+                plot_rdf(s.cache[k], s.output_dir, s.dpi, figsize=s.figsize_override,
+                         ref_rdfs=self._rdf_recipe_references(recipe, k))
             self._save_recipe('rdf')
             return
 
@@ -3148,73 +3189,115 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             selected = rdf_keys
 
         # ── Ask about reference RDF overlays ──
-        ref_rdfs = None
+        # Each selected curve is compared against references computed for its
+        # own pair; one phase/CIF selection serves every curve it contains.
+        ref_by_key = None
         ans = self._ask("Overlay reference crystal g(r)? (y/n)", 'y')
         if ans and ans.lower() in ('y', 'yes'):
-            # Determine pair from the first selected RDF
-            rdf_pair = selected[0].replace('rdf_', '').split('_')
-            if len(rdf_pair) == 2:
-                pair_tuple = (rdf_pair[0], rdf_pair[1])
+            pairs = {k: self._rdf_reference_pair(k, s.cache[k]) for k in selected}
+            for k, pair in pairs.items():
+                if pair is None:
+                    print(C.warn(f"  {k}: cannot read its atom pair; no reference overlay for this curve."))
+            distinct = list(dict.fromkeys(pair for pair in pairs.values() if pair is not None))
+            if not distinct:
+                print(C.warn("  No reference overlay: none of the selected curves names an atom pair."))
             else:
-                pair_tuple = ('Fe', 'O')
-
-            # Show available references
-            builtin = get_phases_for_pair(pair_tuple)
-            print(f"\n  {C.bold('Available references for ' + '-'.join(pair_tuple) + ':')}")
-            for i, phase in enumerate(builtin, 1):
-                phases_db = dict(get_available_phases())
-                print(f"    {C.CYAN}{i}.{C.RESET} {phases_db.get(phase, phase)}")
-            print(f"    {C.CYAN}{len(builtin)+1}.{C.RESET} All built-in phases")
-            print(f"    {C.CYAN}{len(builtin)+2}.{C.RESET} Load CIF file or COD ID")
-            print()
-
-            ref_choice = self._ask("Select references (numbers, e.g. '1,3' or 'all')", 'all')
-            if ref_choice is None:
-                ref_choice = ''
-
-            ref_rdfs = []
-
-            # Check for CIF option
-            if ref_choice.strip() == str(len(builtin) + 2):
-                cif_src = self._ask("CIF file path or COD ID (e.g. 'cod:9009768')")
-                if cif_src:
-                    progress_msg(f"Loading CIF: {cif_src}")
-                    crystal = parse_cif(cif_src)
-                    if crystal:
-                        ref = compute_reference_rdf(crystal, pair=pair_tuple, r_max=6.0)
-                        if ref:
-                            ref_rdfs.append(ref)
-                            progress_msg(f"Reference loaded: {ref['label']}")
-                        else:
-                            print(C.warn(f"  Could not compute RDF for this pair from CIF."))
-                    else:
-                        print(C.warn(f"  Failed to parse CIF."))
-            else:
-                # Parse selected built-in phases
-                if ref_choice.lower() in ('all', str(len(builtin) + 1)):
-                    sel_phases = builtin
-                else:
-                    sel_phases = []
-                    for token in ref_choice.replace(',', ' ').split():
-                        if token.isdigit():
-                            idx = int(token) - 1
-                            if 0 <= idx < len(builtin):
-                                sel_phases.append(builtin[idx])
-
-                for phase in sel_phases:
-                    ref = compute_reference_rdf(phase, pair=pair_tuple, r_max=6.0)
-                    if ref:
-                        ref_rdfs.append(ref)
-
-            if not ref_rdfs:
-                ref_rdfs = None
+                ref_by_key = self._rdf_select_references(pairs, distinct)
 
         # Generate plots
         for k in selected:
-            plot_rdf(s.cache[k], s.output_dir, s.dpi,
-                     figsize=s.figsize_override, ref_rdfs=ref_rdfs)
-        self._save_recipe('rdf', {'_ref_rdfs': ref_rdfs})
-        self._save_recipe('rdf')
+            plot_rdf(s.cache[k], s.output_dir, s.dpi, figsize=s.figsize_override,
+                     ref_rdfs=ref_by_key.get(k) if ref_by_key else None)
+        self._save_recipe('rdf', {'_ref_rdfs': ref_by_key})
+
+    def _rdf_select_references(self, pairs, distinct):
+        """Prompt for reference phases once and compute them per cached curve.
+
+        `pairs` maps cache keys to their element pair (or None); `distinct`
+        lists the readable pairs in selection order. Built-in phases are
+        offered when they contain at least one of those pairs and are tagged
+        with the pairs they serve; a CIF is offered for every pair. Returns a
+        dict mapping each cache key to its reference list (None when a curve
+        has no reference), or None when nothing could be computed.
+        """
+        from lammps_post.references import (
+            compute_reference_rdf, get_available_phases, get_phases_for_pair, parse_cif
+        )
+
+        order = [phase for phase, _ in get_available_phases()]
+        phases_db = dict(get_available_phases())
+        serves = {}
+        for pair in distinct:
+            for phase in get_phases_for_pair(pair):
+                serves.setdefault(phase, []).append(pair)
+        # Menu order follows the phase database, not the curve selection order.
+        builtin = sorted(serves, key=lambda phase: order.index(phase) if phase in order else len(order))
+        pair_text = ', '.join('-'.join(pair) for pair in distinct)
+        print(f"\n  {C.bold('Available references for ' + pair_text + ':')}")
+        for i, phase in enumerate(builtin, 1):
+            tag = ''
+            if len(distinct) > 1:
+                tag = '  [' + ', '.join('-'.join(pair) for pair in serves[phase]) + ']'
+            print(f"    {C.CYAN}{i}.{C.RESET} {phases_db.get(phase, phase)}{tag}")
+        if not builtin:
+            print(C.dim("    (no built-in phase contains these pairs)"))
+        print(f"    {C.CYAN}{len(builtin)+1}.{C.RESET} All built-in phases")
+        print(f"    {C.CYAN}{len(builtin)+2}.{C.RESET} Load CIF file or COD ID")
+        print()
+
+        ref_choice = self._ask("Select references (numbers, e.g. '1,3' or 'all')", 'all')
+        if ref_choice is None:
+            ref_choice = ''
+
+        # (source, pairs it serves or None for any pair)
+        sources = []
+        if ref_choice.strip() == str(len(builtin) + 2):
+            cif_src = self._ask("CIF file path or COD ID (e.g. 'cod:9009768')")
+            if cif_src:
+                progress_msg(f"Loading CIF: {cif_src}")
+                crystal = parse_cif(cif_src)
+                if crystal:
+                    sources.append((crystal, None))
+                else:
+                    print(C.warn(f"  Failed to parse CIF."))
+        else:
+            if ref_choice.lower() in ('all', str(len(builtin) + 1)):
+                sel_phases = builtin
+            else:
+                sel_phases = []
+                for token in ref_choice.replace(',', ' ').split():
+                    if token.isdigit():
+                        idx = int(token) - 1
+                        if 0 <= idx < len(builtin):
+                            sel_phases.append(builtin[idx])
+            sources = [(phase, serves[phase]) for phase in sel_phases]
+
+        ref_by_key = {}
+        computed = {}  # (source index, pair) -> reference or None; curves sharing a pair share the work
+        for k, pair in pairs.items():
+            refs = []
+            if pair is not None:
+                for idx, (source, served) in enumerate(sources):
+                    if served is not None and pair not in served:
+                        continue
+                    if (idx, pair) not in computed:
+                        ref = compute_reference_rdf(source, pair=pair, r_max=6.0)
+                        computed[(idx, pair)] = ref
+                        if served is None:
+                            if ref:
+                                progress_msg(f"Reference loaded: {ref['label']} ({'-'.join(pair)})")
+                            else:
+                                print(C.warn(f"  Could not compute the {'-'.join(pair)} RDF from this CIF."))
+                    ref = computed[(idx, pair)]
+                    if ref:
+                        refs.append(ref)
+                if not refs:
+                    print(C.warn(f"  {k}: no {'-'.join(pair)} reference among the selected sources; "
+                                 "plotted without overlay."))
+            ref_by_key[k] = refs or None
+        if not any(ref_by_key.values()):
+            return None
+        return ref_by_key
 
     def _iplot_oar(self, opts, _batch=False, _edit_mode=False):
         """Render surface-relative oxygen absorption with optional count normalization.
