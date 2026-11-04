@@ -63,11 +63,39 @@ def _hexagonal_cell(a, c):
 def _cell_from_params(a, b, c, alpha, beta, gamma):
     """Build row lattice vectors from lengths in Å and angles in degrees.
 
-    Place a along x and b in the xy plane, choosing nonnegative c_z. alpha,
-    beta and gamma are respectively the b-c, a-c and a-b angles. The square
-    root clips a negative residual to zero; this is not a general validation
-    of physically valid cell parameters, and degenerate cells remain unusable.
+    Place a along x and b in the xy plane, choosing positive c_z. alpha,
+    beta and gamma are respectively the b-c, a-c and a-b angles. Every length
+    must be a finite positive number and every angle a finite number strictly
+    between 0 and 180 degrees; the three angles must also describe a cell of
+    positive volume, i.e. ``1 - cos²α - cos²β - cos²γ + 2 cosα cosβ cosγ > 0``
+    (each angle smaller than the sum of the other two and the three summing
+    to less than 360 degrees). The residual is compared against 1e-12 rather
+    than 0 so that exact boundary triples such as 120/120/120, whose residual
+    rounds to about +1e-15, are rejected too. Bools, numpy bools and strings
+    are not numbers here. Anything else raises ValueError naming the
+    offending parameter; no value is clipped or defaulted.
     """
+    params = {'a': a, 'b': b, 'c': c, 'alpha': alpha, 'beta': beta, 'gamma': gamma}
+    for name, value in params.items():
+        if isinstance(value, (bool, np.bool_, str, bytes)):
+            raise ValueError(f'cell parameter {name} must be a number, got {value!r}')
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'cell parameter {name} must be a number, got {value!r}') from None
+        if not np.isfinite(number):
+            raise ValueError(f'cell parameter {name} must be finite, got {value!r}')
+        params[name] = number
+    for name in ('a', 'b', 'c'):
+        if params[name] <= 0.0:
+            raise ValueError(f'cell length {name} must be positive, got {params[name]:g}')
+    for name in ('alpha', 'beta', 'gamma'):
+        if not 0.0 < params[name] < 180.0:
+            raise ValueError(f'cell angle {name} must lie strictly between 0 and 180 degrees, '
+                             f'got {params[name]:g}')
+    a, b, c = params['a'], params['b'], params['c']
+    alpha, beta, gamma = params['alpha'], params['beta'], params['gamma']
+
     alpha_r = np.radians(alpha)
     beta_r = np.radians(beta)
     gamma_r = np.radians(gamma)
@@ -75,11 +103,21 @@ def _cell_from_params(a, b, c, alpha, beta, gamma):
     cos_a, cos_b, cos_g = np.cos(alpha_r), np.cos(beta_r), np.cos(gamma_r)
     sin_g = np.sin(gamma_r)
 
+    # Squared volume of the unit parallelepiped: V = abc * sqrt(residual).
+    residual = 1.0 - cos_a ** 2 - cos_b ** 2 - cos_g ** 2 + 2.0 * cos_a * cos_b * cos_g
+    # The residual is dimensionless and its rounding error is ~1e-15, so a
+    # strict `> 0` test would accept exact boundary triples (120/120/120
+    # evaluates to +1e-15) and build a cell with c_z ~ 1e-8.
+    if residual <= 1e-12:
+        raise ValueError(f'cell angles alpha={alpha:g}, beta={beta:g}, gamma={gamma:g} do not '
+                         f'describe a cell with positive volume; each angle must be smaller than '
+                         f'the sum of the other two and the three must sum to less than 360 degrees')
+
     v2 = b * cos_g
     v3 = b * sin_g
     w2 = c * cos_b
     w3 = c * (cos_a - cos_b * cos_g) / sin_g
-    w4 = np.sqrt(max(0, c**2 - w2**2 - w3**2))
+    w4 = c * np.sqrt(residual) / sin_g
 
     return np.array([
         [a, 0, 0],
@@ -528,19 +566,35 @@ def parse_cif(source):
         except ValueError:
             return None
 
-    # Cell parameters
-    a = _strip_uncertainty(_get_value('_cell_length_a'))
-    b = _strip_uncertainty(_get_value('_cell_length_b'))
-    c = _strip_uncertainty(_get_value('_cell_length_c'))
-    alpha = _strip_uncertainty(_get_value('_cell_angle_alpha')) or 90.0
-    beta = _strip_uncertainty(_get_value('_cell_angle_beta')) or 90.0
-    gamma = _strip_uncertainty(_get_value('_cell_angle_gamma')) or 90.0
+    # Cell parameters. An absent length is reported as missing (None result,
+    # as before); an absent angle takes the conventional 90 degrees. A tag
+    # that is present but not a number (including the CIF unknown markers
+    # '.' and '?') and any geometrically invalid value raise ValueError, so a
+    # wrong cell is never built silently.
+    def _cell_param(tag, default=None):
+        raw = _get_value(tag)
+        if raw is None:
+            return default
+        value = _strip_uncertainty(raw)
+        if value is None:
+            raise ValueError(f'CIF {tag} value {raw!r} is not a number')
+        return value
+
+    a = _cell_param('_cell_length_a')
+    b = _cell_param('_cell_length_b')
+    c = _cell_param('_cell_length_c')
+    alpha = _cell_param('_cell_angle_alpha', 90.0)
+    beta = _cell_param('_cell_angle_beta', 90.0)
+    gamma = _cell_param('_cell_angle_gamma', 90.0)
 
     if a is None or b is None or c is None:
         print("  CIF: Missing cell parameters.")
         return None
 
-    cell = _cell_from_params(a, b, c, alpha, beta, gamma)
+    try:
+        cell = _cell_from_params(a, b, c, alpha, beta, gamma)
+    except ValueError as exc:
+        raise ValueError(f'CIF cell parameters are invalid: {exc}') from None
 
     # Chemical name
     name = _get_value('_chemical_name_mineral') or _get_value('_chemical_formula_sum') or source
