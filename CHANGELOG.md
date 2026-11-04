@@ -12,6 +12,20 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### CIF symmetry operators are validated by a complete grammar (REV-REF-3)
+
+- `_apply_symop` summed whatever tokens it recognized and ignored the rest:
+  `garbage,y,z` applied as `0,y,z`, `x/2` as `x`, a two-component operator
+  gained a zero third component, and singular operators such as `x,x,z` were
+  applied. The CIF symmetry loop also skipped any row without a comma. One
+  parser (`_parse_symop`) now accepts exactly three components of signed
+  x/y/z terms (optional integer coefficient) and signed numeric or fractional
+  translations, rejects anything else naming the operator, component and
+  offending text, and requires a unimodular rotation part. `_expand_symmetry`
+  and `parse_cif` reject a bad operator before generating any site (`CIF
+  symmetry loop (<tag>) row '<row>' is not a valid operator: ...`). Built-in
+  crystals and declared-P1 files are unchanged.
+
 ### Structure and snapshot plots resolve species exactly; charge plots label the real threshold (REV-PLOT-2)
 
 - `plot structure` binned z from 0 upward, so atoms below z = 0 were dropped
