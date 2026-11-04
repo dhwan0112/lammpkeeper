@@ -12,6 +12,18 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### `lkpr-rs` human mode survives closed pipes and escapes control characters (REV-RS-2)
+
+- `lkpr-rs` without `--json` now reports a stdout write failure (closed pipe,
+  full disk) as `output_write_failed` with exit 1, as `--json` already did,
+  instead of panicking with exit 101 after the job ran; `--help` and
+  `--version` behave the same, and an error line that cannot be written to
+  stderr keeps the exit status 1 or 2.
+- Strings from the backend (error messages, warnings, captured stderr, paths,
+  column names) are shown with control characters escaped (`\u{1b}`, `\r`,
+  `\n`), so a crafted log cannot inject terminal escape sequences or table
+  rows. `--json` output is unchanged.
+
 ### `lkpr-rs` reports non-UTF-8 arguments as usage errors (REV-RS-1)
 
 - `lkpr-rs` exits 2 with a message naming the argument when a command-line
