@@ -4,9 +4,12 @@
 //! `<python> -m lammpkeeper exec --capabilities` (doctor) and
 //! `<python> -m lammpkeeper run --request -` (thermo-summary), then prints a
 //! readable summary or, with `--json`, the backend's JSON byte-for-byte.
-//! It never guesses a Python environment and never replaces the `lkpr` command.
+//! `tui` (UI-2) drives the same two backend commands from an interactive
+//! terminal screen. It never guesses a Python environment and never replaces
+//! the `lkpr` command.
 
 mod backend;
+mod tui;
 
 use serde_json::{json, Value};
 use std::ffi::OsString;
@@ -19,6 +22,7 @@ use std::time::{Duration, Instant};
 const USAGE: &str = "\
 usage: lkpr-rs doctor --python PATH [--json]
        lkpr-rs thermo-summary --log FILE --python PATH [--timeout SECONDS] [--json]
+       lkpr-rs tui [--python PATH] [--log FILE] [--timeout SECONDS]
        lkpr-rs --help | --version
 
 The Python environment is required: --python PATH, or the LKPR_PYTHON
@@ -28,6 +32,10 @@ messages and sent to the backend as text.
 
 doctor          check the Python backend, its versions and supported operations
 thermo-summary  thermo column statistics of a LAMMPS log (operation thermo.summary v1)
+tui             the same check and operation on an interactive terminal screen
+                (needs a terminal on stdin and stdout; options prefill the form)
+                keys: Tab/Shift-Tab field, Enter next, c cancel the run, s save
+                the snapshot, Esc back or quit, q quit, F1 or ? this key list
 
 --json          print the backend JSON unchanged (machine output on stdout)
 --timeout       overall job timeout passed to the backend (default 60)
@@ -81,7 +89,7 @@ fn failure(message: impl Into<String>) -> Failure {
 fn parse_args(args: &[String]) -> Result<Options, Failure> {
     let mut iter = args.iter();
     let command = match iter.next().map(String::as_str) {
-        Some(c @ ("doctor" | "thermo-summary")) => c.to_string(),
+        Some(c @ ("doctor" | "thermo-summary" | "tui")) => c.to_string(),
         Some(other) => return Err(usage_error(format!("unknown command {other:?}"))),
         None => return Err(usage_error("missing command")),
     };
@@ -97,11 +105,11 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
         };
         match arg.as_str() {
             "--python" if options.python.is_none() => options.python = Some(value("--python")?),
-            "--json" if !options.json => options.json = true,
-            "--log" if options.command == "thermo-summary" && options.log.is_none() => {
+            "--json" if !options.json && options.command != "tui" => options.json = true,
+            "--log" if options.command != "doctor" && options.log.is_none() => {
                 options.log = Some(value("--log")?)
             }
-            "--timeout" if options.command == "thermo-summary" && options.timeout.is_none() => {
+            "--timeout" if options.command != "doctor" && options.timeout.is_none() => {
                 let text = value("--timeout")?;
                 let seconds: f64 = text.parse().map_err(|_| {
                     usage_error(format!("--timeout must be a number, got {text:?}"))
@@ -200,9 +208,17 @@ fn run_backend(
     stdin: Option<&[u8]>,
     deadline: Instant,
 ) -> Result<(Value, backend::Outcome), Failure> {
-    let child = backend::spawn(python, &args, stdin)
+    let child = backend::spawn(python, &args, stdin, backend::StderrMode::Inherit)
         .map_err(|err| failure(format!("python_not_found: cannot start {python:?}: {err}")))?;
     let outcome = backend::supervise(child, deadline);
+    let value = interpret(python, &outcome)?;
+    Ok((value, outcome))
+}
+
+/// The JSON object a supervisor outcome carries, or the failure it means:
+/// forced termination, stdout held open, or output that is not one object.
+/// Shared by the CLI and the TUI so both name the same failures.
+fn interpret(python: &str, outcome: &backend::Outcome) -> Result<Value, Failure> {
     match outcome.forced {
         Some(backend::Forced::Unresponsive) => {
             return Err(failure(format!(
@@ -230,7 +246,7 @@ fn run_backend(
         ));
     }
     match serde_json::from_slice::<Value>(&outcome.stdout) {
-        Ok(value) if value.is_object() => Ok((value, outcome)),
+        Ok(value) if value.is_object() => Ok(value),
         _ => {
             let status = outcome
                 .status
@@ -494,6 +510,43 @@ fn table(report: &mut Report, rows: &[Vec<String>]) {
     }
 }
 
+/// The `thermo.summary` v1 request for `log` under `request_id`.
+fn request(request_id: &str, log: &str) -> Value {
+    json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "operation": OPERATION,
+        "operation_version": OPERATION_VERSION,
+        "input": {"log": log},
+        "parameters": {},
+    })
+}
+
+/// Arguments of `python -m lammpkeeper run` reading the request from stdin.
+fn run_args(python: &str, timeout: f64) -> Vec<String> {
+    vec![
+        "-m".to_string(),
+        "lammpkeeper".to_string(),
+        "run".to_string(),
+        "--request".to_string(),
+        "-".to_string(),
+        "--python".to_string(),
+        python.to_string(),
+        "--timeout".to_string(),
+        timeout.to_string(),
+    ]
+}
+
+/// A `run` result must be a job snapshot (schema 1) with a state.
+fn check_snapshot(snapshot: &Value) -> Result<(), Failure> {
+    if snapshot["job_schema_version"] != 1 || !snapshot["state"].is_string() {
+        return Err(failure(
+            "invalid_backend_output: the backend did not return a job snapshot (job_schema_version 1)",
+        ));
+    }
+    Ok(())
+}
+
 /// `thermo-summary`: run `thermo.summary` v1 through `lkpr run` and report it.
 ///
 /// Exit status follows the snapshot state, except that a forwarded Ctrl-C
@@ -505,32 +558,13 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
         .as_ref()
         .ok_or_else(|| usage_error("thermo-summary needs --log FILE"))?;
     let timeout = options.timeout.unwrap_or(60.0);
-    let request = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "request_id": format!("lkpr-rs-{}", std::process::id()),
-        "operation": OPERATION,
-        "operation_version": OPERATION_VERSION,
-        "input": {"log": log},
-        "parameters": {},
-    });
+    let request = request(&format!("lkpr-rs-{}", std::process::id()), log);
     let body =
         serde_json::to_vec(&request).map_err(|e| failure(format!("cannot encode request: {e}")))?;
-    let args = vec![
-        "-m".to_string(),
-        "lammpkeeper".to_string(),
-        "run".to_string(),
-        "--request".to_string(),
-        "-".to_string(),
-        "--python".to_string(),
-        python.to_string(),
-        "--timeout".to_string(),
-        timeout.to_string(),
-    ];
+    let args = run_args(python, timeout);
     let deadline = deadline_after(timeout).ok_or_else(|| usage_error("--timeout is too large"))?;
     let (snapshot, outcome) = run_backend(python, args, Some(&body), deadline)?;
-    if snapshot["job_schema_version"] != 1 || !snapshot["state"].is_string() {
-        return Err(failure("invalid_backend_output: the backend did not return a job snapshot (job_schema_version 1)"));
-    }
+    check_snapshot(&snapshot)?;
     if options.json {
         print_raw(&outcome.stdout)?;
     } else {
@@ -563,12 +597,11 @@ fn main() -> ExitCode {
         _ => {}
     }
     backend::install_sigint_handler();
-    let result = parse_args(&args).and_then(|options| {
-        let python = select_python(&options)?;
-        match options.command.as_str() {
-            "doctor" => doctor(&options, &python),
-            _ => thermo_summary(&options, &python),
-        }
+    let result = parse_args(&args).and_then(|options| match options.command.as_str() {
+        // The TUI asks for the environment on its form instead of failing.
+        "tui" => tui::run(&options),
+        "doctor" => doctor(&options, &select_python(&options)?),
+        _ => thermo_summary(&options, &select_python(&options)?),
     });
     match result {
         Ok(code) => ExitCode::from(code),
@@ -620,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    /// `tui` takes the run options (all optional, prefilling the form) but
+    /// not `--json`: the screen is not a machine output.
+    fn parses_tui_options() {
+        let o = parse_args(&args(&["tui"])).ok().unwrap();
+        assert_eq!(o.command, "tui");
+        assert!(o.python.is_none() && o.log.is_none() && o.timeout.is_none());
+        let o = parse_args(&args(&[
+            "tui",
+            "--log",
+            "x.log",
+            "--timeout",
+            "2.5",
+            "--python",
+            "p",
+        ]))
+        .ok()
+        .unwrap();
+        assert_eq!(o.log.as_deref(), Some("x.log"));
+        assert_eq!(o.timeout, Some(2.5));
+        assert_eq!(o.python.as_deref(), Some("p"));
+    }
+
+    #[test]
     /// Invalid, unknown and repeated options are usage errors (exit 2).
     fn rejects_bad_timeouts_unknown_and_repeated_options() {
         for bad in [
@@ -633,6 +689,8 @@ mod tests {
             &["thermo-summary", "--log", "a", "--log", "b"],
             &["doctor", "--log", "a"],
             &["doctor", "--frobnicate"],
+            &["tui", "--json"],
+            &["tui", "--timeout", "0"],
             &["thermo-summary", "--python"],
             &["unknown"],
             &[],

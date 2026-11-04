@@ -12,6 +12,7 @@ a failure, not a skip. Linux/POSIX only, as measured.
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -252,4 +253,254 @@ def test_backend_timeout_is_reported_and_cleaned_up():
         assert snapshot['state'] == 'timed_out' and snapshot['error']['code'] == 'timed_out'
         assert snapshot['cleanup']['status'] == 'complete'
         assert 'supervisor_unresponsive' not in err
+        assert all(_stopped(pid) for pid in tree), tree
+
+
+def test_tui_without_a_terminal_is_a_usage_error():
+    """`lkpr-rs tui` on pipes exits 2 with usage on stderr and nothing on stdout."""
+    with _home() as (tmp, env):
+        done = subprocess.run([_binary(), 'tui', '--python', sys.executable],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              env=dict(env, TERM='xterm-256color'), cwd=tmp, timeout=60)
+        assert done.returncode == 2, (done.stdout, done.stderr)
+        assert done.stdout == ''
+        assert 'interactive terminal' in done.stderr and 'thermo-summary' in done.stderr
+
+
+def _tui_session(keys, env, cwd, term='xterm-256color'):
+    """Run `lkpr-rs tui` on a pseudo-terminal, send `keys` (bytes, or a function
+    of the Popen object returning bytes) once the alternate screen is entered
+    (or at once when it never is), and return (returncode, bytes written to the
+    terminal, stderr, termios before, after)."""
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        before = termios.tcgetattr(slave)
+        proc = subprocess.Popen([_binary(), 'tui', '--python', sys.executable],
+                                stdin=slave, stdout=slave, stderr=subprocess.PIPE,
+                                text=True, env=dict(env, TERM=term), cwd=cwd)
+        screen = b''
+        sent = False
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            exited = proc.poll() is not None
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                with contextlib.suppress(OSError):
+                    screen += os.read(master, 65536)
+            elif exited:
+                break
+            if not sent and (b'\x1b[?1049h' in screen or term == 'dumb'):
+                os.write(master, keys(proc) if callable(keys) else keys)
+                sent = True
+        if proc.poll() is None:
+            proc.kill()
+        _, err = proc.communicate(timeout=30)
+        after = termios.tcgetattr(slave)
+        return proc.returncode, screen, err, before, after
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_tui_restores_the_terminal_when_left():
+    """Under a pseudo-terminal: Esc on Setup exits 0, Ctrl-C exits 130 and
+    SIGTERM exits 1; all three enter and leave the alternate screen and undo raw
+    mode; a dumb terminal is refused before anything is drawn."""
+    import termios
+
+    def sigterm(proc):
+        proc.send_signal(signal.SIGTERM)
+        return b''
+
+    with _home() as (tmp, env):
+        for keys, code in ((b'\x1b', 0), (b'\x03', 130), (sigterm, 1)):
+            rc, screen, err, before, after = _tui_session(keys, env, tmp)
+            assert rc == code, (keys, rc, err)
+            enter = screen.find(b'\x1b[?1049h')
+            leave = screen.rfind(b'\x1b[?1049l')
+            assert 0 <= enter < leave, screen[-200:]
+            assert b'lkpr-rs tui' in screen and b'Setup' in screen, screen[:400]
+            # ECHO and ICANON are back (raw mode cleared them); the whole
+            # settings tuple is restored.
+            lflag = after[3]
+            assert lflag & termios.ECHO and lflag & termios.ICANON, lflag
+            assert after == before, (before, after)
+            assert err == '', err
+        rc, screen, err, _, _ = _tui_session(b'\x1b', env, tmp, term='dumb')
+        assert rc == 2, (rc, err)
+        assert b'\x1b[?1049h' not in screen, screen[:200]
+        assert 'interactive terminal' in err, err
+
+
+_CSI = re.compile(r'\x1b\[([0-9;?<>=!]*)([A-Za-z@`])')
+
+
+def _screen(data, rows, cols):
+    """Place the bytes ratatui wrote on a rows x cols grid and return it as
+    text. ESC [ r ; c H moves the cursor, printable text advances it, ESC [ 2 J
+    clears, every other control sequence is dropped. ratatui redraws only the
+    cells that changed since the previous frame, so a phrase is rarely
+    contiguous in the raw stream; only the composed grid can be searched."""
+    grid = [[' '] * cols for _ in range(rows)]
+    row = col = 0
+    text = data.decode('utf-8', errors='replace')
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '\x1b':
+            m = _CSI.match(text, i)
+            if m is None:
+                i += 1
+                continue
+            params, final = m.groups()
+            if final == 'H':
+                parts = (params.split(';') + [''])[:2]
+                row = int(parts[0] or 1) - 1
+                col = int(parts[1] or 1) - 1
+            elif final == 'J' and params in ('2', '3'):
+                grid = [[' '] * cols for _ in range(rows)]
+            i = m.end()
+            continue
+        if ch == '\r':
+            col = 0
+        elif ch == '\n':
+            row += 1
+        elif ch >= ' ':
+            if 0 <= row < rows and 0 <= col < cols:
+                grid[row][col] = ch
+            col += 1
+        i += 1
+    return '\n'.join(''.join(line).rstrip() for line in grid)
+
+
+def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120):
+    """Run `lkpr-rs tui --python <this python> *args` on a rows x cols
+    pseudo-terminal and play `script`: for each (phrase, keys), wait until the
+    drawn screen contains phrase, record that screen, then type keys (bytes, or
+    a function of the Popen object returning bytes). Returns (returncode, the
+    screens recorded per step plus the final one, stderr)."""
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        proc = subprocess.Popen([_binary(), 'tui', '--python', sys.executable, *args],
+                                stdin=slave, stdout=slave, stderr=subprocess.PIPE,
+                                text=True, env=dict(env, TERM='xterm-256color'), cwd=cwd)
+        data, screens, step = b'', [], 0
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            exited = proc.poll() is not None
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                with contextlib.suppress(OSError):
+                    data += os.read(master, 65536)
+            elif exited:
+                break
+            if step < len(script):
+                phrase, keys = script[step]
+                shown = _screen(data, rows, cols)
+                if phrase in shown:
+                    screens.append(shown)
+                    os.write(master, keys(proc) if callable(keys) else keys)
+                    step += 1
+        if proc.poll() is None:
+            proc.kill()
+        _, err = proc.communicate(timeout=30)
+        screens.append(_screen(data, rows, cols))
+        return proc.returncode, screens, err
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_tui_runs_the_backend_and_saves_the_snapshot():
+    """A whole session on a pseudo-terminal against the real backend: Enter
+    checks the capabilities, Enter starts the run, the Result screen shows the
+    report `thermo-summary` prints for the same log, `s` + Enter writes the raw
+    snapshot under the default name in the working directory, `q` exits 0. The
+    saved snapshot is bound to the request_id shown on Confirm and Result and
+    carries the backend response `thermo-summary --json` reports."""
+    _util.require_numpy()
+    log = EVALS / 'native-unit-summary' / 'files' / 'log.lammps'
+    with _home() as (tmp, env):
+        work = tmp / 'work'
+        work.mkdir()
+        rc, screens, err = _tui_drive(['--log', str(log)], [
+            ('Enter check', b'\r'),
+            ('Enter starts the run', b'\r'),
+            ('s saves the raw snapshot', b's'),
+            ('save snapshot as', b'\r'),
+            ('saved log.lammps.snapshot.json', b'q'),
+        ], env, work)
+        assert rc == 0 and err == '', (rc, err, screens[-1])
+        assert len(screens) == 6, screens[-1]
+        setup, confirm, result = screens[0], screens[1], screens[2]
+        assert str(log) in setup and '1/5 setup' in setup, setup
+        assert '"operation": "thermo.summary"' in confirm and '3/5 confirm' in confirm, confirm
+        assert '5/5 result' in result, result
+        human = _rs(['thermo-summary', '--python', sys.executable, '--log', str(log)], env, work)
+        assert human.returncode == 0, human.stderr
+        for line in human.stdout.splitlines():
+            assert line.rstrip() in result, (line, result)
+        saved = work / 'log.lammps.snapshot.json'
+        raw = saved.read_bytes()
+        snapshot = json.loads(raw)
+        assert raw.endswith(b'\n') and snapshot['state'] == 'succeeded', snapshot
+        assert snapshot['request_id'] in confirm and snapshot['request_id'] in result
+        assert snapshot['job_id'] in result, result
+        rs = _rs(['thermo-summary', '--python', sys.executable, '--log', str(log), '--json'],
+                 env, work)
+        cli = json.loads(rs.stdout)
+        assert _comparable(snapshot['backend_response']) == _comparable(cli['backend_response'])
+        assert set(snapshot) == set(cli), (sorted(snapshot), sorted(cli))
+        # Lifecycle events were classified as events, not kept as stderr text.
+        aside = work / 'log.lammps.snapshot.json.stderr.txt'
+        assert not aside.exists() or '"sequence"' not in aside.read_text(), aside
+
+
+def test_tui_cancels_through_the_backend_and_cleans_up():
+    """`c` on the Running screen: SIGINT reaches the blocked backend, the Result
+    screen shows the backend's own cancelled snapshot with the cancel note, no
+    backend process survives, and `q` leaves with 0."""
+    _util.require_numpy()
+    with _home() as (tmp, env):
+        fifo = tmp / 'blocked log'
+        os.mkfifo(fifo)
+        tree = []
+
+        def cancel(proc):
+            # Press c only once the scientific child (exec --request) exists.
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                tree[:] = _descendants(proc.pid)
+                cmdlines = []
+                for pid in tree:
+                    with contextlib.suppress(OSError):
+                        cmdlines.append(Path(f'/proc/{pid}/cmdline').read_bytes())
+                if any(b'exec\x00--request' in c for c in cmdlines):
+                    return b'c'
+                time.sleep(0.05)
+            raise AssertionError('backend did not reach execution')
+
+        rc, screens, err = _tui_drive(['--log', str(fifo), '--timeout', '60'], [
+            ('Enter check', b'\r'),
+            ('Enter starts the run', b'\r'),
+            ('c or Ctrl-C cancel', cancel),
+            ('A cancel was requested', b'q'),
+        ], env, tmp)
+        assert rc == 0 and err == '', (rc, err, screens[-1])
+        assert len(screens) == 5, screens[-1]
+        result = screens[3]
+        assert 'thermo.summary  cancelled' in result, result
+        assert 'Cancellation requested by owner' in result, result
         assert all(_stopped(pid) for pid in tree), tree

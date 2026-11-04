@@ -3,7 +3,8 @@
 //! The Python side (EXEC-2 `lkpr run`) owns the scientific job: its state,
 //! deadline, cancellation and cleanup of its own children. This module only
 //! starts that process in its own process group, feeds stdin, collects stdout
-//! (bounded), forwards one SIGINT on Ctrl-C, and as a last resort terminates an
+//! (bounded), forwards one SIGINT on cancellation (Ctrl-C in the CLI, a key in
+//! the TUI), and as a last resort terminates an
 //! unresponsive process or a straggler that kept stdout open after the backend
 //! exited. A forced kill is never reported as cancellation.
 
@@ -32,6 +33,7 @@ pub const STDOUT_CLOSE_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(20);
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static TERMINATED: AtomicBool = AtomicBool::new(false);
 
 /// SIGINT handler: record the interrupt for the supervision loop to forward.
 extern "C" fn on_sigint(_: libc::c_int) {
@@ -39,22 +41,60 @@ extern "C" fn on_sigint(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
-/// Route SIGINT to a flag instead of killing this process, so Ctrl-C can be
-/// forwarded to the backend as a cancellation request.
-pub fn install_sigint_handler() {
+/// SIGTERM handler: record it so the TUI can restore the terminal first.
+extern "C" fn on_sigterm(_: libc::c_int) {
+    TERMINATED.store(true, Ordering::SeqCst);
+}
+
+/// Install `handler` for `signal` with SA_RESTART.
+fn install(signal: libc::c_int, handler: extern "C" fn(libc::c_int)) {
     // SAFETY: sigaction with a handler that only performs an atomic store.
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = on_sigint as *const () as usize;
+        action.sa_sigaction = handler as *const () as usize;
         libc::sigemptyset(&mut action.sa_mask);
         action.sa_flags = libc::SA_RESTART;
-        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+        libc::sigaction(signal, &action, std::ptr::null_mut());
     }
+}
+
+/// Route SIGINT to a flag instead of killing this process, so Ctrl-C can be
+/// forwarded to the backend as a cancellation request.
+pub fn install_sigint_handler() {
+    install(libc::SIGINT, on_sigint);
+}
+
+/// Route SIGTERM to a flag so the TUI can leave the alternate screen and
+/// disable raw mode before exiting (UI-2); the CLI keeps the default action.
+pub fn install_sigterm_handler() {
+    install(libc::SIGTERM, on_sigterm);
+}
+
+/// True once SIGTERM reached this process (only after
+/// [`install_sigterm_handler`]).
+pub fn terminated() -> bool {
+    TERMINATED.load(Ordering::SeqCst)
 }
 
 /// True once Ctrl-C (SIGINT) reached this process.
 pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
+}
+
+/// Consume a pending interrupt: true once per SIGINT received. The TUI turns
+/// an external SIGINT into one key press instead of acting on it every poll.
+pub fn take_interrupt() -> bool {
+    INTERRUPTED.swap(false, Ordering::SeqCst)
+}
+
+/// Where the backend's stderr goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StderrMode {
+    /// This process's stderr: diagnostics stay visible and never mix into stdout.
+    Inherit,
+    /// A pipe the caller must drain (`Child::stderr`): the TUI reads lifecycle
+    /// events and diagnostics from it and keeps them off the alternate screen.
+    Piped,
 }
 
 /// Why the supervisor had to stop the backend itself.
@@ -73,7 +113,7 @@ pub struct Outcome {
     pub status: Option<ExitStatus>,
     /// Captured stdout (at most [`MAX_STDOUT`] bytes).
     pub stdout: Vec<u8>,
-    /// SIGINT was received and forwarded to the backend.
+    /// A cancellation (Ctrl-C or the TUI's cancel key) was forwarded as SIGINT.
     pub interrupted: bool,
     /// Set when this supervisor terminated the backend by force.
     pub forced: Option<Forced>,
@@ -84,8 +124,13 @@ pub struct Outcome {
 }
 
 /// Start `program args...` in a new process group with stdout captured and
-/// stderr inherited (diagnostics stay visible and never mix into stdout).
-pub fn spawn(program: &str, args: &[String], stdin: Option<&[u8]>) -> std::io::Result<Child> {
+/// stderr inherited or piped as `stderr` says.
+pub fn spawn(
+    program: &str,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    stderr: StderrMode,
+) -> std::io::Result<Child> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -95,7 +140,10 @@ pub fn spawn(program: &str, args: &[String], stdin: Option<&[u8]>) -> std::io::R
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(match stderr {
+            StderrMode::Inherit => Stdio::inherit(),
+            StderrMode::Piped => Stdio::piped(),
+        })
         // Own process group: a terminal Ctrl-C reaches only this process, which
         // then forwards exactly one SIGINT. A duplicate SIGINT could interrupt
         // `lkpr run` while it is already cleaning up.
@@ -165,8 +213,16 @@ fn stop_group(pid: u32, reader: &mpsc::Receiver<Vec<u8>>) {
 /// Supervise a started backend until it exits or must be stopped.
 ///
 /// `deadline` bounds the whole run; it should exceed the backend's own timeout
-/// so that `lkpr run` normally reports `timed_out` itself.
-pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
+/// so that `lkpr run` normally reports `timed_out` itself. Ctrl-C (SIGINT to
+/// this process) is forwarded once as the cancellation request.
+pub fn supervise(child: Child, deadline: Instant) -> Outcome {
+    supervise_with(child, deadline, &interrupted)
+}
+
+/// As [`supervise`], but `cancel` decides when the one SIGINT is forwarded.
+/// The TUI runs in raw mode, where Ctrl-C is a key, not a signal, so each run
+/// gets its own flag; the CLI passes [`interrupted`].
+pub fn supervise_with(mut child: Child, deadline: Instant, cancel: &dyn Fn() -> bool) -> Outcome {
     let overflow = Arc::new(AtomicBool::new(false));
     let mut pipe = child.stdout.take().expect("stdout is piped");
     let flag = Arc::clone(&overflow);
@@ -205,7 +261,7 @@ pub fn supervise(mut child: Child, deadline: Instant) -> Outcome {
         if exited_unreaped(child.id()) {
             break None;
         }
-        if interrupted() && !forwarded {
+        if cancel() && !forwarded {
             // One SIGINT to `lkpr run` itself (not its group): it cancels its
             // owned job, cleans up its children and prints a final snapshot.
             // SAFETY: kill(2) on our direct child's pid.

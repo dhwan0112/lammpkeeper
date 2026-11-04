@@ -21,3 +21,9 @@ path = "src/main.rs"
 serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 # Signal handling and process-group signalling (POSIX only, as measured).
 libc = "0.2"
+# UI-2: the `tui` subcommand. ratatui draws into an in-memory buffer (its
+# TestBackend renders screens in unit tests without a terminal); crossterm owns
+# raw mode, the alternate screen and key events. Default features except the
+# unused ones are kept so the offline-verified lockfile stays small.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29.0"
