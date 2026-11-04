@@ -58,10 +58,14 @@ replace `lkpr`, and Python-only installs do not need Rust. Build it from source
 cargo install --locked --path rust/lkpr-rs     # installs lkpr-rs into ~/.cargo/bin
 lkpr-rs doctor --python /path/to/env/bin/python
 lkpr-rs thermo-summary --python /path/to/env/bin/python --log log.lammps [--json]
+lkpr-rs tui --python /path/to/env/bin/python [--log log.lammps] [--timeout 60]
 ```
 
 The Python environment must have `lammpkeeper` installed; select it with
 `--python` or `LKPR_PYTHON`. See [`docs/agent/UI-1.md`](docs/agent/UI-1.md).
+`lkpr-rs tui` runs the same check and operation on an interactive screen
+(needs a real terminal; exit 0 on quit, 130 on Ctrl-C, 2 without a terminal);
+see [`docs/agent/UI-2.md`](docs/agent/UI-2.md).
 
 ## Explicit species and groups
 

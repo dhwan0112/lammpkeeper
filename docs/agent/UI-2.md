@@ -1,8 +1,12 @@
 # UI-2: Rust TUI for the shared execution contract — design record
 
-Status: **proposed (2026-11-04), awaiting maintainer approval before any code.**
-Roadmap §8 step 1 and ADR-0004 ("before UI-2, confirm mappings to the shared
-lifecycle") require this record first. Base: main `30f8533`.
+Status: **implemented, reviewed and verified (2026-11-04, PR #89).** Branch
+`ui-2/tui` from main `b59f50e` (after PR #88). The design record below is kept
+as proposed on `30f8533`; the implementation log follows it. Approval: the
+maintainer's standing instruction for this session (keep reviewing, developing
+and merging the backlog without check-ins) was taken as approval of this record
+with the recommended answer to each open decision; the answers are recorded
+under "Decisions taken".
 
 ## Scope
 
@@ -118,6 +122,78 @@ is unit-testable without a terminal. Rendering reads the state only.
 4. Whether `lkpr-rs tui` should also save the diagnostics tail with the
    snapshot when `s` is pressed (proposed: yes, as a second file).
 
-Nothing in this record is implemented. Approval of this record authorises the
-single implementation branch `ui-2/tui` under roadmap §3; the completion claim
-still depends on the verification above.
+Implemented on the single branch `ui-2/tui` (PR #89); the measured results are
+in the implementation log below.
+
+---
+
+# Implementation log (2026-11-04, branch `ui-2/tui`, PR #89)
+
+Base: main `b59f50e` (after PR #88). Everything above this line is the design
+record as proposed; this part records what was built, which proposed answers
+were taken, and what was measured.
+
+## Change
+
+| File | What |
+| --- | --- |
+| `rust/lkpr-rs/Cargo.toml`, `Cargo.lock` | `ratatui 0.30.2` (default features off, `crossterm` feature) and `crossterm 0.29.0`; `rust-version` stays 1.98; offline build from the local registry cache (94 packages). |
+| `rust/lkpr-rs/src/backend.rs` | `StderrMode { Inherit, Piped }` on spawn (the CLI keeps `Inherit`); `supervise_with(child, deadline, cancel)` so the TUI can request a cancel from its own thread; `take_interrupt()`; a SIGTERM flag (`install_sigterm_handler`, `terminated()`) so the event loop can leave cleanly with exit 1. Timeouts, grace periods and the 16 MiB stdout bound are unchanged. |
+| `rust/lkpr-rs/src/main.rs` | New `tui` subcommand (`--python`, `--log`, `--timeout`; `--json` is rejected as a usage error); `summary(&Value) -> Report` splits the run-independent report lines out of the former `print_summary` so the CLI and the Result screen print the same text. `doctor` and `thermo-summary` output is byte-identical to before. |
+| `rust/lkpr-rs/src/tui/mod.rs` | Terminal lifecycle: refuse without a TTY on stdin and stdout or with `TERM` unset/`dumb` (exit 2, message points to `thermo-summary`); raw mode + alternate screen; `restore()` runs on normal exit, Ctrl-C (130), SIGTERM (1) and from a panic hook; the event loop polls keys at 50 ms and drains the worker channel; `settle` waits a bounded time for an in-flight backend before leaving. |
+| `rust/lkpr-rs/src/tui/app.rs` | Pure reducer: screens Setup → Check → Confirm → Running → Result/Error, `Msg` from the worker thread, `Key` from the terminal, stale-snapshot and stale-message rejection by `request_id`, bounded diagnostics tail with control characters escaped, save dialog. 11 unit tests. |
+| `rust/lkpr-rs/src/tui/client.rs` | Worker side: `check` (`exec --capabilities` through the UI-1 client, operation/version lookup), `run` (fresh UUID v4 `request_id` from `/dev/urandom`, `run --events` with piped stderr, event classification), `save` (`create_new`, trailing newline, `<path>.stderr.txt` for the tail). 11 unit tests with fake backends. |
+| `rust/lkpr-rs/src/tui/view.rs` | ratatui rendering of every screen, header `N/5 <screen>`, footer hints, help overlay (`?`/F1), save dialog. 3 tests over `TestBackend`. |
+| `rust/lkpr-rs/tests/cli.rs` | `tui_without_a_terminal_is_a_usage_error` (exit 2, nothing drawn, message names `thermo-summary`). 20 tests in the file. |
+| `tests/test_rust_cli.py` | Real-terminal tests with Python `pty`: `_tui_session` (one key or signal, TIOCSWINSZ, `termios` before/after, alternate-screen enter/leave), `_screen` (a minimal VT100 grid, because ratatui only redraws changed cells) and `_tui_drive` (phrase-driven scripts). Four TUI tests, 13 in the module. |
+
+## Decisions taken
+
+The recommended answer to each open decision was taken:
+
+1. **Same binary.** `lkpr-rs tui` is a subcommand of the UI-1 binary; `doctor`
+   and `thermo-summary` are untouched (their stderr stays inherited).
+2. **One operation.** Only `thermo.summary` v1; a second backend operation is
+   a separate backlog item and the Setup screen does not pretend otherwise.
+3. **Terminal recovery is automated with Python `pty`**, not a PTY crate: the
+   tests open a pseudo-terminal, set its size, record `termios` before and
+   after, and check that the alternate screen is entered and left. Measured:
+   Esc on Setup → 0, Ctrl-C → 130, SIGTERM → 1, `TERM=dumb` → 2 before any
+   drawing. The panic path shares the same `restore()` through the panic hook
+   but is **not exercised by a test** (no induced panic); it is listed as
+   unverified, not as verified.
+4. **The diagnostics tail is saved** next to the snapshot as `<path>.stderr.txt`
+   (only when there is a tail; both files are created with `create_new`, so
+   `s` never overwrites).
+
+Further choices made while implementing:
+
+- `?` is ordinary text on Setup (it may be part of a path); F1 opens help
+  there. Esc on Setup quits; on every other screen Esc goes back or cancels.
+- `q` on Running does not quit; the footer says to cancel first (`c` or
+  Ctrl-C), so a run is never abandoned with the backend still alive.
+- Ctrl-C outside Running exits 130 immediately (same code as the CLI).
+- Progress is the backend's own lifecycle events with elapsed seconds; there
+  is no percentage and no animation that could be mistaken for one.
+- "Saved snapshot equals `thermo-summary --json` byte for byte" from the
+  verification plan is not achievable across two runs (`request_id`, `job_id`
+  and `elapsed_seconds` differ by construction). The parity test instead
+  checks that the Result screen contains every line of `thermo-summary`'s
+  human report, that `backend_response` is equal to the CLI's for the same
+  log, and that the saved snapshot has the same key set as `--json` output.
+
+## Verification (measured)
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --check`, `cargo clippy --offline --all-targets -- -D warnings` | clean |
+| `cargo test --offline` | 32 unit tests + 20 `tests/cli.rs` tests passed |
+| `tests/test_rust_cli.py` (real backend, real PTY) | 13/13: end-to-end check → confirm → run → result → save with CLI parity; cancel while the backend blocks on a FIFO (`thermo.summary  cancelled`, `Cancellation requested by owner`, no survivor processes); terminal restore for Esc/Ctrl-C/SIGTERM; non-TTY usage error |
+| Full Python runner, native parser | 736 passed, 1 failed, 24 skipped |
+| Full Python runner, `LKPR_NO_NATIVE=1` | 723 passed, 1 failed, 37 skipped |
+| The one failure | `test_stale_cache.test_unchanged_source_plot_and_export_still_work`: `export csv needs pandas`, identical on main `b59f50e`; environment-caused, recorded as REV-TEST-4, not touched here |
+| Not verified | induced panic recovery; terminals other than xterm-compatible; sizes below 80×24; anything but Linux x86_64 |
+
+## Review round
+
+@@REVIEW@@

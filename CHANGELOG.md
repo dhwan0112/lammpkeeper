@@ -12,6 +12,26 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### `lkpr-rs tui`: interactive terminal front end (UI-2)
+
+- New subcommand `lkpr-rs tui [--python PATH] [--log FILE] [--timeout SECONDS]`:
+  Setup → Check → Confirm → Running → Result/Error on one screen, driving the
+  same `exec --capabilities` and `run --events` backend commands as `doctor`
+  and `thermo-summary`. Each run sends a complete request with a fresh UUID
+  `request_id` and the Result screen shows only the snapshot that answers it
+  (a mismatch is `stale_snapshot`); lifecycle events from the backend's stderr
+  are listed with elapsed seconds (no percentage), other stderr lines are kept
+  as a bounded tail with control characters escaped. `c` or Ctrl-C cancels
+  through the backend (SIGINT) and shows the backend's own final state; `s`
+  writes the raw snapshot (and `<name>.stderr.txt` for the tail) to a new file
+  only. The Result report is the `thermo-summary` text; `--json` is rejected.
+- Without an interactive terminal on stdin and stdout, or with `TERM` unset or
+  `dumb`, `tui` exits 2 with a message pointing to `thermo-summary`. Raw mode
+  and the alternate screen are restored on quit (0), Ctrl-C (130), SIGTERM (1)
+  and panic. `doctor` and `thermo-summary` are unchanged (stderr inherited).
+- Dependencies added: `ratatui` 0.30.2, `crossterm` 0.29.0 (`rust-version`
+  stays 1.98). See `docs/agent/UI-2.md`.
+
 ### `lkpr-rs` stops stragglers that keep the backend's stdout open (REV-RS-3)
 
 - When the Python backend exits but a process in its group still holds the
