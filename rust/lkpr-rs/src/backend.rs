@@ -41,7 +41,8 @@ extern "C" fn on_sigint(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
-/// SIGTERM handler: record it so the TUI can restore the terminal first.
+/// SIGTERM/SIGHUP handler: record it so the TUI can restore the terminal
+/// and stop its backend first.
 extern "C" fn on_sigterm(_: libc::c_int) {
     TERMINATED.store(true, Ordering::SeqCst);
 }
@@ -68,9 +69,12 @@ pub fn install_sigint_handler() {
 /// disable raw mode before exiting (UI-2); the CLI keeps the default action.
 pub fn install_sigterm_handler() {
     install(libc::SIGTERM, on_sigterm);
+    // The terminal going away (SIGHUP) is the same situation: the backend,
+    // in its own process group, would not see it and must be stopped by us.
+    install(libc::SIGHUP, on_sigterm);
 }
 
-/// True once SIGTERM reached this process (only after
+/// True once SIGTERM or SIGHUP reached this process (only after
 /// [`install_sigterm_handler`]).
 pub fn terminated() -> bool {
     TERMINATED.load(Ordering::SeqCst)

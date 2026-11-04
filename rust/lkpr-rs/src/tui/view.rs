@@ -20,7 +20,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         let notice = format!(
             "lkpr-rs tui needs a terminal of at least {MIN_WIDTH}x{MIN_HEIGHT} \
-             (this one is {}x{}); Esc quits",
+             (this one is {}x{}). Enlarge the window to continue, or press Ctrl-C \
+             to leave (during a run the first Ctrl-C only cancels it).",
             area.width, area.height
         );
         frame.render_widget(Paragraph::new(notice).wrap(Wrap { trim: false }), area);
@@ -41,16 +42,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .title(format!(" {} ", screen_name(app.screen)));
     let inner = block.inner(body);
     frame.render_widget(block, body);
+    let width = inner.width as usize;
     let lines = match app.screen {
         Screen::Setup => setup(app),
         Screen::Check => check(app),
         Screen::Confirm => confirm(app),
-        Screen::Running => running(app, inner.height as usize),
+        Screen::Running => running(app, inner.height as usize, width),
         Screen::Result => result(app),
-        Screen::Error => error(app, inner.height as usize),
+        Screen::Error => error(app, inner.height as usize, width),
     };
+    // Confirm, Result and Error can be longer than the body; Up/Down move
+    // them (the reducer bounds the offset by an estimate, this is the truth).
+    let scroll = app.scroll.min(lines.len().saturating_sub(1) as u16);
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
         inner,
     );
     frame.render_widget(Paragraph::new(footer_text(app)), footer);
@@ -202,7 +209,19 @@ fn confirm(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn running(app: &App, height: usize) -> Vec<Line<'static>> {
+/// One screen row for `text`: cut to `width` cells (by chars, which is what
+/// the terminals in scope use for one cell) with a trailing ellipsis, so
+/// the row accounting of the tails stays exact however long a line is.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
+fn running(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     let Some(run) = &app.run else {
         return vec![plain("no run")];
     };
@@ -246,7 +265,7 @@ fn running(app: &App, height: usize) -> Vec<Line<'static>> {
         run.diagnostics
             .iter()
             .skip(skip)
-            .map(|l| plain(format!("  {l}"))),
+            .map(|l| plain(format!("  {}", clip(l, width.saturating_sub(2))))),
     );
     lines
 }
@@ -284,7 +303,7 @@ fn result(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn error(app: &App, height: usize) -> Vec<Line<'static>> {
+fn error(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![bold("the run did not produce a result")];
     if let Some(error) = &app.error {
         lines.extend(error.lines().map(|l| plain(l.to_string())));
@@ -298,7 +317,7 @@ fn error(app: &App, height: usize) -> Vec<Line<'static>> {
             run.diagnostics
                 .iter()
                 .skip(skip)
-                .map(|l| plain(format!("  {l}"))),
+                .map(|l| plain(format!("  {}", clip(l, width.saturating_sub(2))))),
         );
     }
     lines.push(plain(""));
@@ -310,10 +329,10 @@ fn footer_text(app: &App) -> Text<'static> {
     let keys = match app.screen {
         Screen::Setup => "Tab/Shift-Tab field  Enter check  Ctrl-U clear  Esc quit  F1 keys",
         Screen::Check => "Esc cancel  ? keys",
-        Screen::Confirm => "Enter run  Esc back  ? keys",
+        Screen::Confirm => "Enter run  Esc back  Up/Down scroll  ? keys",
         Screen::Running => "c or Ctrl-C cancel  ? keys",
-        Screen::Result => "Enter setup  s save  q quit  ? keys",
-        Screen::Error => "Enter setup  q quit  ? keys",
+        Screen::Result => "Enter setup  s save  q quit  Up/Down scroll  ? keys",
+        Screen::Error => "Enter setup  q quit  Up/Down scroll  ? keys",
     };
     let message = app.message.clone().unwrap_or_default();
     Text::from(vec![
@@ -356,6 +375,8 @@ s                 save the raw snapshot JSON to a new file (Result screen);
 Esc               back, or quit from Setup
 q                 quit (except on Setup, where it is text)
 Ctrl-C            quit from any screen but Running (exit status 130)
+Up / Down         scroll the Confirm, Result and Error screens by a line,
+PgUp / PgDn       by ten lines
 F1 or ?           this list (? is text on Setup)
 
 Every run sends a fresh request_id; a result is shown only for the current
@@ -652,6 +673,41 @@ mod tests {
         assert!(has(&lines, "fresh request_id"), "{lines:#?}");
         let lines = render(&result, 40, 10);
         assert!(has(&lines, "80x24") && has(&lines, "40x10"), "{lines:#?}");
+        assert!(has(&lines, "Ctrl-C"), "{lines:#?}");
         assert!(!has(&lines, "Result"));
+    }
+
+    #[test]
+    /// A diagnostic longer than the body is cut to one row with an ellipsis
+    /// (so the tail never wraps past the border), and the scroll offset
+    /// moves a long Confirm body up by whole rows.
+    fn long_lines_are_clipped_and_scrolling_moves_the_body() {
+        let (_, mut running) = screens()
+            .into_iter()
+            .find(|(s, _)| *s == Screen::Running)
+            .unwrap();
+        let id = running.run.as_ref().unwrap().id;
+        let long = "x".repeat(300);
+        running.apply(Msg::Line {
+            run: id,
+            line: StderrLine::Diagnostic(long.clone()),
+        });
+        let lines = render(&running, 80, 24);
+        assert!(!has(&lines, &long));
+        assert!(has(&lines, "\u{2026}"), "{lines:#?}");
+        let rows = lines.iter().filter(|l| l.contains("xxxxxxxx")).count();
+        assert_eq!(rows, 1, "{lines:#?}");
+
+        let (_, mut confirm) = screens()
+            .into_iter()
+            .find(|(s, _)| *s == Screen::Confirm)
+            .unwrap();
+        let before = render(&confirm, 80, 24);
+        keys(&mut confirm, &[Key::Down, Key::Down]);
+        assert_eq!(confirm.scroll, 2);
+        let after = render(&confirm, 80, 24);
+        // Row 2 is the first body row (header, then the border).
+        assert_eq!(after[2], before[4], "{before:#?}\n{after:#?}");
+        assert_ne!(after[2], before[2]);
     }
 }

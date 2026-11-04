@@ -27,8 +27,18 @@ on 2026-10-26; that tag predates the unreleased fixes below.
   only. The Result report is the `thermo-summary` text; `--json` is rejected.
 - Without an interactive terminal on stdin and stdout, or with `TERM` unset or
   `dumb`, `tui` exits 2 with a message pointing to `thermo-summary`. Raw mode
-  and the alternate screen are restored on quit (0), Ctrl-C (130), SIGTERM (1)
-  and panic. `doctor` and `thermo-summary` are unchanged (stderr inherited).
+  and the alternate screen are restored on quit (0), Ctrl-C (130), SIGTERM or
+  SIGHUP (1), a terminal that hung up (1, `terminal_error: the terminal hung
+  up`; detected with `poll(2)` before crossterm reads the dead tty, which would
+  spin forever) and panic; whatever is still in flight is cancelled through the
+  backend and waited for before the process leaves. `doctor` and
+  `thermo-summary` are unchanged (stderr inherited).
+- Confirm, Result and Error scroll with Up/Down and PgUp/PgDn; backend stderr
+  lines longer than the body are clipped; the event list (64) and the stderr
+  tail (200 lines) are bounded; a worker thread that panics is shown as
+  `internal_error` instead of hanging the screen; `s` refuses before writing
+  anything when `<name>.stderr.txt` already exists. Below 80x24 the notice
+  names Ctrl-C as the way out.
 - Dependencies added: `ratatui` 0.30.2, `crossterm` 0.29.0 (`rust-version`
   stays 1.98). See `docs/agent/UI-2.md`.
 

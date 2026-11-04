@@ -8,7 +8,8 @@
 //! state and side-effect requests out), `view` draws it, `client` runs the
 //! backend on threads and reports back over a channel; this module owns the
 //! terminal: raw mode, the alternate screen, and their restoration on every
-//! exit path (normal quit, Ctrl-C, SIGTERM, panic).
+//! exit path (normal quit, Ctrl-C, SIGTERM, SIGHUP, the terminal hanging
+//! up, panic).
 
 mod app;
 mod client;
@@ -51,17 +52,22 @@ pub fn run(options: &Options) -> Result<u8, Failure> {
     backend::install_sigterm_handler();
     let (tx, rx) = mpsc::channel();
     let mut terminal = enter()?;
-    // A panic anywhere must not leave the terminal in raw mode on the
-    // alternate screen: restore first, then report as usual.
+    // A panic on this thread must not leave the terminal in raw mode on the
+    // alternate screen: restore first, then report as usual. A worker thread
+    // that panics is reported to the reducer by the client (the screen stays
+    // up and shows it), so nothing is printed over the screen for it.
     let default_hook = std::panic::take_hook();
+    let screen_thread = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
-        restore();
-        default_hook(info);
+        if std::thread::current().id() == screen_thread {
+            restore();
+            default_hook(info);
+        }
     }));
     let result = event_loop(&mut terminal, &mut app, &tx, &rx);
     restore();
     drop(terminal);
-    settle(&app, &rx);
+    settle(&mut app, &rx);
     result
 }
 
@@ -124,7 +130,7 @@ fn event_loop(
         if backend::take_interrupt() {
             app.apply(Msg::Key(Key::CtrlC));
         }
-        if event::poll(POLL).map_err(terminal_error)? {
+        if input_ready(libc::STDIN_FILENO, POLL).map_err(terminal_error)? {
             if let Event::Key(key) = event::read().map_err(terminal_error)? {
                 if key.kind != KeyEventKind::Release {
                     if let Some(key) = translate(key.code, key.modifiers) {
@@ -146,6 +152,44 @@ fn event_loop(
     }
 }
 
+/// Wait up to `timeout` for input on the terminal `fd`, reporting a hang-up
+/// as an error instead of handing it to crossterm. On a tty whose terminal
+/// has gone (window closed, ssh dropped, pty master closed) `poll` reports
+/// readable and every `read` returns 0 bytes; crossterm 0.29's inner read
+/// loop only leaves on a parsed event or `EWOULDBLOCK`, so one `event::poll`
+/// or `event::read` on such a tty spins at 100% CPU and never returns to the
+/// loop above, where the SIGHUP flag and the backend are handled. Checking
+/// `POLLHUP`/`POLLERR` first keeps crossterm off a hung-up tty; the event
+/// that made `fd` readable is then read without blocking.
+fn input_ready(fd: libc::c_int, timeout: Duration) -> std::io::Result<bool> {
+    let mut fds = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let millis = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
+    // SAFETY: `fds` is one valid pollfd that outlives the call, and 1 is its length.
+    let ready = unsafe { libc::poll(&mut fds, 1, millis) };
+    if ready < 0 {
+        let err = std::io::Error::last_os_error();
+        return if err.kind() == std::io::ErrorKind::Interrupted {
+            Ok(false)
+        } else {
+            Err(err)
+        };
+    }
+    if ready == 0 {
+        return Ok(false);
+    }
+    if fds.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "the terminal hung up",
+        ));
+    }
+    Ok(true)
+}
+
 /// The subset of terminal keys the screens use.
 fn translate(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
     let control = modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
@@ -160,6 +204,10 @@ fn translate(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Esc => Key::Esc,
         KeyCode::F(1) => Key::Help,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
         _ => return None,
     })
 }
@@ -174,11 +222,14 @@ fn perform(action: Action, app: &mut App, tx: &mpsc::Sender<Msg>) {
     }
 }
 
-/// After the terminal is back: a backend still in flight (SIGTERM or Ctrl-C
-/// while checking) had its cancel flag set by the reducer, so wait, bounded,
-/// for the supervisor to finish with it instead of leaving it unattended. A
-/// backend that ignores the SIGINT is forced by `supervise` within its grace.
-fn settle(app: &App, rx: &mpsc::Receiver<Msg>) {
+/// After the terminal is back: whatever is still in flight (SIGTERM, SIGHUP
+/// or Ctrl-C while checking, the terminal gone mid-run, a key handled in the
+/// leaving iteration) is asked to stop here, whether or not the reducer
+/// already did, and the supervisor is waited for, bounded, instead of
+/// leaving a backend unattended. A backend that ignores the SIGINT is forced
+/// by `supervise` within its grace.
+fn settle(app: &mut App, rx: &mpsc::Receiver<Msg>) {
+    app.stop();
     if !app.busy() {
         return;
     }
@@ -191,11 +242,48 @@ fn settle(app: &App, rx: &mpsc::Receiver<Msg>) {
         + backend::KILL_GRACE
         + backend::STDOUT_CLOSE_WAIT
         + Duration::from_secs(1);
-    while Instant::now() < limit {
+    while app.busy() && Instant::now() < limit {
         match rx.recv_timeout(POLL) {
-            Ok(Msg::Finished { .. } | Msg::Probed { .. }) => return,
-            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(msg) => app.apply(msg),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pipe() -> (libc::c_int, libc::c_int) {
+        let mut fds = [0; 2];
+        // SAFETY: `fds` is a valid array of two ints for pipe(2) to fill.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        (fds[0], fds[1])
+    }
+
+    #[test]
+    fn input_ready_distinguishes_data_timeout_and_hang_up() {
+        let (reader, writer) = pipe();
+        let short = Duration::from_millis(10);
+        assert!(!input_ready(reader, short).unwrap(), "nothing written yet");
+        // SAFETY: `writer` is the open write end and the buffer is one byte.
+        assert_eq!(unsafe { libc::write(writer, b"q".as_ptr().cast(), 1) }, 1);
+        assert!(input_ready(reader, short).unwrap(), "a byte is waiting");
+        // SAFETY: closing the write end we own.
+        assert_eq!(unsafe { libc::close(writer) }, 0);
+        // The byte is still readable, but the far end is gone: report the
+        // hang-up rather than letting crossterm spin on an endless EOF.
+        let err = input_ready(reader, short).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert_eq!(err.to_string(), "the terminal hung up");
+        // SAFETY: closing the read end we own.
+        assert_eq!(unsafe { libc::close(reader) }, 0);
+        let err = input_ready(reader, short).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::ConnectionAborted,
+            "POLLNVAL"
+        );
     }
 }

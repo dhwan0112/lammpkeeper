@@ -47,7 +47,7 @@ publish in `--capabilities`.
 | Cancel | `Ctrl-C` or `c` on the Running screen forwards SIGINT to the backend process group (existing `backend` path) and waits for the terminal snapshot; shows `cancelled` only when the backend says so. `Forced::Unresponsive`/`OutputTooLarge`/`stdout_held_open` are shown as those failures, never as cancelled | UI-1 cancellation contract reused unchanged. |
 | Result | Same table as `print_summary` (values as received, `arbitrary_precision`), unit system, warnings, `cleanup.status`, `interpreter`, `handshake` versions, `elapsed_seconds`; `s` writes the raw snapshot JSON to a user-named file; `--json` is not a TUI mode | Values, units and provenance identical to the CLI. |
 | Errors | `error.code` + message, `diagnostics.execution` tail, exit path back to Setup | Visible failure, no silent repair. |
-| Terminal recovery | `std::panic::set_hook` restores the terminal (leave alternate screen, disable raw mode, show cursor) before the default hook; the same restore runs on normal exit and after `Ctrl-C`; SIGTERM to `lkpr-rs tui` restores and exits 1 | Roadmap §8 step 6. |
+| Terminal recovery | `std::panic::set_hook` restores the terminal (leave alternate screen, disable raw mode, show cursor) before the default hook; the same restore runs on normal exit and after `Ctrl-C`; SIGTERM or SIGHUP to `lkpr-rs tui`, or its terminal hanging up, restores, stops the backend and exits 1 | Roadmap §8 step 6. |
 | Keys | Tab/Shift-Tab move between fields; Enter confirms/starts; `c` cancel; `s` save snapshot; `q`/Esc back or quit (quit on Running asks to cancel first); `?` shows this key list | Small fixed set; documented in `--help`. |
 
 ### Screen state model
@@ -138,9 +138,9 @@ were taken, and what was measured.
 | File | What |
 | --- | --- |
 | `rust/lkpr-rs/Cargo.toml`, `Cargo.lock` | `ratatui 0.30.2` (default features off, `crossterm` feature) and `crossterm 0.29.0`; `rust-version` stays 1.98; offline build from the local registry cache (94 packages). |
-| `rust/lkpr-rs/src/backend.rs` | `StderrMode { Inherit, Piped }` on spawn (the CLI keeps `Inherit`); `supervise_with(child, deadline, cancel)` so the TUI can request a cancel from its own thread; `take_interrupt()`; a SIGTERM flag (`install_sigterm_handler`, `terminated()`) so the event loop can leave cleanly with exit 1. Timeouts, grace periods and the 16 MiB stdout bound are unchanged. |
+| `rust/lkpr-rs/src/backend.rs` | `StderrMode { Inherit, Piped }` on spawn (the CLI keeps `Inherit`); `supervise_with(child, deadline, cancel)` so the TUI can request a cancel from its own thread; `take_interrupt()`; a SIGTERM/SIGHUP flag (`install_sigterm_handler`, `terminated()`) so the event loop can leave cleanly with exit 1. Timeouts, grace periods and the 16 MiB stdout bound are unchanged. |
 | `rust/lkpr-rs/src/main.rs` | New `tui` subcommand (`--python`, `--log`, `--timeout`; `--json` is rejected as a usage error); `summary(&Value) -> Report` splits the run-independent report lines out of the former `print_summary` so the CLI and the Result screen print the same text. `doctor` and `thermo-summary` output is byte-identical to before. |
-| `rust/lkpr-rs/src/tui/mod.rs` | Terminal lifecycle: refuse without a TTY on stdin and stdout or with `TERM` unset/`dumb` (exit 2, message points to `thermo-summary`); raw mode + alternate screen; `restore()` runs on normal exit, Ctrl-C (130), SIGTERM (1) and from a panic hook; the event loop polls keys at 50 ms and drains the worker channel; `settle` waits a bounded time for an in-flight backend before leaving. |
+| `rust/lkpr-rs/src/tui/mod.rs` | Terminal lifecycle: refuse without a TTY on stdin and stdout or with `TERM` unset/`dumb` (exit 2, message points to `thermo-summary`); raw mode + alternate screen; `restore()` runs on normal exit, Ctrl-C (130), SIGTERM/SIGHUP (1), a terminal that hung up (1, `terminal_error`) and from a panic hook (screen thread only); the event loop waits for keys with `poll(2)` at 50 ms (a `POLLHUP` is reported before crossterm is allowed to read the dead tty, see the review round) and drains the worker channel; `settle` stops and waits a bounded time for anything in flight before leaving. |
 | `rust/lkpr-rs/src/tui/app.rs` | Pure reducer: screens Setup → Check → Confirm → Running → Result/Error, `Msg` from the worker thread, `Key` from the terminal, stale-snapshot and stale-message rejection by `request_id`, bounded diagnostics tail with control characters escaped, save dialog. 11 unit tests. |
 | `rust/lkpr-rs/src/tui/client.rs` | Worker side: `check` (`exec --capabilities` through the UI-1 client, operation/version lookup), `run` (fresh UUID v4 `request_id` from `/dev/urandom`, `run --events` with piped stderr, event classification), `save` (`create_new`, trailing newline, `<path>.stderr.txt` for the tail). 11 unit tests with fake backends. |
 | `rust/lkpr-rs/src/tui/view.rs` | ratatui rendering of every screen, header `N/5 <screen>`, footer hints, help overlay (`?`/F1), save dialog. 3 tests over `TestBackend`. |
@@ -187,13 +187,54 @@ Further choices made while implementing:
 | Check | Result |
 | --- | --- |
 | `cargo fmt --check`, `cargo clippy --offline --all-targets -- -D warnings` | clean |
-| `cargo test --offline` | 32 unit tests + 20 `tests/cli.rs` tests passed |
-| `tests/test_rust_cli.py` (real backend, real PTY) | 13/13: end-to-end check → confirm → run → result → save with CLI parity; cancel while the backend blocks on a FIFO (`thermo.summary  cancelled`, `Cancellation requested by owner`, no survivor processes); terminal restore for Esc/Ctrl-C/SIGTERM; non-TTY usage error |
-| Full Python runner, native parser | 736 passed, 1 failed, 24 skipped |
-| Full Python runner, `LKPR_NO_NATIVE=1` | 723 passed, 1 failed, 37 skipped |
+| `cargo test --offline` | 38 unit tests + 20 `tests/cli.rs` tests passed (after the review round; 32 + 20 before it) |
+| `tests/test_rust_cli.py` (real backend, real PTY) | 13/13: end-to-end check → confirm → run → result → save with CLI parity; cancel while the backend blocks on a FIFO (`thermo.summary  cancelled`, `Cancellation requested by owner`, no survivor processes); terminal closed mid-run (hang-up on the controlling terminal: exit 1, backend stopped); terminal restore for Esc/Ctrl-C/SIGTERM/SIGHUP; the notice below 80×24 and Ctrl-C from it; non-TTY usage error |
+| Full Python runner, native parser | 738 passed, 1 failed, 24 skipped (the failure is REV-TEST-4, identical on main) |
+| Full Python runner, `LKPR_NO_NATIVE=1` | 725 passed, 1 failed, 37 skipped (same failure) |
 | The one failure | `test_stale_cache.test_unchanged_source_plot_and_export_still_work`: `export csv needs pandas`, identical on main `b59f50e`; environment-caused, recorded as REV-TEST-4, not touched here |
-| Not verified | induced panic recovery; terminals other than xterm-compatible; sizes below 80×24; anything but Linux x86_64 |
+| Not verified | a panic on the screen thread end to end (the worker-thread case is unit-tested); terminals other than xterm-compatible; anything but Linux x86_64 |
 
 ## Review round
 
-@@REVIEW@@
+An independent read of the branch diff (origin/main..ui-2/tui, Cargo.lock
+excluded) returned five should-fix findings and seven nits. Every finding was
+checked against the sources before it was acted on; all were real. What
+changed, by finding:
+
+| # | Finding | Change |
+| --- | --- | --- |
+| 1 | Shutdown could leave the backend running: `settle` only waited when the reducer had set a cancel flag, so a terminal error, a hang-up (SIGHUP was not handled; the backend sits in its own process group and never sees it) or a key handled in the leaving iteration could exit with a live `lkpr run` behind. `busy()` was `probe.is_some() \|\| running`, which is false for a probe cancelled with Esc or a run superseded on screen, although their children are still there. | `App::stop()` (sets every cancel flag) is called by `settle` unconditionally, and `settle` applies incoming messages until nothing is in flight. `busy()` is an in-flight counter: incremented when a `Probe`/`Start` action is queued, decremented on any `Probed`/`Finished`. SIGHUP is routed to the same flag as SIGTERM (exit 1 after restore and stop). Keys are ignored once `exit` is set. |
+| 2 | A worker thread that panicked never answered, so the screen spun forever; worse, the panic hook restored the terminal from the worker thread and printed the panic over the live screen. | `client::spawn_guarded` wraps the probe and run threads in `catch_unwind` and reports `internal_error: the backend thread panicked: <message>` as `Probed`/`Finished` `Err`. The hook restores and prints only on the screen thread. Unit test `a_panicking_worker_reports_instead_of_vanishing`. |
+| 3 | The stderr reader thread was not joined, so `Finished` could overtake the last diagnostics (the Error screen could miss the backend's final lines). | The reader closes a `done` channel when stderr ends; the run thread waits for it (bounded by `TAIL_WAIT`, 500 ms) before sending `Finished`. |
+| 4 | A diagnostic longer than the body wrapped and pushed the tail past the border (the row budget counted logical lines); Confirm, Result and Error had no scrolling at all, so a long request or report was simply cut. | Diagnostics are clipped to the body width with `…`. Up/Down and PgUp/PgDn scroll Confirm, Result and Error; the reducer bounds the offset by a line estimate, the view clamps to what it draws, and a screen change resets it. Footer and help list the keys. |
+| 5 | Two unbounded buffers: the probe's stderr tail and the per-run `events` list. | Both bounded: the tail to `DIAGNOSTICS_TAIL` (200), events to `EVENTS_MAX` (64) with surplus events pushed into the tail as text. |
+| nit | The small-terminal notice said "Esc quits", but Esc only quits from Setup. | The notice now says to enlarge the window or press Ctrl-C (and that during a run the first Ctrl-C only cancels). |
+| nit | `s` could write the snapshot and then refuse the `.stderr.txt` beside it, reporting a plain failure although half the pair was on disk. | The aside is checked before anything is written; a failure after the snapshot was written is reported as "saved X, but …". |
+| nit | `_tui_drive` killed only the top process on timeout, leaving a backend for the next test. | Descendants are killed first. |
+| nit | No PTY test for the closed-terminal case, none for SIGHUP, none below 80×24. | Added: `test_tui_stops_the_backend_when_the_terminal_closes` (the process is a session leader with the pseudo-terminal as its controlling terminal; closing the master hangs it up mid-run; exit 1, "waiting for the backend to stop" on stderr, every descendant gone), SIGHUP in `test_tui_restores_the_terminal_when_left`, `test_tui_too_small_terminal_shows_the_notice_and_leaves_on_ctrl_c`. |
+| nit | `view::running`/`error` took only the height. | They take the width too (needed for clipping). |
+| nit | Reviewer line numbers referred to the diff, not the sources. | No change; noted for the next round. |
+| nit | `Up`/`Down` were translated to nothing. | Translated to the scroll keys. |
+
+Found by the new closed-terminal test, not by the review (it hung two runs in
+three under load, exit by the harness's SIGKILL with nothing on stderr):
+
+| # | Finding | Change |
+| --- | --- | --- |
+| 6 | Once the pseudo-terminal's master is closed, the slave is hung up: `poll` reports it readable and every `read` returns 0 bytes. crossterm 0.29's inner read loop (`event/source/unix/mio.rs`) leaves only on a parsed event or `EWOULDBLOCK`, so the first `event::poll` after the hang-up spun at 100 % CPU and never came back to the loop that checks the SIGHUP flag (`/proc/<pid>/task/<main>`: state R, no pending signals). The run passed only when a draw happened to fail with EIO before the next poll. The test-side fallback of sending SIGHUP explicitly would not have helped: the handler only sets a flag the spinning loop never reads. | The loop waits for input with its own `poll(2)` on stdin (`input_ready`) and reports `POLLHUP`/`POLLERR`/`POLLNVAL` as `terminal_error: the terminal hung up` (exit 1 through the usual restore and settle) before crossterm touches the tty; a readable, live tty is then read with `event::read`, which returns at once. Unit test `input_ready_distinguishes_data_timeout_and_hang_up` (pipe: empty → false, a byte → true, writer closed → the error, read end closed → `POLLNVAL` → the error). Six probe rounds of the scenario leave in 1.1–1.3 s each (three through the new error, three through EIO on a draw). |
+
+Recorded as known limits rather than changed:
+
+- A SIGTERM or SIGHUP that arrives before the handler is installed (the first
+  milliseconds of `run`) takes the default action, as it does for the CLI.
+- `clip` counts characters, not display cells; a wide (CJK or emoji) character
+  in a backend stderr line can still make a row one cell too long.
+- The Python `_screen` emulator covers only the CSI sequences this TUI emits.
+- `--log` is passed to the backend as typed; the backend validates it.
+- A hang-up that lands between `input_ready` seeing a key and `event::read`
+  consuming it (microseconds, and only with a key in flight) still reaches
+  crossterm's read loop; the SIGTERM path is unaffected. Replacing crossterm's
+  reader is out of scope.
+- ratatui's `Terminal` drop prints `Failed to show the cursor: Input/output
+  error` on stderr when the terminal is already gone; harmless, and the cursor
+  was shown by `restore()` as far as a dead terminal allows.

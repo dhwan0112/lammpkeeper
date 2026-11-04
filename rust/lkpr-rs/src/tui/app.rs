@@ -22,6 +22,9 @@ use std::time::Instant;
 
 /// Diagnostics lines kept per run: the tail is shown and saved.
 pub const DIAGNOSTICS_TAIL: usize = 200;
+/// Lifecycle events listed per run; the protocol sends at most four, a
+/// backend that keeps sending them is shown in the tail instead.
+pub const EVENTS_MAX: usize = 64;
 /// Backend timeout prefilled on the form, as `thermo-summary` defaults.
 pub const DEFAULT_TIMEOUT: &str = "60";
 
@@ -83,6 +86,10 @@ pub enum Key {
     CtrlC,
     CtrlU,
     Help,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
 }
 
 /// One lifecycle event of the backend's `--events` stream. `elapsed` keeps
@@ -208,9 +215,13 @@ pub struct App {
     pub save: Option<String>,
     /// Set when the loop should leave, with the exit status.
     pub exit: Option<u8>,
+    /// Rows scrolled on Confirm, Result and Error; reset on every screen change.
+    pub scroll: u16,
     pub ticks: u64,
     actions: Vec<Action>,
     next_id: u64,
+    /// Probes and runs started and not yet answered, whatever their id.
+    in_flight: usize,
 }
 
 /// The timeout field, validated as `--timeout` is: finite, positive, and
@@ -247,9 +258,11 @@ impl App {
             error: None,
             save: None,
             exit: None,
+            scroll: 0,
             ticks: 0,
             actions: Vec::new(),
             next_id: 0,
+            in_flight: 0,
         }
     }
 
@@ -258,9 +271,10 @@ impl App {
         std::mem::take(&mut self.actions)
     }
 
-    /// A probe or a run is still in flight.
+    /// A probe or a run is still in flight: started and not yet answered,
+    /// even once it was cancelled or superseded on screen.
     pub fn busy(&self) -> bool {
-        self.probe.is_some() || self.running
+        self.in_flight > 0
     }
 
     pub fn field(&self, field: Field) -> &str {
@@ -285,11 +299,28 @@ impl App {
     }
 
     pub fn apply(&mut self, msg: Msg) {
+        let before = self.screen;
+        self.dispatch(msg);
+        if self.screen != before {
+            self.scroll = 0;
+        }
+    }
+
+    fn dispatch(&mut self, msg: Msg) {
         match msg {
             Msg::Tick => self.ticks = self.ticks.wrapping_add(1),
             Msg::Terminate => self.leave(1),
-            Msg::Key(key) => self.key(key),
-            Msg::Probed { probe, result } => self.probed(probe, result),
+            // Nothing is read once the loop was asked to leave: a key in the
+            // same iteration must not start work after everything was stopped.
+            Msg::Key(key) => {
+                if self.exit.is_none() {
+                    self.key(key);
+                }
+            }
+            Msg::Probed { probe, result } => {
+                self.in_flight = self.in_flight.saturating_sub(1);
+                self.probed(probe, result);
+            }
             Msg::Line { run, line } => {
                 if self.run.as_ref().is_some_and(|r| r.id == run) {
                     self.line(line);
@@ -299,7 +330,10 @@ impl App {
                 run,
                 result,
                 interrupted,
-            } => self.finished(run, result, interrupted),
+            } => {
+                self.in_flight = self.in_flight.saturating_sub(1);
+                self.finished(run, result, interrupted);
+            }
             Msg::Saved(result) => match result {
                 Ok(done) => {
                     self.save = None;
@@ -331,6 +365,23 @@ impl App {
         if self.save.is_some() {
             return self.save_key(key);
         }
+        if matches!(
+            self.screen,
+            Screen::Confirm | Screen::Result | Screen::Error
+        ) {
+            let step = match key {
+                Key::Up => -1,
+                Key::Down => 1,
+                Key::PageUp => -10,
+                Key::PageDown => 10,
+                _ => 0,
+            };
+            if step != 0 {
+                let limit = i64::from(self.scroll_limit());
+                self.scroll = (i64::from(self.scroll) + step).clamp(0, limit) as u16;
+                return;
+            }
+        }
         match self.screen {
             Screen::Setup => self.setup_key(key),
             Screen::Check => self.check_key(key),
@@ -353,13 +404,44 @@ impl App {
     /// Leave with `code`; anything in flight is asked to stop so the loop
     /// can wait for it once the terminal is restored.
     fn leave(&mut self, code: u8) {
+        self.stop();
+        self.exit = Some(code);
+    }
+
+    /// Ask everything in flight to stop (one SIGINT each, forwarded by the
+    /// supervisor). Called on leave and again by the loop before it waits,
+    /// so a backend is never left running when the loop ended for another
+    /// reason (terminal gone, a key handled in the leaving iteration).
+    pub fn stop(&self) {
         if let Some(probe) = &self.probe {
             probe.cancel.store(true, Ordering::SeqCst);
         }
         if let Some(run) = &self.run {
             run.cancel.store(true, Ordering::SeqCst);
         }
-        self.exit = Some(code);
+    }
+
+    /// Rows the current screen can be scrolled by: an upper estimate of its
+    /// body lines (the view clamps again to what it draws).
+    fn scroll_limit(&self) -> u16 {
+        let lines = match self.screen {
+            Screen::Confirm => self.run.as_ref().map_or(0, |run| {
+                serde_json::to_string_pretty(&run.request)
+                    .map_or(0, |pretty| pretty.lines().count())
+                    + 8
+            }),
+            Screen::Result => self
+                .outcome
+                .as_ref()
+                .map_or(0, |outcome| outcome.report.lines().count() + 8),
+            Screen::Error => {
+                self.error.as_ref().map_or(0, |error| error.lines().count())
+                    + self.run.as_ref().map_or(0, |run| run.diagnostics.len())
+                    + 6
+            }
+            Screen::Setup | Screen::Check | Screen::Running => 0,
+        };
+        u16::try_from(lines.saturating_sub(1)).unwrap_or(u16::MAX)
     }
 
     fn setup_key(&mut self, key: Key) {
@@ -423,6 +505,7 @@ impl App {
         };
         self.probe = Some(probe.clone());
         self.actions.push(Action::Probe(probe));
+        self.in_flight += 1;
         self.message = None;
         self.screen = Screen::Check;
     }
@@ -530,6 +613,7 @@ impl App {
             cancel: Arc::clone(&run.cancel),
         };
         self.actions.push(Action::Start(start));
+        self.in_flight += 1;
         self.running = true;
         self.outcome = None;
         self.message = None;
@@ -565,13 +649,15 @@ impl App {
             return;
         };
         match line {
-            Line::Event(event) => run.events.push(event),
-            Line::Diagnostic(text) => {
-                if run.diagnostics.len() == DIAGNOSTICS_TAIL {
-                    run.diagnostics.pop_front();
-                }
-                run.diagnostics.push_back(text);
-            }
+            Line::Event(event) if run.events.len() < EVENTS_MAX => run.events.push(event),
+            Line::Event(event) => push_tail(
+                &mut run.diagnostics,
+                format!(
+                    "event {} {} {} (beyond the {EVENTS_MAX} listed)",
+                    event.sequence, event.state, event.elapsed
+                ),
+            ),
+            Line::Diagnostic(text) => push_tail(&mut run.diagnostics, text),
         }
     }
 
@@ -682,6 +768,14 @@ fn supported(ok: bool) -> &'static str {
     } else {
         "NOT supported"
     }
+}
+
+/// Append to a tail that keeps the newest [`DIAGNOSTICS_TAIL`] lines.
+fn push_tail(tail: &mut VecDeque<String>, text: String) {
+    if tail.len() == DIAGNOSTICS_TAIL {
+        tail.pop_front();
+    }
+    tail.push_back(text);
 }
 
 #[cfg(test)]
@@ -1057,6 +1151,103 @@ mod tests {
         let mut app = fresh();
         app.apply(Msg::Terminate);
         assert_eq!(app.exit, Some(1));
+    }
+
+    #[test]
+    /// Esc on Check cancels the probe but it stays counted until it answers;
+    /// `stop` reaches a run even when nothing asked to leave; once the loop
+    /// is leaving, keys do nothing.
+    fn in_flight_work_is_counted_until_answered_and_keys_stop_at_exit() {
+        let mut app = fresh();
+        keys(&mut app, &[Key::Enter]);
+        let actions = app.take_actions();
+        let Some(Action::Probe(probe)) = actions.first() else {
+            panic!("{actions:?}");
+        };
+        let probe = probe.clone();
+        keys(&mut app, &[Key::Esc]);
+        assert_eq!(app.screen, Screen::Setup);
+        assert!(probe.cancel.load(Ordering::SeqCst));
+        assert!(
+            app.busy(),
+            "a cancelled probe still has a child to wait for"
+        );
+        app.apply(Msg::Probed {
+            probe: probe.id,
+            result: Err("cancelled".to_string()),
+        });
+        assert!(!app.busy());
+        assert_eq!(app.screen, Screen::Setup);
+
+        let mut app = fresh();
+        to_confirm(&mut app);
+        let (id, start) = to_running(&mut app);
+        app.stop();
+        assert!(start.cancel.load(Ordering::SeqCst));
+        app.apply(Msg::Terminate);
+        keys(&mut app, &[Key::Enter, Key::Char('q')]);
+        assert_eq!(app.exit, Some(1));
+        assert!(app.take_actions().is_empty());
+        assert!(app.busy());
+        app.apply(Msg::Finished {
+            run: id,
+            result: Err("stopped".to_string()),
+            interrupted: true,
+        });
+        assert!(!app.busy());
+    }
+
+    #[test]
+    /// Up/Down and PageUp/PageDown scroll Confirm, Result and Error within
+    /// their body, and a screen change resets the offset.
+    fn scrolling_is_bounded_and_reset_per_screen() {
+        let mut app = fresh();
+        to_confirm(&mut app);
+        keys(&mut app, &[Key::Up]);
+        assert_eq!(app.scroll, 0);
+        keys(&mut app, &[Key::Down, Key::Down, Key::PageDown]);
+        assert!(app.scroll >= 2 && app.scroll <= 30, "{}", app.scroll);
+        let (id, _) = to_running(&mut app);
+        assert_eq!(app.scroll, 0);
+        keys(&mut app, &[Key::Down]);
+        assert_eq!(app.scroll, 0, "Running does not scroll");
+        let request_id = app.run.as_ref().unwrap().request_id.clone();
+        app.apply(Msg::Finished {
+            run: id,
+            result: Ok((snapshot(&request_id, "succeeded"), Vec::new())),
+            interrupted: false,
+        });
+        assert_eq!(app.screen, Screen::Result);
+        keys(&mut app, &[Key::PageDown, Key::PageDown, Key::PageDown]);
+        let limit = app.scroll_limit();
+        assert_eq!(app.scroll, limit);
+        keys(
+            &mut app,
+            &[Key::PageUp, Key::PageUp, Key::PageUp, Key::PageUp],
+        );
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    /// More events than the list holds go to the bounded tail as text.
+    fn surplus_events_go_to_the_tail() {
+        let mut app = fresh();
+        to_confirm(&mut app);
+        let (id, _) = to_running(&mut app);
+        for i in 0..(EVENTS_MAX + 3) {
+            app.apply(Msg::Line {
+                run: id,
+                line: Line::Event(Event {
+                    sequence: i as u64,
+                    state: "running".to_string(),
+                    elapsed: "0.1".to_string(),
+                }),
+            });
+        }
+        let run = app.run.as_ref().unwrap();
+        assert_eq!(run.events.len(), EVENTS_MAX);
+        assert_eq!(run.diagnostics.len(), 3);
+        assert!(run.diagnostics[0].starts_with("event 64 running 0.1"));
     }
 
     #[test]

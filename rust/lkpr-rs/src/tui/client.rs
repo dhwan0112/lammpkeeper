@@ -5,12 +5,14 @@
 //! continuously, stdout is bounded as in UI-1) and the screen never blocks on
 //! the backend.
 
-use super::app::{Event, Line, Msg, Probe, Save, Start};
+use super::app::{Event, Line, Msg, Probe, Save, Start, DIAGNOSTICS_TAIL};
 use crate::backend::{self, StderrMode};
 use crate::{deadline_after, interpret, run_args, text, visible, DOCTOR_TIMEOUT};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -23,96 +25,151 @@ pub const LINE_MAX: usize = 4096;
 /// before reporting without the tail.
 const TAIL_WAIT: Duration = Duration::from_millis(500);
 
+/// Run `work` on a new thread and send what it returns; if the thread
+/// panics instead, send `on_panic(message)` so the reducer is never left
+/// waiting for an answer that cannot come. (The TUI's panic hook prints
+/// nothing for worker threads; the message is what the screen shows.)
+fn spawn_guarded(
+    tx: Sender<Msg>,
+    work: impl FnOnce() -> Msg + Send + 'static,
+    on_panic: impl FnOnce(String) -> Msg + Send + 'static,
+) {
+    thread::spawn(move || {
+        let msg = match catch_unwind(AssertUnwindSafe(work)) {
+            Ok(msg) => msg,
+            Err(payload) => {
+                let why = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                on_panic(format!(
+                    "internal_error: the backend thread panicked: {why}"
+                ))
+            }
+        };
+        let _ = tx.send(msg);
+    });
+}
+
 /// `exec --capabilities` on a thread; the answer (or the failure with the
 /// backend's stderr tail) is sent as [`Msg::Probed`].
 pub fn probe(probe: Probe, tx: Sender<Msg>) {
-    thread::spawn(move || {
-        let args = ["-m", "lammpkeeper", "exec", "--capabilities"]
-            .map(String::from)
-            .to_vec();
-        let result = match backend::spawn(&probe.python, &args, None, StderrMode::Piped) {
-            Err(err) => Err(format!(
-                "python_not_found: cannot start {:?}: {err}",
-                probe.python
-            )),
-            Ok(mut child) => {
-                let stderr = child.stderr.take().expect("stderr is piped");
-                let (tail_tx, tail_rx) = mpsc::channel();
-                thread::spawn(move || {
-                    read_lines(stderr, |line| {
-                        let _ = tail_tx.send(line);
-                    })
-                });
-                let cancel = probe.cancel.clone();
-                let outcome =
-                    backend::supervise_with(child, Instant::now() + DOCTOR_TIMEOUT, &|| {
-                        cancel.load(Ordering::SeqCst)
+    let id = probe.id;
+    let on_panic = move |why| Msg::Probed {
+        probe: id,
+        result: Err(why),
+    };
+    spawn_guarded(
+        tx,
+        move || {
+            let args = ["-m", "lammpkeeper", "exec", "--capabilities"]
+                .map(String::from)
+                .to_vec();
+            let result = match backend::spawn(&probe.python, &args, None, StderrMode::Piped) {
+                Err(err) => Err(format!(
+                    "python_not_found: cannot start {:?}: {err}",
+                    probe.python
+                )),
+                Ok(mut child) => {
+                    let stderr = child.stderr.take().expect("stderr is piped");
+                    let (tail_tx, tail_rx) = mpsc::channel();
+                    thread::spawn(move || {
+                        read_lines(stderr, |line| {
+                            let _ = tail_tx.send(line);
+                        })
                     });
-                interpret(&probe.python, &outcome).map_err(|failure| {
-                    let mut tail = Vec::new();
-                    while let Ok(line) = tail_rx.recv_timeout(TAIL_WAIT) {
-                        if let Line::Diagnostic(text) = line {
-                            tail.push(text);
+                    let cancel = probe.cancel.clone();
+                    let outcome =
+                        backend::supervise_with(child, Instant::now() + DOCTOR_TIMEOUT, &|| {
+                            cancel.load(Ordering::SeqCst)
+                        });
+                    interpret(&probe.python, &outcome).map_err(|failure| {
+                        let mut tail = VecDeque::new();
+                        while let Ok(line) = tail_rx.recv_timeout(TAIL_WAIT) {
+                            if let Line::Diagnostic(text) = line {
+                                if tail.len() == DIAGNOSTICS_TAIL {
+                                    tail.pop_front();
+                                }
+                                tail.push_back(text);
+                            }
                         }
-                    }
-                    if tail.is_empty() {
-                        failure.message
-                    } else {
-                        format!("{}\nbackend stderr:\n{}", failure.message, tail.join("\n"))
-                    }
-                })
+                        if tail.is_empty() {
+                            failure.message
+                        } else {
+                            let tail = tail.into_iter().collect::<Vec<_>>().join("\n");
+                            format!("{}\nbackend stderr:\n{tail}", failure.message)
+                        }
+                    })
+                }
+            };
+            Msg::Probed {
+                probe: probe.id,
+                result,
             }
-        };
-        let _ = tx.send(Msg::Probed {
-            probe: probe.id,
-            result,
-        });
-    });
+        },
+        on_panic,
+    );
 }
 
 /// `run --request - --events` on a thread. Every stderr line arrives as
 /// [`Msg::Line`] while it runs; the end is [`Msg::Finished`].
 pub fn start(start: Start, tx: Sender<Msg>) {
-    thread::spawn(move || {
-        let mut args = run_args(&start.python, start.timeout);
-        args.push("--events".to_string());
-        let (result, interrupted) =
-            match backend::spawn(&start.python, &args, Some(&start.body), StderrMode::Piped) {
-                Err(err) => (
-                    Err(format!(
-                        "python_not_found: cannot start {:?}: {err}",
-                        start.python
-                    )),
-                    false,
-                ),
-                Ok(mut child) => {
-                    let stderr = child.stderr.take().expect("stderr is piped");
-                    let lines = tx.clone();
-                    let id = start.id;
-                    thread::spawn(move || {
-                        read_lines(stderr, |line| {
-                            let _ = lines.send(Msg::Line { run: id, line });
-                        })
-                    });
-                    // Validated by the form; the fallback cannot be reached.
-                    let deadline = deadline_after(start.timeout)
-                        .unwrap_or_else(|| Instant::now() + DOCTOR_TIMEOUT);
-                    let cancel = start.cancel.clone();
-                    let outcome =
-                        backend::supervise_with(child, deadline, &|| cancel.load(Ordering::SeqCst));
-                    let interrupted = outcome.interrupted;
-                    let result = interpret(&start.python, &outcome)
-                        .map(|value| (value, outcome.stdout))
-                        .map_err(|failure| failure.message);
-                    (result, interrupted)
-                }
-            };
-        let _ = tx.send(Msg::Finished {
-            run: start.id,
-            result,
-            interrupted,
-        });
-    });
+    let id = start.id;
+    let on_panic = move |why| Msg::Finished {
+        run: id,
+        result: Err(why),
+        interrupted: false,
+    };
+    let lines = tx.clone();
+    spawn_guarded(
+        tx,
+        move || {
+            let mut args = run_args(&start.python, start.timeout);
+            args.push("--events".to_string());
+            let (result, interrupted) =
+                match backend::spawn(&start.python, &args, Some(&start.body), StderrMode::Piped) {
+                    Err(err) => (
+                        Err(format!(
+                            "python_not_found: cannot start {:?}: {err}",
+                            start.python
+                        )),
+                        false,
+                    ),
+                    Ok(mut child) => {
+                        let stderr = child.stderr.take().expect("stderr is piped");
+                        // `done` closes when the reader is through: Finished is
+                        // held back, bounded, so the last lines land first.
+                        let (done, drained) = mpsc::channel::<()>();
+                        thread::spawn(move || {
+                            read_lines(stderr, |line| {
+                                let _ = lines.send(Msg::Line { run: id, line });
+                            });
+                            drop(done);
+                        });
+                        // Validated by the form; the fallback cannot be reached.
+                        let deadline = deadline_after(start.timeout)
+                            .unwrap_or_else(|| Instant::now() + DOCTOR_TIMEOUT);
+                        let cancel = start.cancel.clone();
+                        let outcome = backend::supervise_with(child, deadline, &|| {
+                            cancel.load(Ordering::SeqCst)
+                        });
+                        let interrupted = outcome.interrupted;
+                        let result = interpret(&start.python, &outcome)
+                            .map(|value| (value, outcome.stdout))
+                            .map_err(|failure| failure.message);
+                        let _ = drained.recv_timeout(TAIL_WAIT);
+                        (result, interrupted)
+                    }
+                };
+            Msg::Finished {
+                run: start.id,
+                result,
+                interrupted,
+            }
+        },
+        on_panic,
+    );
 }
 
 /// Read `stderr` line by line until it closes and classify each line. At
@@ -222,11 +279,17 @@ pub fn fresh_request_id() -> String {
 /// there are diagnostics, their tail to `<path>.stderr.txt`. The snapshot
 /// gets the trailing newline `--json` prints, so the files compare equal.
 pub fn save(save: &Save) -> Result<String, String> {
+    let aside = (!save.diagnostics.is_empty()).then(|| format!("{}.stderr.txt", save.path));
+    // Refuse before writing anything when the second file is already taken,
+    // so a refused save never leaves half of the pair behind.
+    if let Some(aside) = aside.as_ref().filter(|a| std::path::Path::new(a).exists()) {
+        return Err(format!("cannot create {aside}: it already exists"));
+    }
     write_new(&save.path, &save.snapshot, true)?;
     let mut done = format!("saved {}", save.path);
-    if !save.diagnostics.is_empty() {
-        let aside = format!("{}.stderr.txt", save.path);
-        write_new(&aside, save.diagnostics.as_bytes(), false)?;
+    if let Some(aside) = aside {
+        write_new(&aside, save.diagnostics.as_bytes(), false)
+            .map_err(|problem| format!("{done}, but {problem}"))?;
         done.push_str(&format!(" and {aside}"));
     }
     Ok(done)
@@ -387,7 +450,53 @@ mod tests {
         };
         assert!(!save(&quiet).unwrap().contains("stderr"));
         assert!(!dir.join("quiet.json.stderr.txt").exists());
+        // The aside already taken: refused before the snapshot is written.
+        let taken = dir.join("taken.json").to_str().unwrap().to_string();
+        fs::write(format!("{taken}.stderr.txt"), b"old").unwrap();
+        let err = save(&Save {
+            path: taken.clone(),
+            snapshot: b"{}".to_vec(),
+            diagnostics: "x\n".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("stderr.txt") && err.contains("already exists"),
+            "{err}"
+        );
+        assert!(!Path::new(&taken).exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    /// A worker that panics still answers the reducer, with the panic text.
+    fn a_panicking_worker_reports_instead_of_vanishing() {
+        let (tx, rx) = mpsc::channel();
+        spawn_guarded(
+            tx,
+            || panic!("boom {}", 7),
+            |why| Msg::Finished {
+                run: 3,
+                result: Err(why),
+                interrupted: false,
+            },
+        );
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Msg::Finished {
+                run: 3,
+                result: Err(why),
+                interrupted: false,
+            } => assert!(
+                why.contains("internal_error") && why.contains("boom 7"),
+                "{why}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        let (tx, rx) = mpsc::channel();
+        spawn_guarded(tx, || Msg::Tick, |_| Msg::Terminate);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Msg::Tick)
+        ));
     }
 
     /// Drive `start` against a fake backend and collect its messages.

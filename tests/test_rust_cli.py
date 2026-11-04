@@ -309,17 +309,21 @@ def _tui_session(keys, env, cwd, term='xterm-256color'):
 
 
 def test_tui_restores_the_terminal_when_left():
-    """Under a pseudo-terminal: Esc on Setup exits 0, Ctrl-C exits 130 and
-    SIGTERM exits 1; all three enter and leave the alternate screen and undo raw
-    mode; a dumb terminal is refused before anything is drawn."""
+    """Under a pseudo-terminal: Esc on Setup exits 0, Ctrl-C exits 130, SIGTERM
+    and SIGHUP exit 1; all four enter and leave the alternate screen and undo
+    raw mode; a dumb terminal is refused before anything is drawn."""
     import termios
 
     def sigterm(proc):
         proc.send_signal(signal.SIGTERM)
         return b''
 
+    def sighup(proc):
+        proc.send_signal(signal.SIGHUP)
+        return b''
+
     with _home() as (tmp, env):
-        for keys, code in ((b'\x1b', 0), (b'\x03', 130), (sigterm, 1)):
+        for keys, code in ((b'\x1b', 0), (b'\x03', 130), (sigterm, 1), (sighup, 1)):
             rc, screen, err, before, after = _tui_session(keys, env, tmp)
             assert rc == code, (keys, rc, err)
             enter = screen.find(b'\x1b[?1049h')
@@ -379,26 +383,50 @@ def _screen(data, rows, cols):
     return '\n'.join(''.join(line).rstrip() for line in grid)
 
 
-def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120):
+def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120,
+               controlling=False):
     """Run `lkpr-rs tui --python <this python> *args` on a rows x cols
     pseudo-terminal and play `script`: for each (phrase, keys), wait until the
     drawn screen contains phrase, record that screen, then type keys (bytes, or
-    a function of the Popen object returning bytes). Returns (returncode, the
-    screens recorded per step plus the final one, stderr)."""
+    a function of the Popen object returning bytes; None closes the terminal
+    instead, as a terminal emulator does when its window goes). With
+    `controlling` the process is a session leader with the pseudo-terminal as
+    its controlling terminal, so closing it hangs the process up (SIGHUP) the
+    way a real terminal does. Returns (returncode, the screens recorded per
+    step plus the final one, stderr)."""
     import fcntl
     import pty
     import select
     import struct
     import termios
     master, slave = pty.openpty()
+    closed = False
+
+    def close_terminal():
+        nonlocal closed
+        if not closed:
+            closed = True
+            os.close(master)
+            os.close(slave)
+
+    def own_the_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
         proc = subprocess.Popen([_binary(), 'tui', '--python', sys.executable, *args],
                                 stdin=slave, stdout=slave, stderr=subprocess.PIPE,
-                                text=True, env=dict(env, TERM='xterm-256color'), cwd=cwd)
+                                text=True, env=dict(env, TERM='xterm-256color'), cwd=cwd,
+                                preexec_fn=own_the_terminal if controlling else None)
         data, screens, step = b'', [], 0
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if closed:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+                continue
             exited = proc.poll() is not None
             ready, _, _ = select.select([master], [], [], 0.1)
             if ready:
@@ -411,16 +439,23 @@ def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120):
                 shown = _screen(data, rows, cols)
                 if phrase in shown:
                     screens.append(shown)
-                    os.write(master, keys(proc) if callable(keys) else keys)
+                    typed = keys(proc) if callable(keys) else keys
+                    if typed is None:
+                        close_terminal()
+                    else:
+                        os.write(master, typed)
                     step += 1
         if proc.poll() is None:
+            # A hung session must not leave a backend behind for the next test.
+            for pid in _descendants(proc.pid):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
             proc.kill()
         _, err = proc.communicate(timeout=30)
         screens.append(_screen(data, rows, cols))
         return proc.returncode, screens, err
     finally:
-        os.close(master)
-        os.close(slave)
+        close_terminal()
 
 
 def test_tui_runs_the_backend_and_saves_the_snapshot():
@@ -504,3 +539,53 @@ def test_tui_cancels_through_the_backend_and_cleans_up():
         assert 'thermo.summary  cancelled' in result, result
         assert 'Cancellation requested by owner' in result, result
         assert all(_stopped(pid) for pid in tree), tree
+
+
+def test_tui_stops_the_backend_when_the_terminal_closes():
+    """The terminal window goes away during a run (hang-up on the controlling
+    terminal): the process leaves with 1, says on stderr that it waits for the
+    backend, and the backend, which sits in its own process group and never
+    saw the hang-up, is cancelled and gone."""
+    _util.require_numpy()
+    with _home() as (tmp, env):
+        fifo = tmp / 'blocked log'
+        os.mkfifo(fifo)
+        tree = []
+
+        def close_once_running(proc):
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                tree[:] = _descendants(proc.pid)
+                cmdlines = []
+                for pid in tree:
+                    with contextlib.suppress(OSError):
+                        cmdlines.append(Path(f'/proc/{pid}/cmdline').read_bytes())
+                if any(b'exec\x00--request' in c for c in cmdlines):
+                    return None
+                time.sleep(0.05)
+            raise AssertionError('backend did not reach execution')
+
+        rc, screens, err = _tui_drive(['--log', str(fifo), '--timeout', '60'], [
+            ('Enter check', b'\r'),
+            ('Enter starts the run', b'\r'),
+            ('c or Ctrl-C cancel', close_once_running),
+        ], env, tmp, controlling=True)
+        assert rc == 1, (rc, err, screens[-1])
+        # Either the hang-up is seen before crossterm reads the dead tty, or a
+        # draw fails with EIO first; both are terminal errors, never a spin.
+        assert 'terminal_error' in err, err
+        assert 'waiting for the backend to stop' in err, err
+        assert tree and all(_stopped(pid) for pid in tree), tree
+
+
+def test_tui_too_small_terminal_shows_the_notice_and_leaves_on_ctrl_c():
+    """Below 80x24 nothing but the notice is drawn, and Ctrl-C still leaves
+    (130) so nobody is stuck in a window they cannot enlarge."""
+    with _home() as (tmp, env):
+        rc, screens, err = _tui_drive([], [
+            ('at least 80x24', b'\x03'),
+        ], env, tmp, rows=12, cols=60)
+        assert rc == 130 and err == '', (rc, err, screens[-1])
+        notice = screens[0]
+        assert '60x12' in notice and 'Ctrl-C' in notice, notice
+        assert 'Setup' not in notice, notice
