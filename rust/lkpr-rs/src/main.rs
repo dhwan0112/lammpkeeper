@@ -163,12 +163,13 @@ fn select_python(options: &Options) -> Result<String, Failure> {
 /// `value` as a `String`, or a usage error naming `what` (for example
 /// "argument 3" or "LKPR_PYTHON"). `lkpr-rs` requires UTF-8 because every
 /// path is echoed in messages and sent to the backend as JSON text; the
-/// message says so and names the remedy (REV-RS-1).
+/// message says so and names a remedy that fits any argument, a command
+/// name as well as a path (REV-RS-1).
 fn utf8(value: OsString, what: impl Display) -> Result<String, Failure> {
     value.into_string().map_err(|raw| {
         usage_error(format!(
             "{what} is not valid UTF-8: {:?}; lkpr-rs accepts only UTF-8 options, paths and \
-             LKPR_PYTHON (rename the file, or {SELECT_PYTHON_HINT} with a UTF-8 path)",
+             LKPR_PYTHON (for a file, use a UTF-8 name or a symlink with one)",
             raw.to_string_lossy()
         ))
     })

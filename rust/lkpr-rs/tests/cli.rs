@@ -519,8 +519,34 @@ fn non_utf8_arguments_are_usage_errors() {
     assert_eq!(o.status.code(), Some(2), "{err}");
     assert!(err.contains("argument 3 is not valid UTF-8"), "{err}");
     assert!(err.contains("accepts only UTF-8"), "{err}");
+    assert!(err.contains("symlink"), "{err}");
     assert!(err.contains("usage:"), "{err}");
     assert!(!err.contains("panicked"), "{err}");
+
+    // The position is counted over every argument, not only option values:
+    // a bad command name is argument 1, a bad `--python` value argument 3.
+    // `--help` with a bad second argument is a usage error, not help.
+    for (args, position) in [
+        (vec![b"\xffdoctor".as_slice()], 1),
+        (vec![b"doctor".as_slice(), b"--python", b"/x\xff"], 3),
+        (vec![b"--help".as_slice(), b"\xff"], 2),
+    ] {
+        let o = Command::new(bin())
+            .args(args.iter().map(|a| OsStr::from_bytes(a)))
+            .env_remove("LKPR_PYTHON")
+            .output()
+            .unwrap();
+        let err = stderr(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(
+            err.contains(&format!("argument {position} is not valid UTF-8")),
+            "{args:?}: {err}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&o.stdout).contains("usage:"),
+            "{args:?}: help printed"
+        );
+    }
 }
 
 /// A non-UTF-8 `LKPR_PYTHON` is named as such (exit 2); before REV-RS-1 it
@@ -536,8 +562,28 @@ fn non_utf8_or_empty_python_path_is_named() {
     let err = stderr(&o);
     assert_eq!(o.status.code(), Some(2), "{err}");
     assert!(err.contains("LKPR_PYTHON is not valid UTF-8"), "{err}");
-    assert!(err.contains("pass --python PATH"), "{err}");
+    assert!(err.contains("symlink"), "{err}");
     assert!(!err.contains("no Python environment selected"), "{err}");
+
+    // `--python` wins, so a bad `LKPR_PYTHON` is never read then: the run
+    // proceeds to the (here missing) interpreter, exit 1. `--help` and
+    // `--version` never read it either.
+    let o = Command::new(bin())
+        .args(["doctor", "--python", "/nonexistent/lkpr-python"])
+        .env("LKPR_PYTHON", OsStr::from_bytes(b"/opt/py\xff/bin/python"))
+        .output()
+        .unwrap();
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(!err.contains("LKPR_PYTHON"), "{err}");
+    for flag in ["--help", "--version"] {
+        let o = Command::new(bin())
+            .arg(flag)
+            .env("LKPR_PYTHON", OsStr::from_bytes(b"/opt/py\xff/bin/python"))
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "{flag}: {}", stderr(&o));
+    }
 
     for (args, env) in [
         (vec!["doctor"], Some("")),

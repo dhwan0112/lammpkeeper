@@ -84,3 +84,13 @@ Not changed: E-3 (human-mode `println!` on a closed or full stdout) and E-7
 4. The `OsString` conversion and message were written twice: one `utf8`
    helper serves argv and `LKPR_PYTHON`.
 5. `select_python`'s nested `match` became a linear `?` chain.
+
+Second review round (read-only reviewer on the same PR): the remedy text
+"rename the file, or pass --python ... with a UTF-8 path" was wrong for a bad
+command name or a bad interpreter path; it now reads "for a file, use a UTF-8
+name or a symlink with one". Added test cases pin: argument positions 1 and 3
+(bad command name, bad `--python` value), `--help` with a bad second argument
+is exit 2 not help, `--python` wins over a bad `LKPR_PYTHON` (exit 1 from the
+missing interpreter, no `LKPR_PYTHON` in the message), `--help`/`--version`
+exit 0 with a bad `LKPR_PYTHON`. The reviewer asked whether REV-RS-1 and E-2
+are the same finding: yes, REV-RS-1 is the follow-up ID for audit finding E-2.
