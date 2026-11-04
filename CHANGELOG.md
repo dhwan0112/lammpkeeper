@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Invalid reference cells are rejected instead of clipped (REV-REF-4)
+
+- `_cell_from_params` raises `ValueError` naming the offending parameter for non-numeric, non-finite or non-positive lengths, angles outside (0, 180) degrees and angle triples with no positive volume; the former `max(residual, 0)` clip that turned e.g. 170/170/170 into a flat zero-volume cell is gone. Valid cells are built exactly as before.
+- `parse_cif` raises for a cell tag that is present but not a number (`?`, `.`, text) and for an invalid cell (`CIF cell parameters are invalid: ...`); `_cell_angle_* 0` no longer becomes 90 degrees. Absent lengths still return `None` and absent angles still default to 90 degrees. The shell's CIF import already reports a `parse_cif` error as a failed command that publishes nothing.
+- The skew-reference MIC half of REV-REF-4 is resolved by REV-REF-2's exact image enumeration; no minimum-image convention remains. Tests: `tests/test_cell_validation.py`.
+
 ### Reference RDFs enumerate every periodic image inside the cutoff (REV-REF-2)
 
 - `compute_reference_rdf` no longer builds a fixed 4×4×4 supercell and applies
