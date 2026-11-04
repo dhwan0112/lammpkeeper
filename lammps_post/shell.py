@@ -21,6 +21,7 @@ import cmd
 import io
 import math
 import os
+import re
 import sys
 import shlex
 import glob as globmod
@@ -76,6 +77,38 @@ from lammps_post.state import SessionState
 # ── Optional dependency detection (for banner and export commands) ──
 # find_spec only locates the package; importing pandas/scipy/MDAnalysis here
 # would keep hundreds of MB resident for a banner line. Import at point of use.
+_Z_NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
+# Separator order matters: whitespace first so "0 -5" reads as (0, -5), then
+# ':' / ',' and finally a hyphen, so "-5-80" and "-5.0--1.0" keep their signs.
+_Z_RANGE_RE = re.compile(rf'^\s*({_Z_NUM})(?:\s+|\s*[:,]\s*|\s*-\s*)({_Z_NUM})\s*$')
+
+
+def _parse_z_range(text, what):
+    """Parse an interactive z-range answer into a finite ``(lo, hi)`` with lo < hi.
+
+    Accepts ``lo:hi``, ``lo,hi``, ``lo hi`` and ``lo-hi`` with signed numbers
+    (``-5-80`` is (-5, 80)). Anything else raises ValueError naming the prompt,
+    so a typo can never silently drop a slab correction or z-focus crop.
+    """
+    m = _Z_RANGE_RE.match(text)
+    if m is None:
+        raise ValueError(f"{what}: cannot parse {text!r}; give lo:hi in Angstrom "
+                         "(e.g. '0:80', '-10:30', '0-80' or '0 80') or 'full'/'none'")
+    lo, hi = float(m.group(1)), float(m.group(2))
+    if not (math.isfinite(lo) and math.isfinite(hi)) or lo >= hi:
+        raise ValueError(f"{what}: {text!r} needs finite bounds with lo < hi")
+    return lo, hi
+
+
+def _fmt_z_range(lo, hi):
+    """Format a z range as a prompt default that `_parse_z_range` reads back.
+
+    ``:g`` keeps small and signed bounds distinct; fixed one-decimal rounding
+    could turn a narrow range into ``0.0:0.0``, which the parser rejects.
+    """
+    return f"{lo:g}:{hi:g}"
+
+
 def _has_module(name):
     """Probe optional-package presence without importing its heavy dependency tree.
 
@@ -2748,7 +2781,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         if spatial:
             zf = opts['z_focus']
-            cur_zf = f"{zf[0]:.1f}:{zf[1]:.1f}" if zf else "full range"
+            cur_zf = _fmt_z_range(*zf) if zf else "full range"
             ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
             if ans is None:
                 return None
@@ -3002,20 +3035,17 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             prev_slab = recipe.get('slab_z_range')
 
             if prev_slab:
-                default = f"{prev_slab[0]:.1f}-{prev_slab[1]:.1f}"
-            elif s.surface_z:
-                # Suggest slab range based on detected surface
-                default = f"0-{s.surface_z:.0f}"
+                default = _fmt_z_range(*prev_slab)
+            elif s.surface_z and s.surface_z > 0:
+                # Suggest slab range based on detected surface; a surface at or
+                # below z = 0 gives no valid 0..surface slab, so offer bulk.
+                default = _fmt_z_range(0, s.surface_z)
             else:
                 default = 'none'
 
-            ans = self._ask("Slab z-range for correction (e.g. '0-80', or 'none' for bulk)", default)
+            ans = self._ask("Slab z-range for correction (e.g. '0:80', '-5:80', or 'none' for bulk)", default)
             if ans and ans.lower() not in ('none', 'n', 'full', ''):
-                try:
-                    lo, hi = ans.split('-', 1)
-                    slab_z = (float(lo), float(hi))
-                except ValueError:
-                    pass
+                slab_z = _parse_z_range(ans, 'Slab z-range')
         else:
             slab_z = s.plot_recipes.get('pressure', {}).get('slab_z_range')
 
@@ -3492,18 +3522,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # z_focus
         zf = s.compute_z_focus()
-        cur_zf = f"{zf[0]:.1f}-{zf[1]:.1f}" if zf else "full range"
-        ans = self._ask(f"z-axis focus range in A? (e.g. '0-30', 'full')", cur_zf)
+        cur_zf = _fmt_z_range(*zf) if zf else "full range"
+        ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
         if ans is not None:
             ans = ans.strip().lower()
-            if ans in ('full', 'none', 'all'):
+            if ans in ('full', 'full range', 'none', 'all', ''):
                 zf = None
-            elif '-' in ans:
-                try:
-                    lo, hi = ans.split('-', 1)
-                    zf = (float(lo), float(hi))
-                except ValueError:
-                    pass
+            else:
+                zf = _parse_z_range(ans, 'z-axis focus range')
 
         data_list = [s.cache[k] for k in selected]
         plot_density(data_list, s.output_dir, s.dpi, z_focus=zf,
@@ -3669,18 +3695,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             return
 
         zf = s.compute_z_focus()
-        cur_zf = f"{zf[0]:.1f}-{zf[1]:.1f}" if zf else "full range"
-        ans = self._ask(f"z-axis focus range in A? (e.g. '0-30', 'full')", cur_zf)
+        cur_zf = _fmt_z_range(*zf) if zf else "full range"
+        ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
         if ans is not None:
             ans = ans.strip().lower()
-            if ans in ('full', 'none', 'all'):
+            if ans in ('full', 'full range', 'none', 'all', ''):
                 zf = None
-            elif '-' in ans:
-                try:
-                    lo, hi = ans.split('-', 1)
-                    zf = (float(lo), float(hi))
-                except ValueError:
-                    pass
+            else:
+                zf = _parse_z_range(ans, 'z-axis focus range')
 
         plot_structure(atoms, s.atom_types, s.output_dir, s.dpi,
                        z_surface=s.surface_z, z_focus=zf, species=self._plot_species())
@@ -3735,18 +3757,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         # z_focus
         zf = s.compute_z_focus()
-        cur_zf = f"{zf[0]:.1f}-{zf[1]:.1f}" if zf else "full range"
-        ans = self._ask(f"z-axis focus range in A? (e.g. '0-30', 'full')", cur_zf)
+        cur_zf = _fmt_z_range(*zf) if zf else "full range"
+        ans = self._ask(f"z-axis focus range in A? (e.g. '0:30', '-10:30', 'full')", cur_zf)
         if ans is not None:
             ans = ans.strip().lower()
-            if ans in ('full', 'none', 'all'):
+            if ans in ('full', 'full range', 'none', 'all', ''):
                 zf = None
-            elif '-' in ans:
-                try:
-                    lo, hi = ans.split('-', 1)
-                    zf = (float(lo), float(hi))
-                except ValueError:
-                    pass
+            else:
+                zf = _parse_z_range(ans, 'z-axis focus range')
 
         plot_snapshot(s.dump_frames, s.dump_col_idx, s.atom_types,
                       s.output_dir, indices, s.dpi, z_focus=zf,

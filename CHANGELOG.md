@@ -12,6 +12,20 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### z-range prompts parse signed ranges and reject typos (REV-UI-6)
+
+- The `plot pressure` slab prompt and the `plot density|structure|snapshot`
+  z-focus prompts accept `lo:hi`, `lo,hi`, `lo hi` and `lo-hi` with negative
+  bounds (`-5-80` is -5 to 80 Å). Before, a negative lower bound, `0:80` or
+  `0 80` was dropped without a message: pressure fell back to the
+  uncorrected box pressure and saved `slab_z_range None`.
+- A malformed, reversed or nonfinite range now fails the plot command with a
+  message naming the accepted forms; nothing is plotted and the saved recipe
+  is kept. Defaults are shown as `lo:hi` without rounding, so a saved
+  negative or narrow range is offered in a form that parses back; the
+  pressure prompt offers `none` when the detected surface is at or below
+  z = 0. AUDIT-20261104 C-1.
+
 ### Non-increasing dump timesteps warn (REV-IO-12)
 
 - Loading a dump whose timesteps repeat or go backwards (restart overlap, concatenated runs) issues one `RuntimeWarning` per pass naming the first offending step, on the streaming and indexed paths and in `load dump`. Frames keep file order. Before, such dumps loaded silently and time axes repeated or ran backwards. Tests: `tests/test_dump_step_order.py`.
