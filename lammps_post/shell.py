@@ -735,6 +735,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.species_sources = dict(self.state.species_sources,
                                               dump=dict(reader.type_labels))
             self.state._dump_type_ids = reader.type_ids
+            # Explicit 'ITEM: UNITS' evidence; a conflict with explicit input
+            # units raises in _publish_metadata and rolls the load back.
+            self.state._dump_units = reader.units
 
             # Resolve metadata (input evidence, else the labelled heuristic)
             # before species so the family decides which presets may apply.
@@ -800,7 +803,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                        else f"{ff_info['dt_fs']} fs [{md.dt_fs.status}]")
             progress_msg(f"Detected: {C.bold(ff_info['forcefield'].upper())} "
                          f"[{md.ff_family.status}] "
-                         f"({ff_info['unit_system'] or 'unresolved'} units, dt={dt_text})")
+                         f"({ff_info['unit_system'] or 'unresolved'} units [{md.units.status}], "
+                         f"dt={dt_text})")
             progress_msg(f"Loaded {C.ok(str(n_frames))} frames, {n_atoms} atoms")
             est_mb = frames.estimated_bytes / 1024 ** 2
             if frames.fits_in_cache:
@@ -1007,6 +1011,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             self.state.dump_columns = None
             self.state.dump_col_idx = None
             self.state._dump_ff_info = None
+            self.state._dump_units = None
             self.state._dump_type_ids = frozenset()
             self.state.species_sources = {key: value for key, value in
                                           self.state.species_sources.items() if key != 'dump'}
@@ -2881,8 +2886,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         input_units = md.units.value if explicit_units else None
         units = log.get('unit_system')
         if units and input_units and units != input_units:
+            # Explicit units come from the input or from a dump 'ITEM: UNITS'.
+            origin = ('dump' if s._dump_units is not None and md.units.source == s.dump_path
+                      else 'input')
             raise ValueError(f"Conflicting explicit units: log {s.log_path} declares {units!r}, "
-                             f"input {md.units.source} declares {input_units!r}; "
+                             f"{origin} {md.units.source} declares {input_units!r}; "
                              'load matching run metadata')
         if units:
             if s.dump_frames and units != s.ff_info.get('unit_system'):

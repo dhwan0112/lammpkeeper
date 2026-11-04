@@ -63,6 +63,7 @@ class SessionState:
         # Raw identities remain source-owned, before preset display adaptation.
         self.species_sources = {}
         self._dump_ff_info = None
+        self._dump_units = None     # DumpReader.units: 'ITEM: UNITS' style or None
         self._user_species = {}
         self._species_override = None
         self._species_list_identity = None
@@ -176,9 +177,16 @@ class SessionState:
         declares none of pair_style/units/timestep; any partial explicit
         declaration leaves dt unresolved unless units and timestep give it.
         Guessed units never turn an explicit timestep into femtoseconds.
+
+        A dump written with `dump_modify units yes` declares its unit style
+        explicitly ('ITEM: UNITS'). That layer sits between the input and the
+        heuristic: explicit input units must match it (ValueError otherwise),
+        it replaces the guessed units, and with an explicit input timestep it
+        gives an explicit dt. A guessed dt is dropped when the heuristic's
+        unit guess differs from the dump's unit style.
         """
         from lammpkeeper.io.metadata import (EXPLICIT, GUESSED, MetadataField,
-                                             RunMetadata)
+                                             RunMetadata, derive_dt_fs)
         from lammps_post.parsers import classify_pair_style
 
         config = self.input_config
@@ -210,12 +218,38 @@ class SessionState:
             ff_family = (legacy.ff_family if legacy is not None and legacy.ff_family.value
                          not in (None, 'unknown') else base.ff_family)
         units = base.units
-        if units.status != EXPLICIT:
+        dump_units = self._dump_units
+        if dump_units is not None:
+            if units.status == EXPLICIT and units.value != dump_units:
+                raise ValueError(
+                    f"Conflicting explicit units: dump {self.dump_path} declares "
+                    f"{dump_units!r} (ITEM: UNITS), input {units.source} declares "
+                    f"{units.value!r}; load matching run metadata")
+            if units.status != EXPLICIT:
+                units = MetadataField(dump_units, dump_units, EXPLICIT, self.dump_path,
+                                      'ITEM: UNITS (dump_modify units yes)')
+        elif units.status != EXPLICIT:
             units = legacy.units if legacy is not None else (
                 base.units if declared else session_default('metal'))
         dt_fs = base.dt_fs
-        if dt_fs.status != EXPLICIT:
-            if not declared:
+        if (dt_fs.status != EXPLICIT and dump_units is not None
+                and base.timestep.status == EXPLICIT):
+            step = base.timestep.value
+            value, reason = derive_dt_fs(dump_units, step)
+            dt_fs = (MetadataField(None, None, 'unresolved', None, reason) if value is None
+                     else MetadataField(value, None, EXPLICIT,
+                                        f"{base.timestep.source} + {self.dump_path}",
+                                        f"input timestep {step!r} x dump ITEM: UNITS "
+                                        f"{dump_units!r}"))
+        elif dt_fs.status != EXPLICIT:
+            if (not declared and dump_units is not None and legacy is not None
+                    and legacy.units.value != dump_units):
+                # The heuristic dt belongs to a unit guess the dump contradicts.
+                dt_fs = MetadataField(
+                    None, None, 'unresolved', None,
+                    f"the dump declares {dump_units!r} units (ITEM: UNITS) but the "
+                    f"heuristic guessed {legacy.units.value!r}; its timestep is not used")
+            elif not declared:
                 dt_fs = legacy.dt_fs if legacy is not None else session_default(1.0)
             else:
                 dt_fs = MetadataField(
