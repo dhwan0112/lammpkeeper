@@ -3604,6 +3604,20 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         plot_performance(s.cache['performance'], s.output_dir, s.dpi,
                              figsize=s.figsize_override)
 
+    def _plot_species(self):
+        """Return the session species snapshot for plot highlighting, or None.
+
+        Structure/snapshot plots resolve Fe and O from this snapshot (preset
+        spin unions, user groups) instead of label substrings. If the map
+        cannot be built, the plot falls back to exact preset labels after a
+        visible notice rather than failing.
+        """
+        try:
+            return self.state.species_map.type_sets()
+        except ValueError as exc:
+            print(C.warn(f"  Species map unavailable ({exc}); plots use exact preset labels only."))
+            return None
+
     def _iplot_structure(self, opts, _batch=False, _edit_mode=False):
         """Render structure atoms from analysis, then data file, then final dump.
 
@@ -3630,7 +3644,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             zf = s.compute_z_focus()
             plot_structure(atoms, s.atom_types, s.output_dir, s.dpi,
                            z_surface=s.surface_z, z_focus=zf,
-                           figsize=s.figsize_override)
+                           figsize=s.figsize_override, species=self._plot_species())
             return
 
         zf = s.compute_z_focus()
@@ -3648,7 +3662,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                     pass
 
         plot_structure(atoms, s.atom_types, s.output_dir, s.dpi,
-                       z_surface=s.surface_z, z_focus=zf)
+                       z_surface=s.surface_z, z_focus=zf, species=self._plot_species())
 
     def _iplot_snapshot(self, opts, _batch=False, _edit_mode=False):
         """Render z-x atom snapshots from explicit indices or representative frames.
@@ -3670,13 +3684,14 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 raise ValueError('Frame indices must be integers') from None
             plot_snapshot(s.dump_frames, s.dump_col_idx, s.atom_types,
                           s.output_dir, indices, s.dpi,
-                          z_focus=s.compute_z_focus(), figsize=s.figsize_override)
+                          z_focus=s.compute_z_focus(), figsize=s.figsize_override,
+                          species=self._plot_species())
             return
 
         if _batch:
             plot_snapshot(s.dump_frames, s.dump_col_idx, s.atom_types,
                           s.output_dir, dpi=s.dpi, z_focus=s.compute_z_focus(),
-                          figsize=s.figsize_override)
+                          figsize=s.figsize_override, species=self._plot_species())
             return
 
         n = len(s.dump_frames)
@@ -3714,7 +3729,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         plot_snapshot(s.dump_frames, s.dump_col_idx, s.atom_types,
                       s.output_dir, indices, s.dpi, z_focus=zf,
-                      figsize=s.figsize_override)
+                      figsize=s.figsize_override, species=self._plot_species())
 
     def _plot_all(self):
         """Render available log/structure/snapshot data and cached analysis families.

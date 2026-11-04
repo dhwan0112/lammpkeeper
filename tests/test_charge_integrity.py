@@ -224,6 +224,7 @@ def test_empty_selections_and_trajectories_keep_existing_zero_semantics():
             np.testing.assert_array_equal(got[key], [0, 0])
     for function in (analyze_charge_evolution, compute_or):
         result = function([], SCALAR_COL, fe_type={4, 7})
+        assert result.pop('q_thr') == 0.3
         assert all(values.size == 0 for values in result.values())
 
 

@@ -12,6 +12,22 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Structure and snapshot plots resolve species exactly; charge plots label the real threshold (REV-PLOT-2)
+
+- `plot structure` binned z from 0 upward, so atoms below z = 0 were dropped
+  from both histograms; bins now start at the lattice-aligned bin that
+  contains the lowest atom (non-negative data keep the exact old edges). The
+  O panel and the "Fe surface" guide chose types by substring (`Co`, `NO`
+  counted as oxygen) with a largest-type fallback, and `plot snapshot`
+  coloured by substring or by "type 1 = Fe, type 2 = O" and dropped other
+  types. Both plots now use the session species map (the same Fe/O
+  selections the analyses use, including the ACE spin union) or, without
+  one, exact preset labels; absent species are shown as absent (empty O
+  panel with a note, no Fe-surface claim, a dashed surface guide when one
+  was supplied) and leftover types are drawn in grey with their labels.
+  `plot charge` and `plot or` label the `q_thr` the analysis recorded instead
+  of a fixed `q > 0.3`; caches written before this change keep the 0.3 text.
+
 ### Interactive RDF reference overlays use each curve's own pair (REV-PLOT-1)
 
 - `plot rdf` derived the reference element pair by splitting the first

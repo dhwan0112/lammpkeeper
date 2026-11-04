@@ -39,7 +39,8 @@ import os
 import warnings
 import numpy as np
 
-from lammps_post import WONG_PALETTE, BAR_TO_GPA, ATM_TO_GPA, DENSITY_CONVERSION
+from lammps_post import WONG_PALETTE, BAR_TO_GPA, ATM_TO_GPA, DENSITY_CONVERSION, Q_OXIDIZED_E
+from lammpkeeper.common.mapping import FORCE_FIELDS
 from lammps_post.display import C, progress_msg
 
 # ── Semantic color aliases from Wong palette ──
@@ -220,6 +221,48 @@ def _require_matplotlib():
     """
     if not HAS_MPL:
         raise RuntimeError('matplotlib is required for requested plotting; install the post extra')
+
+
+# Exact preset labels that identify the legacy domain species in plots. ACE's
+# 'Mn' element slot is the spin-down Fe proxy (see lammpkeeper.common.mapping).
+_PLOT_FE_LABELS = frozenset(label for table in FORCE_FIELDS.values()
+                            for element, label in table.values() if element in ('Fe', 'Mn'))
+_PLOT_O_LABELS = frozenset(label for table in FORCE_FIELDS.values()
+                           for element, label in table.values() if element == 'O')
+
+
+def resolve_plot_species(atom_types, species=None):
+    """Resolve the O and Fe type IDs that the legacy domain plots highlight.
+
+    ``species`` is a ``{name: type IDs}`` selection snapshot such as
+    ``SessionState.species_map.type_sets()``; an explicit ``'O'``/``'Fe'``
+    selection there (user groups, the ACE spin union) wins outright. Otherwise
+    only exact preset labels count (``O``; ``Fe``/``Fe_up``/``Fe_down``).
+    Nothing is inferred from label substrings (``Co``, ``NO``) or from the
+    largest type ID: an unresolved species is an empty tuple and callers must
+    show it as absent rather than draw another type in its place.
+    String-keyed element maps keep the legacy sorted-element synthesized type
+    ordering; there the element symbol itself (``O``, ``Fe``, the ``Mn`` proxy)
+    is an exact identity as well.
+    Returns ``(o_types, fe_types, labels)``: two sorted int tuples and the
+    ``{type ID: label}`` map used for legend text.
+    """
+    if all(isinstance(k, int) and not isinstance(k, bool) for k in atom_types):
+        rows = [(int(t), str(label), None) for t, label in atom_types.items()]
+    else:
+        ordered = sorted(atom_types, key=str)
+        rows = [(i + 1, str(atom_types[e]), str(e)) for i, e in enumerate(ordered)]
+    labels = {t: label for t, label, _element in rows}
+
+    def pick(name, label_set, elements):
+        if species is not None and name in species:
+            return tuple(sorted(int(t) for t in species[name]))
+        return tuple(sorted(t for t, label, element in rows
+                            if label in label_set or element in elements))
+
+    return (pick('O', _PLOT_O_LABELS, ('O',)),
+            pick('Fe', _PLOT_FE_LABELS, ('Fe', 'Mn')),
+            labels)
 
 
 def _thermo_time(log_data, dt_fs):
@@ -743,14 +786,15 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
     Right panel: oxidized Fe count or fraction (if normalize=True).
     Charges remain in elementary-charge units; normalization affects only the
     population panel, using the analysis denominator. None produces no file.
-    The legacy count-axis threshold text is fixed at 0.3 even if the analysis
-    was computed with another cutoff; this plot does not recover that metadata.
+    The population panel labels the cutoff the analysis recorded (``q_thr``);
+    results cached before that key existed fall back to the default 0.3 e text.
     Output: charge_evolution.png
     """
     _require_matplotlib()
     if data is None:
         return
 
+    thr = data.get('q_thr', Q_OXIDIZED_E)
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (13, 5))
     fig.suptitle('Fe Charge Evolution (ReaxFF)')
 
@@ -762,10 +806,10 @@ def plot_charge_evolution(data, output_dir, dpi=150, normalize=False, figsize=No
     if normalize and 'frac_oxidized' in data:
         a2.plot(data['time'], data['frac_oxidized'] * 100, color=CLR['oxidized'], lw=2)
         a2.set(xlabel='Time (ps)', ylabel='Oxidized Fe (%)',
-               title='Oxidized Fe Fraction')
+               title=f'Oxidized Fe Fraction (q > {thr:g} e)')
     else:
         a2.plot(data['time'], data['n_oxidized'], color=CLR['oxidized'], lw=2)
-        a2.set(xlabel='Time (ps)', ylabel='N(Fe, q > 0.3)',
+        a2.set(xlabel='Time (ps)', ylabel=f'N(Fe, q > {thr:g})',
                title='Oxidized Fe Count')
 
     plt.tight_layout()
@@ -994,19 +1038,21 @@ def plot_or(data, output_dir, dpi=150, figsize=None):
     """
     Plot Fe oxidation rate over time (ReaxFF only).
     Shows the supplied fraction on a 0-to-1 scale, without differentiation or
-    conversion to percent. The retained title mentions the default 0.3 e cutoff
-    even when callers used a different analysis threshold. Partial-charge
-    classification does not by itself establish oxidation states or phases.
+    conversion to percent. The title states the cutoff the analysis recorded
+    (``q_thr``); results cached before that key existed show the default 0.3 e.
+    Partial-charge classification does not by itself establish oxidation
+    states or phases.
     Output: oxidation_rate.png
     """
     _require_matplotlib()
     if data is None:
         return
 
+    thr = data.get('q_thr', Q_OXIDIZED_E)
     fig, ax = plt.subplots(figsize=figsize or (8, 5))
     ax.plot(data['time'], data['or'], color=CLR['avg'], lw=2)
     ax.set(xlabel='Time (ps)', ylabel='Oxidation Rate',
-           title='Fe Oxidation Rate (q > 0.3)')
+           title=f'Fe Oxidation Rate (q > {thr:g})')
     plt.tight_layout()
     _save_fig(fig, os.path.join(output_dir, 'oxidation_rate.png'), dpi)
 
@@ -1237,21 +1283,26 @@ def plot_performance(stage_times, output_dir, dpi=150, figsize=None):
 
 
 def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
-                   z_fixed=None, z_surface=None, z_focus=None, figsize=None):
+                   z_fixed=None, z_surface=None, z_focus=None, figsize=None,
+                   species=None):
     """
     Plot the final structure analysis from a LAMMPS data file.
     Left: z-resolved atom type distribution (horizontal bar chart, binned
-    by BCC lattice constant 2.87 A). Right: O atom z-histogram with
+    by BCC lattice constant 2.87 A). Right: O atom z-histogram with the
     Fe surface position marked.
-    Expects [id, type, x, y, z] rows. This legacy view uses Fe-specific binning
-    from z=0 and label-based oxygen inference (falling back to the largest
-    type ID); it is not a generic species or surface detector. Negative-z
-    atoms do not enter the left histogram. z_fixed/z_surface are optional
-    left-panel guides; the right guide instead uses the highest non-O z.
-    Overlaid type bars are not stacked totals. A guide at exactly z=0 is omitted
-    by the legacy truth-value checks. No periodic wrapping or volume
-    normalization is applied. No cell accompanies this array-only API: the
-    shell guards tilted source geometry, but direct callers must do so themselves.
+    Expects [id, type, x, y, z] rows. Bins are aligned to multiples of the
+    lattice constant from z=0 and extend below zero when atoms sit there, so
+    every atom enters the left histogram. O and Fe come from
+    resolve_plot_species: ``species`` (normally the session species snapshot)
+    or exact preset labels, never substrings or the largest type ID. Without
+    an O species the right panel says so instead of drawing another type; the
+    'Fe surface' guide is the highest resolved-Fe z, or the supplied z_surface
+    as a plain 'Surface guide' when no Fe species exists. z_fixed/z_surface are
+    optional left-panel guides. Overlaid type bars are not stacked totals. A
+    guide at exactly z=0 is omitted by the legacy truth-value checks. No
+    periodic wrapping or volume normalization is applied. No cell accompanies
+    this array-only API: the shell guards tilted source geometry, but direct
+    callers must do so themselves.
     Output: structure.png
     """
     _require_matplotlib()
@@ -1260,17 +1311,19 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
 
     types = atoms_array[:, 1].astype(int)
     z = atoms_array[:, 4]
+    o_types, fe_types, type_names = resolve_plot_species(atom_types, species)
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=figsize or (14, 8))
     fig.suptitle('Final Structure Analysis')
 
     # (a) z-resolved type distribution
     bin_size = 2.87  # BCC lattice constant
-    z_max = z.max() + 5
-    bins = np.arange(0, z_max, bin_size)
+    # Lattice-aligned edges; the first edge drops below zero only for negative z.
+    k_lo = min(0, int(np.floor(z.min() / bin_size)))
+    k_hi = int(np.ceil((z.max() + 5) / bin_size))
+    bins = np.arange(k_lo, k_hi) * bin_size
     bin_centers = bins + bin_size / 2
     colors_map = {1: WONG_PALETTE[6], 2: WONG_PALETTE[5], 3: WONG_PALETTE[3], 4: WONG_PALETTE[7]}
-    type_names = atom_types
 
     for t_val in sorted(set(types)):
         t_mask = types == t_val
@@ -1289,16 +1342,24 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
     a1.legend()
 
     # (b) O atom z-histogram
-    o_types = [t for t, n in type_names.items() if 'O' in str(n)]
-    o_type = o_types[0] if o_types else max(set(types))
-    o_z = z[types == o_type]
-    if len(o_z) > 0:
-        a2.hist(o_z, bins=30, color='#2ECC71', edgecolor='black', alpha=0.8,
-                orientation='horizontal')
-        fe_z = z[types != o_type]
-        if len(fe_z) > 0:
-            a2.axhline(np.max(fe_z), color='red', ls='-', lw=2,
-                        label=f'Fe surface ({np.max(fe_z):.1f} Å)')
+    if o_types:
+        o_z = z[np.isin(types, o_types)]
+        if len(o_z) > 0:
+            a2.hist(o_z, bins=30, color='#2ECC71', edgecolor='black', alpha=0.8,
+                    orientation='horizontal')
+    else:
+        print(C.warn("  No O species in the atom type map; the O histogram is left empty."))
+        a2.text(0.5, 0.5, 'no O species in the atom type map', transform=a2.transAxes,
+                ha='center', va='center', color='gray')
+    fe_z = z[np.isin(types, fe_types)] if fe_types else z[:0]
+    guide = None
+    if len(fe_z) > 0:
+        guide = f'Fe surface ({np.max(fe_z):.1f} Å)'
+        a2.axhline(np.max(fe_z), color='red', ls='-', lw=2, label=guide)
+    elif z_surface:
+        guide = f'Surface guide ({z_surface:.1f} Å)'
+        a2.axhline(z_surface, color='red', ls='--', lw=1.5, label=guide)
+    if guide:
         a2.legend()
     a2.set(ylabel=r'$z$ (Å)', xlabel='O atom count', title='O Atom z-Distribution')
     if z_focus:
@@ -1309,7 +1370,7 @@ def plot_structure(atoms_array, atom_types, output_dir, dpi=150,
 
 
 def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
-                  dpi=150, z_focus=None, figsize=None):
+                  dpi=150, z_focus=None, figsize=None, species=None):
     """
     Plot side-view (z-x plane) snapshots at selected trajectory frames.
     Fe atoms are shown in blue, O atoms in red. Default: 5 evenly-spaced
@@ -1317,11 +1378,12 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     The x-z projection uses stored positions without unwrapping or depth
     filtering. Selected frames are checked for orthogonal geometry before any
     figure is created; this is rejection, not tilted-cell rendering support.
-    String-key element maps assume a legacy sorted-element synthesized type
-    ordering, not the current parser's canonical ACE slots; absent recognizable
-    labels retain the legacy type-1/type-2 fallbacks. These display heuristics
-    must not be used as a scientific species assignment. Explicit indices are
-    used as supplied.
+    Fe and O come from resolve_plot_species (``species`` or exact preset
+    labels; string-key element maps keep the legacy sorted-element synthesized
+    type ordering). Atoms of every other type are drawn in grey under an
+    'other: ...' legend entry, and an unresolved Fe or O species is simply not
+    drawn: no type-1/type-2 guess stands in for it. These display groups are
+    not a scientific species assignment. Explicit indices are used as supplied.
     Output: snapshots.png (N panels side by side)
     """
     if not frames:
@@ -1342,41 +1404,41 @@ def plot_snapshot(frames, col_idx, atom_types, output_dir, indices=None,
     if n_snap == 1:
         axes = [axes]
 
-    # Identify Fe and O type numbers
-    # atom_types keys can be int (type-based: {1:'Fe', 2:'O'}) or
-    # str (element-based ACE: {'Fe':'Fe_up', 'O':'O'}).
-    # For plotting, we need int type IDs that match the atoms array.
-    int_keys = all(isinstance(k, int) for k in atom_types.keys())
-    if int_keys:
-        o_types = [t for t, n in atom_types.items() if 'O' in str(n)]
-        fe_types = [t for t, n in atom_types.items() if 'Fe' in str(n) or 'Mn' in str(n)]
-    else:
-        # str keys (ACE element-based): map element names to synthesized type IDs
-        # The type column was synthesized from sorted unique elements: {elem: i+1}
-        # We need to figure out which int type IDs correspond to Fe/O
-        sorted_elems = sorted(atom_types.keys())
-        elem_to_id = {e: i + 1 for i, e in enumerate(sorted_elems)}
-        fe_types = [elem_to_id[e] for e in sorted_elems
-                    if 'Fe' in atom_types.get(e, '') or 'Mn' in e or 'Fe' in e]
-        o_types = [elem_to_id[e] for e in sorted_elems if e == 'O' or 'O' in atom_types.get(e, '')]
+    # Fe/O come from the species snapshot or exact preset labels only; the
+    # atoms array carries int type IDs that match the resolved tuples.
+    o_types, fe_types, type_names = resolve_plot_species(atom_types, species)
+    if not fe_types and not o_types:
+        print(C.warn("  No Fe or O species in the atom type map; snapshots show atoms by type only."))
 
     for ax, idx in zip(axes, indices):
         fr = frames[idx]
         atoms = fr['atoms']
         types = atoms[:, ti].astype(int)
 
-        fe_mask = np.isin(types, fe_types) if fe_types else types == 1
-        o_mask = np.isin(types, o_types) if o_types else types == 2
+        fe_mask = np.isin(types, fe_types)
+        o_mask = np.isin(types, o_types)
+        other = ~(fe_mask | o_mask)
 
-        ax.scatter(atoms[fe_mask, xi], atoms[fe_mask, zi_col],
-                   c=CLR['Fe'], s=3, alpha=0.6, label='Fe')
-        ax.scatter(atoms[o_mask, xi], atoms[o_mask, zi_col],
-                   c=CLR['O'], s=5, alpha=0.8, label='O')
+        drawn = False
+        if fe_types:
+            ax.scatter(atoms[fe_mask, xi], atoms[fe_mask, zi_col],
+                       c=CLR['Fe'], s=3, alpha=0.6, label='Fe')
+            drawn = True
+        if o_types:
+            ax.scatter(atoms[o_mask, xi], atoms[o_mask, zi_col],
+                       c=CLR['O'], s=5, alpha=0.8, label='O')
+            drawn = True
+        if other.any():
+            names = ', '.join(type_names.get(int(t), f'Type {t}') for t in sorted(set(types[other])))
+            ax.scatter(atoms[other, xi], atoms[other, zi_col],
+                       c='gray', s=3, alpha=0.5, label=f'other: {names}')
+            drawn = True
         ax.set_xlabel(r'$x$ (Å)')
         ax.set_title(f'Frame {idx}\n(step {fr["timestep"]})')
         if z_focus:
             ax.set_ylim(z_focus)
-        ax.legend(loc='upper right')
+        if drawn:
+            ax.legend(loc='upper right')
 
     axes[0].set_ylabel(r'$z$ (Å)')
     fig.suptitle('Oxidation Snapshots (side view)')
