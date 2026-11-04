@@ -11,6 +11,7 @@ mod backend;
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::fmt::Display;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -245,12 +246,60 @@ fn run_backend(
 }
 
 /// Text of a JSON value for display. Numbers keep their original digits
-/// (arbitrary_precision), so nothing is re-rounded.
+/// (arbitrary_precision), so nothing is re-rounded; strings pass through
+/// `visible`, so backend text cannot carry terminal control sequences.
 fn text(value: &Value) -> String {
     match value {
-        Value::String(s) => s.clone(),
+        Value::String(s) => visible(s),
         Value::Null => "-".to_string(),
         other => other.to_string(),
+    }
+}
+
+/// One line of text with control characters made visible (REV-RS-2): `\n`,
+/// `\r` and `\t` by name, every other control character (C0, DEL, C1) as
+/// `\u{..}`. Every backend string in a human-mode stdout report (messages,
+/// warnings, paths, column names) passes through this. Not covered: `--json`
+/// (the backend's bytes unchanged), the backend's inherited stderr, and the
+/// user's own `--python`, `--log` and `LKPR_PYTHON` values echoed in
+/// `exit_with` messages.
+fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                // Writing to a String cannot fail.
+                let _ = write!(out, "\\u{{{:x}}}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `visible` for a multi-line block (captured stderr): line feeds stay line
+/// breaks, everything else is escaped as in `visible`.
+fn visible_block(text: &str) -> String {
+    text.split('\n').map(visible).collect::<Vec<_>>().join("\n")
+}
+
+/// A human-readable report, written to stdout as one block at the end so a
+/// write failure (closed pipe, full disk) is reported as `output_write_failed`
+/// (exit 1) instead of the `println!` panic (exit 101) (REV-RS-2).
+#[derive(Default)]
+struct Report(String);
+
+impl Report {
+    fn line(&mut self, line: impl AsRef<str>) {
+        self.0.push_str(line.as_ref());
+        self.0.push('\n');
+    }
+
+    fn print(&self) -> Result<(), Failure> {
+        print_raw(self.0.as_bytes())
     }
 }
 
@@ -288,36 +337,41 @@ fn doctor(options: &Options, python: &str) -> Result<u8, Failure> {
         print_raw(&outcome.stdout)?;
     } else {
         let p = &caps["provenance"];
-        println!("python      {}", text(&p["python_executable"]));
-        println!(
+        let mut report = Report::default();
+        report.line(format!("python      {}", text(&p["python_executable"])));
+        report.line(format!(
             "            Python {}, NumPy {}",
             text(&p["python_version"]),
             text(&p["numpy_version"])
-        );
-        println!("backend     lammpkeeper {}", text(&p["package_version"]));
-        println!(
+        ));
+        report.line(format!(
+            "backend     lammpkeeper {}",
+            text(&p["package_version"])
+        ));
+        report.line(format!(
             "protocol    v{PROTOCOL_VERSION}: {}",
             if protocol_ok {
                 "supported"
             } else {
                 "NOT supported"
             }
-        );
-        println!(
+        ));
+        report.line(format!(
             "operation   {OPERATION} v{OPERATION_VERSION}: {}",
             if operation_ok {
                 "supported"
             } else {
                 "NOT supported"
             }
-        );
+        ));
         if !succeeded {
-            println!("error       {}", error_text(&caps["error"]));
+            report.line(format!("error       {}", error_text(&caps["error"])));
         }
-        println!(
+        report.line(format!(
             "status      {}",
             if ok { "ok" } else { "incompatible backend" }
-        );
+        ));
+        report.print()?;
     }
     if !ok {
         return Err(failure(format!(
@@ -336,10 +390,11 @@ fn error_text(error: &Value) -> String {
     format!("{}: {}", text(&error["code"]), text(&error["message"]))
 }
 
-/// Write backend stdout unchanged (plus a newline if it lacked one).
+/// Write bytes to stdout unchanged, adding a trailing newline if there is
+/// none: backend `--json` output, human-mode reports, usage and version text.
 ///
-/// A write failure (for example a closed pipe) is a failure: machine output
-/// that was not delivered must not exit 0.
+/// A write failure (for example a closed pipe or a full disk) is a failure:
+/// output that was not delivered must not exit 0.
 fn print_raw(bytes: &[u8]) -> Result<(), Failure> {
     let mut out = std::io::stdout().lock();
     let mut write = || -> std::io::Result<()> {
@@ -353,24 +408,25 @@ fn print_raw(bytes: &[u8]) -> Result<(), Failure> {
 }
 
 /// Readable report of a job snapshot. Values, units and warnings come from the
-/// backend unchanged; this only arranges them.
-fn print_summary(snapshot: &Value) {
+/// backend unchanged except for `visible`; this only arranges them.
+fn summary(snapshot: &Value) -> Report {
+    let mut report = Report::default();
     let state = text(&snapshot["state"]);
     let response = &snapshot["backend_response"];
     let result = &response["result"];
     if state == "succeeded" && result.is_object() {
-        println!(
+        report.line(format!(
             "{OPERATION}  {state}  ({} samples, unit system: {})",
             text(&result["sample_count"]),
             text(&result["unit_system"])
-        );
+        ));
         let mut rows = vec![["column", "unit", "min", "max", "mean", "std"]
             .map(String::from)
             .to_vec()];
         if let Some(stats) = result["statistics"].as_object() {
             for (column, s) in stats {
                 rows.push(vec![
-                    column.clone(),
+                    visible(column),
                     text(&result["units"][column]),
                     text(&s["min"]),
                     text(&s["max"]),
@@ -379,48 +435,52 @@ fn print_summary(snapshot: &Value) {
                 ]);
             }
         }
-        print_table(&rows);
+        table(&mut report, &rows);
     } else {
-        println!("{OPERATION}  {state}");
-        println!("error    {}", error_text(&snapshot["error"]));
+        report.line(format!("{OPERATION}  {state}"));
+        report.line(format!("error    {}", error_text(&snapshot["error"])));
     }
     if let Some(warnings) = response["warnings"].as_array() {
         for w in warnings {
-            println!("warning  {}", text(w));
+            report.line(format!("warning  {}", text(w)));
         }
     }
     let cleanup = &snapshot["cleanup"];
     if cleanup["status"] != "complete" && cleanup["status"] != "not_required" {
-        println!(
+        report.line(format!(
             "cleanup  {} ({})",
             text(&cleanup["status"]),
             error_text(&cleanup["error"])
-        );
+        ));
     }
     for phase in ["handshake", "execution"] {
-        let diag = text(&snapshot["diagnostics"][phase]);
-        if !diag.is_empty() && diag != "-" {
-            println!("{phase} stderr:\n{diag}");
+        // Captured stderr keeps its line breaks; other control characters are
+        // escaped (a traceback is text, an ESC sequence is not).
+        if let Some(diag) = snapshot["diagnostics"][phase].as_str() {
+            if !diag.is_empty() {
+                report.line(format!("{phase} stderr:\n{}", visible_block(diag)));
+            }
         }
     }
     let provenance = &response["provenance"];
     if provenance.is_object() {
-        println!(
+        report.line(format!(
             "input    {}",
             text(&provenance["input_fingerprint"]["resolved_path"])
-        );
-        println!(
+        ));
+        report.line(format!(
             "backend  lammpkeeper {}, Python {} ({}), NumPy {}",
             text(&provenance["package_version"]),
             text(&provenance["python_version"]),
             text(&provenance["python_executable"]),
             text(&provenance["numpy_version"])
-        );
+        ));
     }
+    report
 }
 
-/// Print rows as left-aligned columns; the first row is the header.
-fn print_table(rows: &[Vec<String>]) {
+/// Add rows as left-aligned columns; the first row is the header.
+fn table(report: &mut Report, rows: &[Vec<String>]) {
     let widths: Vec<usize> = (0..rows[0].len())
         .map(|c| rows.iter().map(|r| r[c].chars().count()).max().unwrap_or(0))
         .collect();
@@ -430,7 +490,7 @@ fn print_table(rows: &[Vec<String>]) {
             .zip(&widths)
             .map(|(cell, w)| format!("{cell:<w$}"))
             .collect();
-        println!("  {}", line.join("  ").trim_end());
+        report.line(format!("  {}", line.join("  ").trim_end()));
     }
 }
 
@@ -474,7 +534,7 @@ fn thermo_summary(options: &Options, python: &str) -> Result<u8, Failure> {
     if options.json {
         print_raw(&outcome.stdout)?;
     } else {
-        print_summary(&snapshot);
+        summary(&snapshot).print()?;
     }
     if outcome.interrupted {
         return Ok(130);
@@ -494,12 +554,11 @@ fn main() -> ExitCode {
     };
     match args.first().map(String::as_str) {
         Some("--help" | "-h") if args.len() == 1 => {
-            println!("{USAGE}");
-            return ExitCode::SUCCESS;
+            return print_raw(USAGE.as_bytes()).map_or_else(exit_with, |()| ExitCode::SUCCESS);
         }
         Some("--version") if args.len() == 1 => {
-            println!("lkpr-rs {}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
+            let version = format!("lkpr-rs {}", env!("CARGO_PKG_VERSION"));
+            return print_raw(version.as_bytes()).map_or_else(exit_with, |()| ExitCode::SUCCESS);
         }
         _ => {}
     }
@@ -519,7 +578,9 @@ fn main() -> ExitCode {
 
 /// Report a failure on stderr and map it to the exit status.
 fn exit_with(err: Failure) -> ExitCode {
-    eprintln!("lkpr-rs: {}", err.message);
+    // There is nowhere left to report a stderr write failure, and it must not
+    // turn the exit status into a panic's 101 (REV-RS-2).
+    let _ = writeln!(std::io::stderr().lock(), "lkpr-rs: {}", err.message);
     // A Ctrl-C that ended in a backend failure still reports interruption.
     ExitCode::from(if backend::interrupted() && err.code == 1 {
         130
@@ -593,6 +654,53 @@ mod tests {
         assert_eq!(text(&v["a"]), "9007199254740993");
         assert_eq!(text(&v["b"]), "1.632993161855452");
         assert_eq!(text(&v["c"]), "-0.0");
+    }
+
+    #[test]
+    /// Control characters in backend strings are shown escaped; line feeds
+    /// survive in blocks only, and a column name cannot add table rows.
+    fn backend_text_is_made_visible() {
+        assert_eq!(
+            visible("a\u{1b}[31mb\r\n\tc\u{7f}\u{85}d"),
+            "a\\u{1b}[31mb\\r\\n\\tc\\u{7f}\\u{85}d"
+        );
+        assert_eq!(
+            visible("plain text, 10 \u{212b}"),
+            "plain text, 10 \u{212b}"
+        );
+        assert_eq!(visible_block("x\n\u{1b}y\r"), "x\n\\u{1b}y\\r");
+        assert_eq!(text(&json!("p\u{0}q")), "p\\u{0}q");
+        let snapshot = json!({"state": "succeeded", "cleanup": {"status": "complete"},
+            "backend_response": {"result": {
+            "sample_count": 1, "unit_system": "metal", "units": {"T\nemp": "K"},
+            "statistics": {"T\nemp": {"min": 1, "max": 1, "mean": 1, "std": 0}}}}});
+        let report = summary(&snapshot).0;
+        assert_eq!(report.lines().count(), 3, "{report}");
+        assert!(
+            report.contains("  T\\nemp  K     1    1    1     0\n"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    /// `diagnostics.<phase>` is printed only when it is a non-empty string;
+    /// an empty string, a number, a list or an object is skipped rather than
+    /// rendered as JSON (recorded decision, REV-RS-2).
+    fn non_string_diagnostics_are_skipped() {
+        let snapshot = json!({"state": "failed", "error": {"code": "x", "message": "m"},
+            "cleanup": {"status": "complete"},
+            "diagnostics": {"handshake": "", "execution": ["a\u{1b}b"]}});
+        let report = summary(&snapshot).0;
+        assert_eq!(report, "thermo.summary  failed\nerror    x: m\n");
+        let snapshot = json!({"state": "failed", "error": {"code": "x", "message": "m"},
+            "cleanup": {"status": "complete"},
+            "diagnostics": {"handshake": {"text": "t"}, "execution": "tb\n\u{1b}[0m"}});
+        let report = summary(&snapshot).0;
+        assert!(
+            report.ends_with("execution stderr:\ntb\n\\u{1b}[0m\n"),
+            "{report}"
+        );
+        assert!(!report.contains("handshake"), "{report}");
     }
 
     #[test]
