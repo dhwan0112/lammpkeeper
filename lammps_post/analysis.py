@@ -879,8 +879,8 @@ def analyze_penetration(frames, col_idx, surface_z, dt_fs=1.0, o_type=2):
     Track oxygen atom penetration depth into the Fe slab over time.
 
     Monitors three quantities:
-    1. Maximum penetration depth: (surface_z - min_O_z), measuring how
-       deep the deepest O atom has reached into the Fe bulk.
+    1. Deepest O position: the minimum O z per frame, returned as 'o_min_z';
+       the depth (surface_z - o_min_z) is left to consumers.
     2. Adsorbed O count: O atoms more than NEAR_SURFACE_A (3.0 A) below
        the surface z-coordinate.
     3. Near-surface O count: O atoms within NEAR_SURFACE_A of the surface
@@ -992,7 +992,8 @@ def analyze_penetration_trend(frames, col_idx, surface_z, dt_fs=1.0,
             'max_depth'           : np.array — Max penetration depth (smoothed)
             'max_depth_raw'       : np.array — Raw
             'surface_z'           : float
-            'window'              : int      — Smoothing window used
+            'window'              : int      — Smoothing window used (clamped to the
+                                               number of frames; equal to n means no smoothing)
         Returns None if no O atoms found.
         Frames without selected atoms retain NaN spatial/ratio measurements.
     """
@@ -1123,11 +1124,12 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     outside the range are excluded; the last histogram bin includes its upper
     endpoint, unlike analyze_charge_z. No wrapping, comoving rescaling or boundary
     correction is performed. Only orthogonal boxes are accepted. Callers must
-    supply a usable range for an empty trajectory. Invalid options raise
-    ValueError before any frame is read: n_bins must be an integer >= 1, an
-    explicit z_range two finite numbers with zlo < zhi, and an automatic range
-    must also have positive, finite thickness. Nonfinite z of any selected atom
-    raises ValueError: it is not an "outside the range" atom.
+    supply a usable range for an empty trajectory. An invalid n_bins or
+    explicit z_range raises ValueError before any frame is read: n_bins must
+    be an integer >= 1 and an explicit z_range two finite numbers with
+    zlo < zhi. An automatic range must have positive, finite thickness, which
+    is checked after the frame boxes are validated. Nonfinite z of any
+    selected atom raises ValueError: it is not an "outside the range" atom.
 
     Args:
         frames:       list[dict] — Trajectory frames
@@ -1157,7 +1159,9 @@ def compute_density_profile(frames, col_idx, z_range=None, n_bins=200,
     if z_range is None:
         # Use the validator's bounds: a cell-only frame has no 'box' key.
         checked = [_orthogonal_box(fr, 'Density profile')[0] for fr in frames]
-        boxes = getattr(frames, 'boxes', None)   # LazyFrames: from the index, no parsing
+        # LazyFrames expose .boxes (from the index): the z extent comes from
+        # there without parsing atoms, but every frame was already validated above.
+        boxes = getattr(frames, 'boxes', None)
         if boxes is not None:
             zlo, zhi = float(boxes[:, 2, 0].min()), float(boxes[:, 2, 1].max())
         else:
@@ -1422,7 +1426,7 @@ def analyze_spin_evolution(frames, col_idx, dt_fs=1.0):
             'n_down'        : np.array — Count of spin-down Fe (type 2)
             'n_o'           : np.array — Count of O atoms (type 3)
             'total_fe'      : np.array — Total Fe count (up + down)
-            'total_atoms'   : np.array — Total atom count
+            'total_atoms'   : np.array — n_up + n_down + n_o (recognized ACE types only)
             'up_fraction'   : np.array — n_up / total_fe (0 to 1)
             'down_fraction' : np.array — n_down / total_fe
             'o_fraction'    : np.array — n_o / total_atoms

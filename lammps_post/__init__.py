@@ -23,6 +23,8 @@ Package structure:
     ├── parsers.py        — File parsers (dump, log, data)
     ├── analysis.py       — Pure analysis functions
     ├── plotting.py       — Plot generation functions
+    ├── references.py     — Reference crystal structures and ideal RDFs
+    │                       (built-in phases, CIF import)
     ├── state.py          — SessionState data container
     ├── shell.py          — Interactive cmd.Cmd shell
     └── cli.py            — Entry point, argparse, flag commands

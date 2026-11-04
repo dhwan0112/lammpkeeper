@@ -501,8 +501,10 @@ def parse_cif(source):
         {'name': str, 'cell': 3x3 array, 'atoms': [(elem, [fx,fy,fz]), ...]}
     Returns None for a missing source, failed COD fetch, missing cell lengths
     or absent usable atom rows; local file read errors may propagate. Raises
-    ValueError when symmetry cannot be established: supply explicit symmetry
-    operations, or declare P1. A named non-P1 group alone is not expanded from
+    ValueError for an invalid cell (a present but non-numeric length or angle,
+    or lengths/angles that cannot form a cell: 'CIF cell parameters are
+    invalid: ...'). Raises ValueError when symmetry cannot be established:
+    supply explicit symmetry operations, or declare P1. A named non-P1 group alone is not expanded from
     a space-group database. Unsupported occupancy/disorder or ambiguous guarded
     site input also raises, with source/line and site metadata where available;
     no partially filtered crystal is returned.
@@ -516,12 +518,15 @@ def parse_cif(source):
 
     Atom-site headers are case-insensitive. Guarded rows require complete simple
     line-based fields (including quotes and inline comments); unguarded rows keep
-    the legacy whitespace subset. Numeric coordinate uncertainties are stripped
-    and absent/unusable angles default to 90 degrees. Anisotropic motion, multiple
-    data blocks and sophisticated multiline CIF constructs are not interpreted.
-    Symmetry-loop matching retains its legacy subset; explicit operators take
-    precedence without validating every operator or declared group. Invalid
-    finite/nonfinite cells/coordinates are not comprehensively rejected here.
+    the legacy whitespace subset. Numeric coordinate uncertainties are stripped;
+    absent angles default to 90 degrees, while a present but non-numeric angle
+    raises ValueError. Anisotropic motion, multiple data blocks and
+    sophisticated multiline CIF constructs are not interpreted. Symmetry-loop
+    matching retains its legacy subset; every symmetry-loop row found is
+    validated as an operator (an invalid row raises ValueError), but the
+    declared space group is not checked against the operators. Cell lengths
+    and angles are validated; fractional coordinates are not range- or
+    finiteness-checked here.
     """
     # ── Fetch CIF content ──
     if source.lower().startswith('cod:'):
@@ -572,6 +577,9 @@ def parse_cif(source):
     # '.' and '?') and any geometrically invalid value raise ValueError, so a
     # wrong cell is never built silently.
     def _cell_param(tag, default=None):
+        """Return the CIF cell tag as a float with any uncertainty stripped, or
+        ``default`` when the tag is absent; raise ValueError when the tag is
+        present but not a number."""
         raw = _get_value(tag)
         if raw is None:
             return default
@@ -784,8 +792,9 @@ def _lattice_image_offsets(cell, r_max):
     is the perpendicular width of the cell along lattice direction i. A
     distance below r_max therefore needs ``|n_i| < r_max / w_i + 1/2`` on every
     axis, so the box ``|n_i| <= ceil(r_max / w_i + 1/2)`` contains every image
-    that can contribute, for any cell shape. Raises ValueError for a singular
-    cell, whose widths are undefined.
+    that can contribute, for any cell shape. Raises ValueError for a cell that
+    is not a finite 3x3 matrix, for a singular cell (whose widths are
+    undefined) and for a non-positive or non-finite r_max.
     """
     cell = np.asarray(cell, dtype=float)
     if cell.shape != (3, 3) or not np.all(np.isfinite(cell)):
@@ -829,8 +838,9 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0, n_bins=
         n_bins:    int — Number of histogram bins
 
     Returns:
-        dict: {'r', 'g', 'label', 'phase'} or None if the phase is unknown or
-        either element of the pair is absent
+        dict: {'r', 'g', 'label', 'phase'} or None if the phase name is
+        unknown, the argument is neither a str nor a dict, or either element
+        of the pair is absent
     """
     if isinstance(phase_or_crystal, str):
         if phase_or_crystal not in CRYSTAL_DB:

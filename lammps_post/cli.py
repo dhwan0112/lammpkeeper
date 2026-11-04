@@ -6,6 +6,7 @@ Handles command-line argument parsing and launches either:
   - Interactive mode (default): enters the cmd.Cmd event loop
   - Batch mode (--batch): reads commands from a script file
   - One-shot mode (--analyze/--plot): run without entering interactive shell
+  - Find mode (--find [dir]): search for LAMMPS files and exit
 
 Files can be pre-loaded via --input, --dump, --log, --data flags to skip
 the manual 'load' step. Example:
@@ -25,7 +26,7 @@ def main(argv=None):
     """
     Main entry point: parse CLI arguments and start the interactive shell.
 
-    Supports four modes of operation:
+    Supports five modes of operation:
     1. Interactive (default): Launches the cmd.Cmd shell with a prompt.
        User types commands interactively with tab completion and history.
     2. Pre-loaded: Use --input/--dump/--log/--data flags to automatically load
@@ -33,7 +34,10 @@ def main(argv=None):
     3. Batch: Use --batch <file> to execute a series of commands from
        a script file (one command per line, '#' for comments).
     4. One-shot: Use --analyze and/or --plot with file flags to run
-        analysis/plotting without entering the interactive shell.
+       analysis/plotting without entering the interactive shell.
+    5. Find: Use --find [dir] to search for LAMMPS files (default: the
+       current directory) and exit; it takes precedence over preload,
+       one-shot and batch, and an empty result is a failure.
 
     ``argv=None`` reads process arguments; success returns None. Preload,
     one-shot and batch command failures raise SystemExit(1). The shell counts
@@ -117,7 +121,9 @@ def main(argv=None):
     # The shell tokenizes command strings again: preserve each filename as one
     # token, including spaces and quotes, rather than interpolating raw paths.
     # The input goes first so explicit metadata is in place when the trajectory
-    # loads; the result is identical for the opposite order.
+    # loads and no transient heuristic state is shown. The final state is the
+    # same for the opposite order because the shell re-applies the input
+    # metadata after a later dump load.
     if args.input:
         shell.onecmd(f'load input {shlex.quote(args.input)}')
     if args.dump:

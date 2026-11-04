@@ -58,16 +58,20 @@ def _access_paths(path, columns, force_numpy):
     from lammps_post import parsers
 
     def iterate():
+        """Frame 0 through plain iteration of the reader."""
         return next(iter(_reader(path, columns, force_numpy)))
 
     def indexed():
+        """Frame 0 through the index + read_frame path."""
         reader = _reader(path, columns, force_numpy)
         return reader.read_frame(reader.index(), 0)
 
     def lazy():
+        """Frame 0 through LazyFrames indexing."""
         return parsers.LazyFrames(_reader(path, columns, force_numpy))[0]
 
     def parse_dump():
+        """Frame 0 through the public parse_dump() entry point."""
         if force_numpy:
             with mock.patch.object(parsers, '_native', None):
                 return parsers.parse_dump(path, columns=columns)[0][0]
@@ -88,6 +92,7 @@ def _with_file(text, fn):
 
 
 def _require_native():
+    """Skip the calling test when the native parser is not built."""
     from lammps_post import parsers
     require(parsers._native is not None, NATIVE_MISSING)
 
@@ -107,6 +112,7 @@ def _check_foreign_rejected(force_numpy):
         text = _dump([ROWS[0], bad])
         for columns in (None, ('x', 'y', 'z')):
             def run(path):
+                """Expect the located ValueError from every access path."""
                 for name, thunk in _access_paths(path, columns, force_numpy):
                     try:
                         thunk()
@@ -126,6 +132,7 @@ def _tab_results(force_numpy):
     results = {}
     for columns in (None, ('x', 'y', 'z')):
         def run(path):
+            """Collect the atoms array from every access path."""
             for name, thunk in _access_paths(path, columns, force_numpy):
                 results[(columns, name)] = thunk()['atoms'].copy()
         _with_file(text, run)
@@ -133,6 +140,7 @@ def _tab_results(force_numpy):
 
 
 def _expected(columns):
+    """The atoms array ROWS should parse to, projected to `columns` if given."""
     import numpy as np
     expected = np.array([r.split() for r in ROWS], dtype=float)
     return expected if columns is None else expected[:, 2:5]

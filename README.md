@@ -88,7 +88,8 @@ or discovered automatically. Existing ACE spin presets and legacy mapping APIs
 remain compatible. The existing `set types` command remains a warned manual
 analysis-label override; input/data/dump load/unload expires it visibly, whereas
 manifest/log changes retain it. Dump-only FF classification still has warned
-heuristics (GEN-2), so generic selection is not complete FF generality.
+heuristics (the warned ADR-0005 fallback that GEN-2 kept), so generic selection is
+not complete FF generality.
 See [`docs/agent/GEN-1.md`](docs/agent/GEN-1.md) for schema, commands and limits.
 
 ## Restricted-triclinic geometry
@@ -118,7 +119,10 @@ HOME="$(mktemp -d)" LKPR_SLOW=1 python tests/run.py # RDF/MSD goldens and oracle
 The numeric regression uses the ACE example trajectory shipped in
 `tests/fixtures/ace_examples/`. The latest whole-source review, English annotation
 inventory, known open findings and verification limits are recorded in
-[`docs/agent/REVIEW-20261028.md`](docs/agent/REVIEW-20261028.md); passing regressions
+[`docs/agent/REVIEW-20261028.md`](docs/agent/REVIEW-20261028.md), with the later
+whole-code audits in [`docs/agent/AUDIT-20261101.md`](docs/agent/AUDIT-20261101.md) and
+[`docs/agent/AUDIT-20261104.md`](docs/agent/AUDIT-20261104.md); fix status is tracked in
+[`docs/agent/BACKLOG.md`](docs/agent/BACKLOG.md). Passing regressions
 are not a claim that every scientific input or optional path is validated.
 
 ## Layout

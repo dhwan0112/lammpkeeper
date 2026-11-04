@@ -315,10 +315,12 @@ def test_tui_restores_the_terminal_when_left():
     import termios
 
     def sigterm(proc):
+        """Step: deliver SIGTERM instead of a keystroke."""
         proc.send_signal(signal.SIGTERM)
         return b''
 
     def sighup(proc):
+        """Step: deliver SIGHUP instead of a keystroke."""
         proc.send_signal(signal.SIGHUP)
         return b''
 
@@ -403,6 +405,7 @@ def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120,
     closed = False
 
     def close_terminal():
+        """Close both pty ends once (idempotent)."""
         nonlocal closed
         if not closed:
             closed = True
@@ -410,6 +413,7 @@ def _tui_drive(args, script, env, cwd, rows=50, cols=200, timeout=120,
             os.close(slave)
 
     def own_the_terminal():
+        """preexec_fn: new session with the pty slave as controlling terminal."""
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
@@ -514,6 +518,7 @@ def test_tui_cancels_through_the_backend_and_cleans_up():
         tree = []
 
         def cancel(proc):
+            """Step: press `c` once the backend child (exec --request) exists."""
             # Press c only once the scientific child (exec --request) exists.
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -553,6 +558,7 @@ def test_tui_stops_the_backend_when_the_terminal_closes():
         tree = []
 
         def close_once_running(proc):
+            """Step: hang up the terminal once the backend child exists."""
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 tree[:] = _descendants(proc.pid)

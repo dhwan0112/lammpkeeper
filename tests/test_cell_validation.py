@@ -15,6 +15,8 @@ import _util
 
 
 def _raises(call, *fragments):
+    """Assert that call() raises ValueError whose text contains every fragment;
+    return that text."""
     try:
         call()
     except ValueError as exc:
@@ -26,6 +28,7 @@ def _raises(call, *fragments):
 
 
 def _lengths_and_angles(cell):
+    """Recover (a, b, c, alpha, beta, gamma) in Å/degrees from a 3x3 row cell."""
     import numpy as np
     a, b, c = (np.linalg.norm(v) for v in cell)
     angle = lambda u, v: math.degrees(math.acos(float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)))))
@@ -33,6 +36,8 @@ def _lengths_and_angles(cell):
 
 
 def test_valid_cells_round_trip_and_match_the_builtin_constructions():
+    """_cell_from_params reproduces the cubic/hexagonal builders, round-trips a
+    triclinic cell with the analytic volume, and builds thin but valid cells."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import _cell_from_params, _cubic_cell, _hexagonal_cell
@@ -58,6 +63,8 @@ def test_valid_cells_round_trip_and_match_the_builtin_constructions():
 
 
 def test_invalid_parameters_are_rejected_not_clipped():
+    """Non-positive lengths, non-finite or non-numeric values, out-of-range
+    angles and zero-volume triples raise ValueError naming the parameter."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import _cell_from_params
@@ -116,6 +123,7 @@ X1 X 0.0 0.0 0.0
 
 
 def _write(tmp, name, text):
+    """Write text to tmp/name and return the path."""
     path = os.path.join(tmp, name)
     with open(path, 'w') as handle:
         handle.write(text)
@@ -123,6 +131,8 @@ def _write(tmp, name, text):
 
 
 def test_cif_cell_parameters_are_validated_not_defaulted():
+    """parse_cif defaults only absent angles to 90; zero angles, invalid
+    triples and non-numeric values (including '?' and '.') raise ValueError."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import parse_cif

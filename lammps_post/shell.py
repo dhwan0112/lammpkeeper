@@ -228,7 +228,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         ans = self._ask(f"{prompt} (y/n)", default)
         return ans is not None and ans.lower() in ('y', 'yes')
 
-    # ─── Output directory suggestion after first load ───
+    # ─── Run-metadata publication ───
 
     def _publish_metadata(self):
         """Recompute effective run metadata and publish it into the legacy ff_info view.
@@ -284,6 +284,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
         progress_msg(f"Applied input config: {s.ff.upper()}, "
                      f"types={config['element_map']}")
+
+    # ─── Output directory suggestion after first load ───
 
     def _suggest_output_dir(self, loaded_path):
         """
@@ -987,7 +989,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             s._metadata_transaction = original['_metadata_transaction']
 
     def _unload_source(self, arg):
-        """Unload dump|log|data|input|manifest|all and invalidate dependent state.
+        """Unload one of dump|log|data|input|manifest and invalidate dependent
+        state (do_unload expands `all` into one call per loaded source).
 
         Dump removal resets its geometry and manual surface flag, then restores
         any still-loaded input metadata. Input removal instead re-detects from
@@ -1154,7 +1157,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
     def do_show(self, arg):
         """Inspect thermo|columns|types|frames|box|composition|stages without caching.
 
-        Box dimensions come from frame zero; composition defaults to the last
+        Box dimensions come from dump frame zero, else from the loaded data
+        file's cell; composition defaults to the last
         frame and reports individual type channels, not merged species groups.
         Thermo statistics retain native log units; stage times are wall seconds.
         """
@@ -1371,7 +1375,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             set fontsize <int>                  — Base font size for plots (default: 11)
             set grid on|off                     — Toggle grid lines on plots
             set grid_alpha <float>              — Grid transparency 0-1 (default: 0.3)
-            set figsize <W> <H>|single_col|double_col|1.5col|slide16x9|slide4x3  — Figure size or preset
+            set figsize <W> <H>|single_col|double_col|1.5col|slide16x9|slide4x3|a4|reset  — Figure size or preset
             set theme default|publication|presentation  — Plot theme preset
             set save_format png|pdf|svg|both    — Output file format
         """
@@ -1502,7 +1506,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 'double_col': (17.1 / CM_PER_INCH, 8.0 / CM_PER_INCH),  # ~6.73 x 3.15 in
                 '1.5col':     (12.0 / CM_PER_INCH, 7.0 / CM_PER_INCH),  # ~4.72 x 2.76 in
                 'reset':      None,
-                'none':       None,
+                'none':       None,   # accepted alias of 'reset'; help/usage list only 'reset'
             }
             if val.lower() in presets:
                 s.figsize_override = presets[val.lower()]
@@ -1612,7 +1616,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
                 available.append(('spin',     'Magnetic spin evolution (ACE)'))
             available.append(('msd',          'Mean square displacement'))
         else:
-            # Even without dump, show all possibilities (will prompt to load)
+            # Without a dump, offer a short list of ungated analyses; each
+            # prompts to load a dump when run. `oar` and `penetration_trend`
+            # are ungated too but are listed only once a dump is loaded.
             available.append(('rdf',          'Radial distribution function'))
             available.append(('penetration',  'O penetration depth'))
             available.append(('density',      'z-direction density profile'))
@@ -1638,8 +1644,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             analyze <type> [options]             — Direct invocation
             analyze all                          — Run all applicable
 
-        Types: charge, charge_z, rdf, oar, or, penetration, density,
-               dissociation, spin, msd, performance, structure, all
+        Types: charge, charge_z, rdf, oar, or, penetration, penetration_trend,
+               density, dissociation, spin, msd, performance, structure, all
         """
         parts = shlex.split(arg) if arg.strip() else []
 
@@ -1718,9 +1724,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
 
     def _analyze_all(self):
         """
-        Run all applicable analyses. If no dump is loaded, prompts
-        the user to load one first. If surface_z is not set, offers
-        auto-detection before running surface-dependent analyses.
+        Run all applicable analyses. If nothing at all is loaded, prompts
+        for a dump path. If surface_z is not set, auto-detects it (no prompt)
+        before the surface-dependent analyses, or skips them with a notice
+        when detection fails.
 
         This remains an Fe-O convenience workflow: defaults include Fe-O RDF
         and Fe MSD, not arbitrary user chemistry. Shared-pass failures clear
@@ -1942,8 +1949,10 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         """
         Compute RDF g(r) for a specified atom pair.
         Interactive: if no pair is given and _batch=False, shows available
-        species and asks the user to choose. Also prompts for number of frames.
-        When _batch=True (called from _analyze_all), uses defaults without prompting.
+        species and asks the user to choose. The frame-count prompt appears
+        only when no arguments at all are given; otherwise `--frames`
+        (default 20) applies. When _batch=True (called from _analyze_all),
+        uses defaults without prompting.
 
         Species labels resolve to type sets, while the exact requested pair
         remains the cache key and a separate display_label identifies grouped
@@ -2489,7 +2498,8 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             plot recipes                        — List all saved plot recipes
             plot save_defaults <type>           — Save recipe as session defaults
 
-        Types: thermo, charge, charge_z, rdf, oar, or, penetration, density,
+        Types: thermo, thermostat, pressure, charge, charge_z, rdf, oar, or,
+               penetration, penetration_trend, penetration_profile, density,
                dissociation, spin, msd, performance, structure, snapshot, all
 
         Recipes are session-local settings, not frozen numerical results. Redo
@@ -2678,10 +2688,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
             raise ValueError(f"Unknown plot type: '{what}'")
 
     # ── Per-type interactive plot methods ──
-    # Each method: (1) ensures data exists (auto-analyze if missing),
-    # (2) asks user about plot-specific options when called interactively,
-    # (3) generates the plot. The _batch parameter suppresses prompts
-    # when called from _plot_all.
+    # Each method: (1) ensures data exists (auto-analyze if missing; the
+    # log-based thermo/thermostat/pressure handlers only check that a log is
+    # loaded), (2) asks user about plot-specific options when called
+    # interactively, (3) generates the plot. The _batch parameter suppresses
+    # prompts when called from _plot_all, `plot redo`, or noninteractive mode.
 
     def _iplot_common_opts(self, plot_name, edit_mode=False, *, spatial=True):
         """
@@ -3218,7 +3229,9 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         offered when they contain at least one of those pairs and are tagged
         with the pairs they serve; a CIF is offered for every pair. Returns a
         dict mapping each cache key to its reference list (None when a curve
-        has no reference), or None when nothing could be computed.
+        has no reference), or None when nothing could be computed. A CIF that
+        parse_cif rejects (ValueError) aborts the command; a None return from
+        parse_cif only warns.
         """
         from lammps_post.references import (
             compute_reference_rdf, get_available_phases, get_phases_for_pair, parse_cif
@@ -3782,7 +3795,7 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
         self._iplot_density([], _batch=True)
         self._iplot_msd([], _batch=True)
 
-        # Structure from data file
+        # Structure (cached analysis atoms, else data file, else final dump frame)
         self._iplot_structure([], _batch=True)
 
         # Snapshots
@@ -4275,9 +4288,11 @@ class LammpsPostShell(HostedShellMixin, cmd.Cmd):
   analyze all                               Run all applicable
 
 {C.bold('PLOTTING')}
-  plot <analysis_name>                      Generate plot from cached data
+  plot <type>                               Generate plot (runs the analysis if missing)
   plot snapshot [frame_indices]              z-x plane snapshots
-  plot all                                  All plots from cached data
+  plot all                                  All applicable plots (log/structure/snapshots
+                                            plus cached analyses)
+  plot redo|edit <type>, plot recipes       Re-run / edit / list plot recipes
 
 {C.bold('EXPORT')}
   export csv <analysis> [filename]          Export to CSV

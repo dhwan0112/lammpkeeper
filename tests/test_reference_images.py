@@ -17,6 +17,7 @@ import _util
 
 
 def _brute_force_counts(crystal, pair, r_max, n_bins):
+    """Oracle pair-count histogram from an explicit, generously sized supercell."""
     import numpy as np
     cell = np.asarray(crystal['cell'], dtype=float)
     elements = [e for e, _ in crystal['atoms']]
@@ -138,6 +139,8 @@ def test_cutoff_beyond_the_cell_and_skew_cells_stay_complete():
 
 
 def test_offset_box_is_the_width_bound_and_singular_cells_are_rejected():
+    """_lattice_image_offsets spans ceil(r_max/width + 1/2) per axis (more for
+    sheared cells), and singular, zero-r_max or non-finite inputs raise."""
     _util.require_numpy()
     import numpy as np
     from lammps_post.references import _lattice_image_offsets, compute_reference_rdf

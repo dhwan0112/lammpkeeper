@@ -11,7 +11,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 
 ---
 
-## Current status (GEN-3, 2026-10-28)
+## Current status (through GEN-3, 2026-10-28; GEN-2 completed 2026-11-01)
 
 - The dispatcher and shared `common/display.py` / `common/mapping.py` are in use;
   the full ADR-0001 package layout is a target, not the current module layout.
@@ -35,7 +35,7 @@ order and completion evidence live in `docs/agent/BACKLOG.md`.
 - Real LAMMPS/HPC execution is deferred. The old run report below is historical,
   not a claim that the current code or this environment was run on LAMMPS.
 
-## Interface roadmap (through UI-1, updated 2026-11-02)
+## Interface roadmap (through UI-2, updated 2026-11-04)
 
 **Detailed stage-by-stage plan:** [INTERFACE-ROADMAP.md](docs/agent/INTERFACE-ROADMAP.md)
 records current status, requirements, implementation steps, deliverables, acceptance
@@ -45,7 +45,7 @@ checks, remaining host validation and the connection to the GEN/scientific backl
 Rust CLI/TUI frontends over shared Python application execution, with skills
 and an optional MCP adapter using that same contract. **Status: accepted
 2026-10-30; architecture, EXEC-1/2 and AGENT-1 merged through PRs #28–31; UI-1
-(`lkpr-rs`) merged in PR #46. UI-2 and AGENT-2 are not started.** Python scientific APIs, ecosystem
+(`lkpr-rs`) merged in PR #46 and UI-2 (`lkpr-rs tui`) in PR #89. AGENT-2 is not started.** Python scientific APIs, ecosystem
 environments and Python-only installation remain first-class. The accepted
 ADR-0001 scientific architecture and GEN sequence remain in effect.
 
@@ -88,6 +88,9 @@ science or job state, and is built from source only; Python-only installs are
 unchanged. Measured on Linux x86_64 with rustc 1.98.1 only. See
 `docs/agent/UI-1.md`. Later audit fixes REV-EXEC-1/2/3 (PRs #54, #58, #61)
 tightened the EXEC-2 supervisor without schema or error-code changes.
+UI-2 adds the `lkpr-rs tui` subcommand (ratatui/crossterm, PR #89): Setup, Check,
+Confirm, Running and Result screens over the same `run --events` contract, cancel
+through the backend, snapshots saved to new files only. See `docs/agent/UI-2.md`.
 
 ## Audit correction note (2026-10-27)
 

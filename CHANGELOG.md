@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Comment and roadmap audit (AUDIT-20261104-DOCS)
+
+- Documentation only, no behaviour change: docstrings and comments in `lammps_post/` that no longer described the code were corrected (CLI modes and preload order, `parse_cif`/`parse_input`/`_lattice_image_offsets` error contracts, result keys of the density profile and penetration analyses, `ff_info` fields, `plot`/`analyze` type lists and prompting rules, plot panel descriptions). The 33 undocumented test helpers and the 51 Rust `fn`s added since the 2026-11-01 audit (`lkpr-rs tui`, `main.rs` report) have English docstrings/comments; scans: 119 Python files, 0 missing; 197 Rust `fn`s, 0 missing (`docs/agent/COMMENT_COVERAGE.md`).
+- Two user-visible strings changed: the penetration-trend panel (d) legend reads `√t guide: d=A√t` instead of `√t fit` (the dotted line is a median d/√t scaling guide, not a fit), and `help` lists `plot <type>`, `plot all`, `plot redo|edit <type>` and `plot recipes` with what each does.
+- `MIGRATION.md`, `README.md`, `docs/agent/INTERFACE-ROADMAP.md`, `docs/agent/BACKLOG.md` (REV-PLOT-2 row format, a blank line inside the review table, 2026-11-04 checkpoint) and `docs/agent/COMMENT_COVERAGE.md` now describe main `faf078a`: UI-2 merged, review table 49 done / 9 open, the untriaged P2 findings of `AUDIT-20261104.md` listed. Devlog `docs/agent/AUDIT-20261104-DOCS.md`.
+
 ### Invalid reference cells are rejected instead of clipped (REV-REF-4)
 
 - `_cell_from_params` raises `ValueError` naming the offending parameter for non-numeric, non-finite or non-positive lengths, angles outside (0, 180) degrees and angle triples with no positive volume; the former `max(residual, 0)` clip that turned e.g. 170/170/170 into a flat zero-volume cell is gone. Valid cells are built exactly as before.

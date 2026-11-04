@@ -41,6 +41,7 @@ def _shell():
 def _record(shell, name):
     """Replace _iplot_<name> with a recorder of (name, _batch, _edit_mode)."""
     def handler(opts, _batch=False, _edit_mode=False):
+        """Record the call instead of plotting."""
         shell.calls.append((name, _batch, _edit_mode))
     setattr(shell, '_iplot_' + name, handler)
 

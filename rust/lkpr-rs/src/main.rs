@@ -309,11 +309,14 @@ fn visible_block(text: &str) -> String {
 struct Report(String);
 
 impl Report {
+    /// Append one line to the report.
     fn line(&mut self, line: impl AsRef<str>) {
         self.0.push_str(line.as_ref());
         self.0.push('\n');
     }
 
+    /// Write the whole report to stdout at once; `print_raw` adds the trailing
+    /// newline when the text lacks one.
     fn print(&self) -> Result<(), Failure> {
         print_raw(self.0.as_bytes())
     }

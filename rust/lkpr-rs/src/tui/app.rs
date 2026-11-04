@@ -49,6 +49,7 @@ pub enum Field {
 impl Field {
     pub const ALL: [Field; 3] = [Field::Python, Field::Log, Field::Timeout];
 
+    /// Field name shown in the Setup form.
     pub fn label(self) -> &'static str {
         match self {
             Field::Python => "python",
@@ -57,6 +58,7 @@ impl Field {
         }
     }
 
+    /// The field after this one (Tab), wrapping around.
     fn next(self) -> Field {
         match self {
             Field::Python => Field::Log,
@@ -65,6 +67,7 @@ impl Field {
         }
     }
 
+    /// The field before this one (Shift-Tab), wrapping around.
     fn previous(self) -> Field {
         match self {
             Field::Python => Field::Timeout,
@@ -241,6 +244,7 @@ pub fn parse_timeout(field: &str) -> Result<f64, String> {
 }
 
 impl App {
+    /// A fresh reducer on the Setup screen with the given field values.
     pub fn new(python: String, log: String, timeout: String) -> App {
         App {
             screen: Screen::Setup,
@@ -277,6 +281,7 @@ impl App {
         self.in_flight > 0
     }
 
+    /// Current text of a Setup field.
     pub fn field(&self, field: Field) -> &str {
         match field {
             Field::Python => &self.python,
@@ -285,6 +290,7 @@ impl App {
         }
     }
 
+    /// Mutable text of a Setup field.
     fn field_mut(&mut self, field: Field) -> &mut String {
         match field {
             Field::Python => &mut self.python,
@@ -293,11 +299,13 @@ impl App {
         }
     }
 
+    /// Next probe/run id; each background task answers only to its own id.
     fn id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
     }
 
+    /// Reduce one message; a screen change resets the scroll position.
     pub fn apply(&mut self, msg: Msg) {
         let before = self.screen;
         self.dispatch(msg);
@@ -306,6 +314,7 @@ impl App {
         }
     }
 
+    /// Route a message to the per-kind handlers.
     fn dispatch(&mut self, msg: Msg) {
         match msg {
             Msg::Tick => self.ticks = self.ticks.wrapping_add(1),
@@ -345,6 +354,8 @@ impl App {
         }
     }
 
+    /// Route a key to the handler of the current screen; Ctrl-C and the help
+    /// overlay are handled before the screen sees the key.
     fn key(&mut self, key: Key) {
         if key == Key::CtrlC {
             return self.ctrl_c();
@@ -444,6 +455,7 @@ impl App {
         u16::try_from(lines.saturating_sub(1)).unwrap_or(u16::MAX)
     }
 
+    /// Keys on the Setup screen: field focus, editing and starting the probe.
     fn setup_key(&mut self, key: Key) {
         match key {
             Key::Tab => self.focus = self.focus.next(),
@@ -510,6 +522,7 @@ impl App {
         self.screen = Screen::Check;
     }
 
+    /// Keys on the Check screen: Esc/q cancels the capabilities probe.
     fn check_key(&mut self, key: Key) {
         match key {
             Key::Esc | Key::Char('q') => {
@@ -524,6 +537,8 @@ impl App {
         }
     }
 
+    /// The capabilities probe `id` ended: validate the answer and move to
+    /// Confirm, or show the problem.
     fn probed(&mut self, id: u64, result: Result<Value, String>) {
         // A cancelled or superseded probe answers to nobody.
         let Some(probe) = self.probe.as_ref().filter(|p| p.id == id) else {
@@ -578,11 +593,13 @@ impl App {
         self.screen = Screen::Confirm;
     }
 
+    /// Show `problem` on the Error screen.
     fn fail(&mut self, problem: String) {
         self.error = Some(problem);
         self.screen = Screen::Error;
     }
 
+    /// Keys on the Confirm screen: Enter starts the run, Esc/q goes back.
     fn confirm_key(&mut self, key: Key) {
         match key {
             Key::Enter => self.start_run(),
@@ -595,6 +612,7 @@ impl App {
         }
     }
 
+    /// Start the prepared run and move to the Running screen.
     fn start_run(&mut self) {
         let Some(run) = self.run.as_mut() else {
             self.screen = Screen::Setup;
@@ -620,6 +638,8 @@ impl App {
         self.screen = Screen::Running;
     }
 
+    /// Keys on the Running screen: `c` cancels, Esc/q is refused while the
+    /// backend runs.
     fn running_key(&mut self, key: Key) {
         match key {
             Key::Char('c') => self.cancel(),
@@ -644,6 +664,8 @@ impl App {
         }
     }
 
+    /// One streamed backend line: events are listed up to EVENTS_MAX, the
+    /// rest and all diagnostics go to the bounded diagnostics tail.
     fn line(&mut self, line: Line) {
         let Some(run) = self.run.as_mut() else {
             return;
@@ -661,6 +683,8 @@ impl App {
         }
     }
 
+    /// The run `id` ended: validate the snapshot against this run and show
+    /// the Result screen, or the problem on the Error screen.
     fn finished(&mut self, id: u64, result: Result<(Value, Vec<u8>), String>, interrupted: bool) {
         let Some(run) = self.run.as_ref().filter(|r| r.id == id) else {
             return;
@@ -698,6 +722,8 @@ impl App {
         self.screen = Screen::Result;
     }
 
+    /// Keys on the Result and Error screens: save (Result only), new run,
+    /// quit, help. Scrolling is consumed by `key()` before dispatch.
     fn done_key(&mut self, key: Key) {
         match key {
             Key::Char('s') if self.screen == Screen::Result => {
@@ -724,6 +750,8 @@ impl App {
         format!("{name}.snapshot.json")
     }
 
+    /// Keys while the save-file name is being edited; Enter queues a save of
+    /// the raw snapshot and the stderr tail.
     fn save_key(&mut self, key: Key) {
         let Some(name) = self.save.as_mut() else {
             return;
@@ -762,6 +790,7 @@ impl App {
     }
 }
 
+/// "supported" / "NOT supported" for the capabilities summary.
 fn supported(ok: bool) -> &'static str {
     if ok {
         "supported"
@@ -783,16 +812,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// An App with fixed Setup values for the tests.
     fn fresh() -> App {
         App::new("/py".to_string(), "run.log".to_string(), "5".to_string())
     }
 
+    /// Feed each key to the reducer in order.
     fn keys(app: &mut App, list: &[Key]) {
         for key in list {
             app.apply(Msg::Key(*key));
         }
     }
 
+    /// A minimal capabilities answer that supports the TUI operation.
     fn caps() -> Value {
         json!({"status": "succeeded", "result": {"protocol_versions": [1],
             "operations": {"thermo.summary": {"versions": [1]}}}})
@@ -828,6 +860,7 @@ mod tests {
         (start.id, start)
     }
 
+    /// A minimal job snapshot in `state` for `request_id`.
     fn snapshot(request_id: &str, state: &str) -> Value {
         json!({"job_schema_version": 1, "request_id": request_id, "state": state,
             "elapsed_seconds": 0.5, "cleanup": {"status": "complete"},

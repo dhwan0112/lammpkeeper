@@ -295,6 +295,8 @@ pub fn save(save: &Save) -> Result<String, String> {
     Ok(done)
 }
 
+/// Write `bytes` to a file that must not exist yet (create_new), adding a
+/// trailing newline when asked and one is missing.
 fn write_new(path: &str, bytes: &[u8], newline: bool) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -404,6 +406,7 @@ mod tests {
         assert!(a.bytes().all(|c| c == b'-' || c.is_ascii_hexdigit()));
     }
 
+    /// A fresh per-test directory under TMPDIR, named by `tag` and a counter.
     fn tempdir(tag: &str) -> PathBuf {
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let base = std::env::var_os("TMPDIR")
@@ -416,6 +419,8 @@ mod tests {
         dir
     }
 
+    /// Write an executable bash script that stands in for the Python backend;
+    /// returns its path.
     fn fake(dir: &Path, body: &str) -> String {
         let path = dir.join("fake python");
         fs::write(&path, format!("#!/bin/bash\n{body}\n")).unwrap();
@@ -540,6 +545,7 @@ mod tests {
         (messages, cancel)
     }
 
+    /// The final `Finished` message of run 7, as (result, interrupted).
     fn finished(messages: &[Msg]) -> (&Result<(Value, Vec<u8>), String>, bool) {
         match messages.last() {
             Some(Msg::Finished {

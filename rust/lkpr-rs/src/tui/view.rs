@@ -15,6 +15,8 @@ pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 
+/// Draw the whole frame: title, the current screen body, footer, and the
+/// help overlay when open; a too-small terminal gets a notice instead.
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
@@ -74,6 +76,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Title line naming the operation, protocol and current screen.
 fn title(app: &App) -> String {
     format!(
         " lkpr-rs tui  {OPERATION} v{OPERATION_VERSION}  protocol v{PROTOCOL_VERSION}  {}",
@@ -88,6 +91,7 @@ fn title(app: &App) -> String {
     )
 }
 
+/// Display name of a screen.
 fn screen_name(screen: Screen) -> &'static str {
     match screen {
         Screen::Setup => "Setup",
@@ -99,14 +103,17 @@ fn screen_name(screen: Screen) -> &'static str {
     }
 }
 
+/// Spinner glyph for the current tick.
 fn spinner(app: &App) -> char {
     SPINNER[(app.ticks / 3) as usize % SPINNER.len()]
 }
 
+/// An unstyled line.
 fn plain(text: impl Into<String>) -> Line<'static> {
     Line::from(text.into())
 }
 
+/// A bold line.
 fn bold(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(
         text.into(),
@@ -114,6 +121,7 @@ fn bold(text: impl Into<String>) -> Line<'static> {
     ))
 }
 
+/// Body of the Setup screen: the three fields with the focused one marked.
 fn setup(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         plain("Fill in the run, then press Enter to check the backend."),
@@ -163,6 +171,7 @@ fn setup(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
+/// Body of the Check screen while the capabilities probe runs.
 fn check(app: &App) -> Vec<Line<'static>> {
     let python = app
         .probe
@@ -178,6 +187,7 @@ fn check(app: &App) -> Vec<Line<'static>> {
     ]
 }
 
+/// Body of the Confirm screen: backend provenance and support summary.
 fn confirm(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(caps) = &app.capabilities {
@@ -221,6 +231,8 @@ fn clip(text: &str, width: usize) -> String {
     cut
 }
 
+/// Body of the Running screen: elapsed time, listed events and the
+/// diagnostics tail that fits the area.
 fn running(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     let Some(run) = &app.run else {
         return vec![plain("no run")];
@@ -270,6 +282,7 @@ fn running(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// Body of the Result screen: the report of the final snapshot.
 fn result(app: &App) -> Vec<Line<'static>> {
     let Some(outcome) = &app.outcome else {
         return vec![plain("no result")];
@@ -303,6 +316,7 @@ fn result(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
+/// Body of the Error screen: the problem plus any run diagnostics.
 fn error(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![bold("the run did not produce a result")];
     if let Some(error) = &app.error {
@@ -325,6 +339,7 @@ fn error(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// Footer: the keys of the current screen, then the message or save prompt.
 fn footer_text(app: &App) -> Text<'static> {
     let keys = match app.screen {
         Screen::Setup => "Tab/Shift-Tab field  Enter check  Ctrl-U clear  Esc quit  F1 keys",
@@ -382,6 +397,7 @@ F1 or ?           this list (? is text on Setup)
 Every run sends a fresh request_id; a result is shown only for the current
 request. No percentage is shown: the backend reports state transitions only.";
 
+/// Draw the help overlay centred in `area`.
 fn help(frame: &mut Frame, area: Rect) {
     let width = area.width.saturating_sub(4).clamp(40, 78);
     let height = (HELP.lines().count() as u16 + 2).min(area.height);
@@ -425,10 +441,12 @@ mod tests {
             .collect()
     }
 
+    /// Whether any rendered line contains `needle`.
     fn has(lines: &[String], needle: &str) -> bool {
         lines.iter().any(|l| l.contains(needle))
     }
 
+    /// Feed each key to the reducer in order.
     fn keys(app: &mut App, list: &[Key]) {
         for key in list {
             app.apply(Msg::Key(*key));
