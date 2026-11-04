@@ -1,6 +1,6 @@
 # REV-RS-1: lkpr-rs rejects non-UTF-8 arguments and LKPR_PYTHON as usage errors
 
-Status: fixed and verified (PR pending).
+Status: fixed and verified (PR #86).
 Branch: `fix/rev-rs-1-argv-utf8` from main `7ccaa1d`.
 Source: AUDIT-20261104 finding E-2 (P3, panic exit 101 on non-UTF-8 argv).
 ID note: `RS` is the review-follow-up area for `rust/lkpr-rs` (UI-1, ADR-0004).
