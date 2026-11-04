@@ -56,9 +56,16 @@ def _run(shell, command):
     return buf.getvalue()
 
 
-def test_unchanged_source_plot_and_export_still_work():
-    """Without a source change the cached MSD is plotted and exported as before."""
+def test_unchanged_source_export_still_works():
+    """Without a source change the cached MSD is exported as before.
+
+    The csv and latex exports go through pandas, so without it this skips
+    visibly (REV-TEST-4) instead of failing on the environment; the plot
+    half of the same scenario is a separate test so a missing pandas does
+    not hide it.
+    """
     _util.require_numpy()
+    _util.require(_util.have_module('pandas'), 'pandas not installed (csv export)')
     with tempfile.TemporaryDirectory() as tmp:
         shell, _ = _shell(tmp)
         text = _run(shell, 'export csv msd_Fe')
@@ -67,14 +74,19 @@ def test_unchanged_source_plot_and_export_still_work():
         assert any(n.endswith('.csv') for n in names), (names, text)
         assert 'msd_Fe' in shell.state.cache
         assert abs(float(shell.state.cache['msd_Fe']['msd'][-1]) - 1.0) < 1e-9
-        try:
-            import matplotlib  # noqa: F401
-        except ImportError:
-            _util.skip('matplotlib missing: Agg plot save not exercised')
-            return
+
+
+def test_unchanged_source_plot_still_works():
+    """Without a source change the cached MSD is plotted (Agg) as before."""
+    _util.require_numpy()
+    _util.require(_util.have_module('matplotlib'), 'matplotlib not installed (Agg plot save)')
+    with tempfile.TemporaryDirectory() as tmp:
+        shell, _ = _shell(tmp)
         text = _run(shell, 'plot msd Fe')
         assert shell.last_command_ok is True, text
         assert any(n.endswith('.png') for n in _outputs(tmp)), text
+        assert 'msd_Fe' in shell.state.cache
+        assert abs(float(shell.state.cache['msd_Fe']['msd'][-1]) - 1.0) < 1e-9
 
 
 def test_changed_source_plot_is_rejected_and_writes_nothing():

@@ -23,8 +23,13 @@ FIXTURE = os.path.join(
 
 def have_numpy():
     """Probe the core numeric dependency without turning absence into a test pass."""
+    return have_module('numpy')
+
+
+def have_module(name):
+    """True when the optional dependency `name` imports (for `require`, never a bare return)."""
     try:
-        import numpy  # noqa: F401
+        __import__(name)
         return True
     except ImportError:
         return False

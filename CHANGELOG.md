@@ -12,6 +12,17 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Stale-cache export test skips without pandas (REV-TEST-4)
+
+- `tests/test_stale_cache.py`: the unchanged-source scenario is now two tests.
+  The export half requires pandas through the new `tests/_util.have_module`
+  probe and skips visibly (`pandas not installed (csv export)`) instead of
+  failing on `export csv needs pandas`; the plot half requires matplotlib the
+  same way and no longer sits behind the export half. The behaviour under test
+  is unchanged; every tabular export format (`csv`, `latex`) needs pandas, so
+  there is no pandas-free export to switch to. With both libraries missing the
+  full runner now reports no failure in either backend mode.
+
 ### `lkpr-rs tui`: interactive terminal front end (UI-2)
 
 - New subcommand `lkpr-rs tui [--python PATH] [--log FILE] [--timeout SECONDS]`:
