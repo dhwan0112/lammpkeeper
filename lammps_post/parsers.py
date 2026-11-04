@@ -61,6 +61,10 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
 
     Reads the standard LAMMPS dump format, which consists of repeated
     blocks of the form:
+        ITEM: UNITS          (optional, `dump_modify units yes`: once per file)
+        <unit style>
+        ITEM: TIME           (optional, `dump_modify time yes`: every frame)
+        <elapsed time in the unit style's time unit>
         ITEM: TIMESTEP
         <timestep number>
         ITEM: NUMBER OF ATOMS
@@ -96,11 +100,16 @@ def parse_dump(filepath, max_frames=None, stride=1, columns=None, dtype=np.float
                     Tilted frames require literal Cartesian x, y, z columns.
 
     All frames are held in memory; iterate a DumpReader instead to process
-    one frame at a time.
+    one frame at a time. The unit style of an 'ITEM: UNITS' item is not
+    returned here; it is `DumpReader(filepath).units`.
 
     Returns:
         frames:  list[dict] — One dict per frame with keys:
                    'timestep' (int)     — MD step number
+                   'time'     (float)   — Elapsed MD time of an 'ITEM: TIME'
+                                          item, in the unit style's time unit
+                                          (ps for metal, fs for real); present
+                                          only for frames that carry the item
                    'natoms'   (int)     — Number of atoms in this frame
                     'box'      (ndarray) — Physical bounds, shape (3, 2); in
                                           Box-aware mode, 'cell' and 'tilt'
@@ -279,6 +288,30 @@ def _find_frame_marker(mm, marker, start):
     return -1
 
 
+# Optional header items LAMMPS writes before 'ITEM: TIMESTEP' when
+# `dump_modify units yes` / `time yes` are set (DumpCustom::header_item):
+# 'ITEM: UNITS' + the unit style once per opened file (Dump::openfile resets
+# unit_count, so appended or concatenated output repeats it) and
+# 'ITEM: TIME' + the elapsed time ({:.16} format) before every frame.
+_UNITS_ITEM = 'ITEM: UNITS'
+_TIME_ITEM = 'ITEM: TIME'
+_PREAMBLE_ITEMS = (_UNITS_ITEM, _TIME_ITEM)
+
+
+def _line_before(mm, floor, end):
+    """Return (start, bytes) of the line that ends at offset `end`, or None at `floor`.
+
+    `end` must be a line start (offset 0 or just after b'\\n'); the returned
+    slice includes its terminator. The line is cut at `floor` when no earlier
+    newline lies in [floor, end), so callers pass a line start as the floor.
+    """
+    if end <= floor:
+        return None
+    newline = mm.rfind(b'\n', floor, end - 1)
+    start = floor if newline == -1 else newline + 1
+    return start, mm[start:end]
+
+
 class DumpReader:
     """
     Lazy LAMMPS dump reader: iterating yields one frame dict at a time, so a
@@ -289,7 +322,10 @@ class DumpReader:
     construction and exposed as `raw_columns` (file order, all columns),
     `columns` (kept numeric columns) and `col_idx` (name -> atoms column).
     The first frame's boundary flags are exposed as `boundary` (see
-    parse_boundary_flags; None if the header has none). Header metadata is read
+    parse_boundary_flags; None if the header has none). `units` is the unit
+    style of an optional 'ITEM: UNITS' item (`dump_modify units yes`), else
+    None; a frame written with `dump_modify time yes` ('ITEM: TIME') carries
+    its elapsed time under the frame key 'time'. Header metadata is read
     by the shared Python scanner, independently of the native/NumPy atom-block
     backend. LazyFrames exposes the same metadata through its `reader`.
     The read-only `type_ids` property snapshots raw numeric types observed while
@@ -399,16 +435,110 @@ class DumpReader:
         # The first frame's 'ITEM: BOX BOUNDS' line also gives the boundary
         # flags; LAMMPS does not change them during a run.
         self.boundary = None
+        self.units = None
         # UTF-8 whatever the locale: read_frame decodes the same bytes as UTF-8,
         # and a C locale must not turn one path's row report into UnicodeDecodeError.
         with open(self.filepath, 'r', encoding='utf-8') as f:
             for line in f:
-                if line.strip() == 'ITEM: TIMESTEP':
-                    _, _, _, header, _ = self._read_header(f, first=True)
-                    return header
-                if line.strip():
-                    raise ValueError(f"{self.filepath}: invalid dump header: {line.strip()}")
+                if not line.strip():
+                    continue
+                _, key = self._read_preamble(f, line, 0)
+                if key != 'ITEM: TIMESTEP':
+                    raise ValueError(f"{self.filepath}: invalid dump header: {key or 'end of file'}")
+                _, _, _, header, _ = self._read_header(f, first=True)
+                return header
         return []
+
+    def _read_preamble(self, stream, line, frame):
+        """Consume optional UNITS/TIME items; return (time, next stripped line).
+
+        `line` is the first non-blank line of a frame header (text or bytes).
+        Reading stops at the first line that is not one of the optional items
+        (blank lines between items are skipped as between frames); the caller
+        then requires that line to be 'ITEM: TIMESTEP'. `frame` is the 0-based
+        ordinal for messages. The unit style is checked against the file's
+        first declaration; the time is returned as a float, or None.
+        """
+        def text(value):
+            """Strip one line read from a text or binary stream."""
+            return value.decode().strip() if isinstance(value, bytes) else value.strip()
+
+        time = None
+        seen = set()
+        while True:
+            key = text(line)
+            if key not in _PREAMBLE_ITEMS:
+                return time, key
+            if key in seen:
+                raise ValueError(f"{self.filepath}: duplicate {key} item before frame {frame}")
+            seen.add(key)
+            value = text(stream.readline())
+            if key == _UNITS_ITEM:
+                self._accept_units(value, frame)
+            else:
+                time = self._parse_time(value, frame)
+            line = stream.readline()
+            while line and not line.strip():
+                line = stream.readline()
+
+    def _preamble_before(self, mm, floor, pos, frame):
+        """Parse the optional UNITS/TIME items that end at marker offset `pos`.
+
+        Walks back over key/value line pairs, skipping blank lines between
+        them as the streaming path does, never before `floor` (the current atom
+        block's start, or 0). Returns (offset where the items start, time or
+        None); `pos` itself when there are none. A repeated item raises as a
+        duplicate, and the unit style is checked as in the streaming path.
+        """
+        end = pos
+        time = None
+        seen = set()
+        while True:
+            probe = end
+            while True:                         # blank lines between items
+                line = _line_before(mm, floor, probe)
+                if line is None or line[1].strip():
+                    break
+                probe = line[0]
+            value = _line_before(mm, floor, probe)
+            key = None if value is None else _line_before(mm, floor, value[0])
+            if key is None:
+                break
+            name = key[1].decode().strip()
+            if name not in _PREAMBLE_ITEMS:
+                break
+            if name in seen:
+                raise ValueError(f"{self.filepath}: duplicate {name} item before frame {frame}")
+            seen.add(name)
+            if name == _UNITS_ITEM:
+                self._accept_units(value[1].decode().strip(), frame)
+            else:
+                time = self._parse_time(value[1].decode().strip(), frame)
+            end = key[0]
+        return end, time
+
+    def _accept_units(self, value, frame):
+        """Record the first 'ITEM: UNITS' style; every later item must repeat it."""
+        if not value or len(value.split()) != 1:
+            raise ValueError(f"{self.filepath}: invalid ITEM: UNITS value {value!r} before frame {frame}")
+        if self.units is None:
+            if frame:
+                raise ValueError(f"{self.filepath}: ITEM: UNITS {value!r} declared before frame {frame} "
+                                 "but not before the first frame")
+            self.units = value
+        elif value != self.units:
+            raise ValueError(f"{self.filepath}: ITEM: UNITS changes before frame {frame}: "
+                             f"{value!r} != {self.units!r}")
+
+    def _parse_time(self, value, frame):
+        """Return the finite float of an 'ITEM: TIME' value line."""
+        try:
+            time = float(value)
+        except ValueError:
+            time = math.nan
+        if not math.isfinite(time):
+            raise ValueError(f"{self.filepath}: invalid ITEM: TIME value {value!r} before frame {frame}")
+        return time
 
     # Stat identity includes replacement, size and nanosecond modification/change
     # metadata. This is a mutation guard, not a content hash or a file lock.
@@ -525,8 +655,9 @@ class DumpReader:
 
         The search for each next 'ITEM: TIMESTEP' runs inside mmap.find (C
         speed), so indexing costs about one sequential read of the file.
-        Returns a DumpIndex with per-frame timestep, natoms, box and the byte
-        span of the atom block, which read_frame() uses for random access.
+        Returns a DumpIndex with per-frame timestep, natoms, box, elapsed time
+        ('ITEM: TIME', NaN when absent) and the byte span of the atom block,
+        which read_frame() uses for random access.
         The index is bound to this unchanged source and header interpretation;
         compatible readers may share it despite different projections/dtypes.
         """
@@ -546,6 +677,8 @@ class DumpReader:
             size = mm.size()
             released = 0
             pos = _find_frame_marker(mm, marker, 0)
+            time = None if pos == -1 else self._preamble_before(mm, 0, pos, 0)[1]
+            k = 0
             while pos != -1:
                 # Scanned pages count toward RSS until dropped; release them in
                 # page-aligned steps so indexing a multi-GB dump stays small.
@@ -558,7 +691,19 @@ class DumpReader:
                 timestep, natoms, box, _, cell = self._read_header(mm)
                 start = mm.tell()
                 pos = _find_frame_marker(mm, marker, start)
-                idx.add(timestep, natoms, box, start, size if pos == -1 else pos, cell=cell)
+                # The next frame's optional UNITS/TIME items precede its marker,
+                # so this frame's atom block ends where they begin.
+                if pos == -1:
+                    # Items after the last frame would fail the stream path.
+                    tail, _ = self._preamble_before(mm, start, size, k + 1)
+                    if tail != size:
+                        raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: "
+                                         "end of file")
+                end, next_time = ((size, None) if pos == -1
+                                  else self._preamble_before(mm, start, pos, k + 1))
+                idx.add(timestep, natoms, box, start, end, cell=cell, time=time)
+                time = next_time
+                k += 1
         self._check_source()
         return idx.finalize()
 
@@ -594,6 +739,9 @@ class DumpReader:
             'atoms': atoms,
             'elements': elements,
         }
+        time = float(index.times[k])
+        if not math.isnan(time):
+            frame['time'] = time
         if self.box_model:
             frame['cell'] = cell
             frame['tilt'] = cell.tilt
@@ -640,8 +788,10 @@ class DumpReader:
                         return
                     if not line.strip():
                         continue
-                    if line.strip() != 'ITEM: TIMESTEP':
-                        raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: {line.strip()}")
+                    time, key = self._read_preamble(f, line, n_seen)
+                    if key != 'ITEM: TIMESTEP':
+                        raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: "
+                                         f"{key or 'end of file'}")
                     timestep, natoms, box, _, cell = self._read_header(f)
 
                     n_seen += 1
@@ -670,6 +820,8 @@ class DumpReader:
                     'atoms': atoms,
                     'elements': elements,
                 }
+                if time is not None:
+                    frame['time'] = time
                 if self.box_model:
                     frame['cell'] = cell
                     frame['tilt'] = cell.tilt
@@ -790,7 +942,8 @@ class DumpReader:
 class DumpIndex:
     """Per-frame metadata bound to the source/header contract of DumpReader.index().
 
-    Arrays have length n_frames. A manually built index is unbound by default
+    Arrays have length n_frames; `times` holds the 'ITEM: TIME' value of each
+    frame and NaN for frames without one. A manually built index is unbound by default
     and cannot be read through DumpReader.read_frame; use reader.index() for
     validated source provenance. Reader compatibility excludes atom projections,
     dtypes, parsing backends and frame-selection limits.
@@ -804,9 +957,9 @@ class DumpIndex:
         self._header_contract = header_contract
 
     # Append one frame's metadata and half-open atom-payload byte interval.
-    def add(self, timestep, natoms, box, block_start, block_end, *, cell=None):
+    def add(self, timestep, natoms, box, block_start, block_end, *, cell=None, time=None):
         """Append source metadata and the half-open byte span of one atom block."""
-        self._rows.append((timestep, natoms, box, block_start, block_end, cell))
+        self._rows.append((timestep, natoms, box, block_start, block_end, cell, time))
 
     # Seal the builder once, releasing row tuples; consumers treat the public
     # arrays as read-only even though NumPy write protection is not enforced.
@@ -820,6 +973,7 @@ class DumpIndex:
         self.block_end = np.array([r[4] for r in rows], dtype=np.int64)
         # Retain the authoritative cell, never reconstruct it from bare bounds.
         self.cells = tuple(r[5] for r in rows) if rows and rows[0][5] is not None else None
+        self.times = np.array([np.nan if r[6] is None else r[6] for r in rows], dtype=np.float64)
         del self._rows
         return self
 
@@ -1011,6 +1165,11 @@ class LazyFrames(Sequence):
     def boxes(self):
         """(n_frames, 3, 2) box bounds, from the index (no atom parsing)."""
         return self._store.index.boxes[list(self._positions)]
+
+    @property
+    def times(self):
+        """Elapsed MD time per selected frame from 'ITEM: TIME' (NaN where absent)."""
+        return self._store.index.times[list(self._positions)]
 
     @property
     def estimated_bytes(self):

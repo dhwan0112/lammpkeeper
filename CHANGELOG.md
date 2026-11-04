@@ -12,6 +12,12 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Dumps with `ITEM: UNITS` / `ITEM: TIME` load (REV-IO-11)
+
+- `DumpReader` accepts the optional header items LAMMPS writes with `dump_modify units yes` / `time yes` instead of failing with `invalid dump header`, on the streaming, indexed and lazy paths alike. `reader.units` holds the unit style; frames that carry `ITEM: TIME` get a `time` key, other frames keep the old keys; `DumpIndex.times` and `LazyFrames.times` give the per-frame time (NaN where absent).
+- A unit style that changes or first appears after the first frame, a duplicate item and a non-finite time raise `ValueError`.
+- In a session the dump's unit style is explicit evidence: it replaces guessed units, explicit input units that differ make the load fail and roll back, an explicit input timestep becomes an explicit dt, and a guessed dt is dropped when the dump's units contradict the heuristic's guess. The load summary shows the units status. Tests: `tests/test_dump_units_time.py`.
+
 ### Comment and roadmap audit (AUDIT-20261104-DOCS)
 
 - Documentation only, no behaviour change: docstrings and comments in `lammps_post/` that no longer described the code were corrected (CLI modes and preload order, `parse_cif`/`parse_input`/`_lattice_image_offsets` error contracts, result keys of the density profile and penetration analyses, `ff_info` fields, `plot`/`analyze` type lists and prompting rules, plot panel descriptions). The 33 undocumented test helpers and the 51 Rust `fn`s added since the 2026-11-01 audit (`lkpr-rs tui`, `main.rs` report) have English docstrings/comments; scans: 119 Python files, 0 missing; 197 Rust `fn`s, 0 missing (`docs/agent/COMMENT_COVERAGE.md`).
