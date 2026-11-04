@@ -141,32 +141,43 @@ ANALYSIS_COLUMNS = ('id', 'type', 'element', 'x', 'y', 'z', 'q')
 _INDEX_RELEASE_BYTES = 32 * 1024 ** 2
 
 
-# One boundary token per axis in 'ITEM: BOX BOUNDS': a lo-face and a hi-face letter.
-# Atom-row separators both backends tokenize identically (REV-IO-10). The
-# native parser splits on ASCII whitespace; `str.split()` and `np.loadtxt`
-# split on Unicode whitespace, which also covers VT, FS-US, NBSP and the
-# Unicode spaces. A row using one of those passed the shared width check and
-# parsed differently per backend, so it is rejected before either backend runs.
-# LAMMPS itself writes single spaces only.
+# Whitespace the atom-row pre-check lets through (REV-IO-10): space and tab
+# separate columns; LF, CR and FF are the line breaks `str.splitlines` and the
+# row-count check handle. The native parser splits rows on exactly these five
+# ASCII characters, while `str.split()` and `np.loadtxt` split on Unicode
+# whitespace, which also covers VT, FS-US, NBSP and the Unicode spaces. A row
+# using one of those passed the shared width check and parsed differently per
+# backend, so it is rejected before either backend runs. LAMMPS itself writes
+# single spaces only.
 _SEPARATORS = ' \t\n\r\x0c'
-_ODD_ASCII_SPACE = '\x0b\x1c\x1d\x1e\x1f'
-_FOREIGN_SPACE = re.compile(r'[^\S \t\n\r\x0c]')
+# `str.isspace` characters below U+0080 outside _SEPARATORS (VT, FS, GS, RS,
+# US): the all-ASCII fast path tests for these by substring; the regex matches
+# any `str.isspace` character outside _SEPARATORS on suspect blocks.
+_ODD_ASCII_SPACE = ''.join(chr(c) for c in range(128)
+                           if chr(c).isspace() and chr(c) not in _SEPARATORS)
+_FOREIGN_SPACE = re.compile('[^\\S%s]' % re.escape(_SEPARATORS))
 
 
 def _foreign_separator(text):
     """Return (row_number, char) of the first whitespace outside _SEPARATORS, else None.
 
-    `str.isascii` and substring tests keep the common all-ASCII block on fast
-    C paths; the regex (its whitespace class is `str.isspace`) runs only on suspects.
+    Rows are numbered on `str.splitlines` boundaries, as the width check counts
+    them, so CR and CRLF line ends number like LF. `str.isascii` and substring
+    tests keep the common all-ASCII block on fast C paths; the regex runs only
+    on suspects.
     """
     if text.isascii() and not any(ch in text for ch in _ODD_ASCII_SPACE):
         return None
     match = _FOREIGN_SPACE.search(text)
     if match is None:
         return None
-    return text.count('\n', 0, match.start()) + 1, match.group()
+    # The sentinel makes the count the line holding the match whether or not
+    # the prefix ends in a line break ('a\n' + '.' is two lines, 'a' + '.' one).
+    row = len((text[:match.start()] + '.').splitlines())
+    return row, match.group()
 
 
+# One boundary token per axis in 'ITEM: BOX BOUNDS': a lo-face and a hi-face letter.
 _BOUNDARY_TOKEN = re.compile(r'^[pfsm]{2}$')
 # One word of an input-script 'boundary' command: one letter (both faces) or two.
 _INPUT_BOUNDARY_WORD = re.compile(r'^[pfsm]{1,2}$')
@@ -383,7 +394,9 @@ class DumpReader:
         # The first frame's 'ITEM: BOX BOUNDS' line also gives the boundary
         # flags; LAMMPS does not change them during a run.
         self.boundary = None
-        with open(self.filepath, 'r') as f:
+        # UTF-8 whatever the locale: read_frame decodes the same bytes as UTF-8,
+        # and a C locale must not turn one path's row report into UnicodeDecodeError.
+        with open(self.filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip() == 'ITEM: TIMESTEP':
                     _, _, _, header, _ = self._read_header(f, first=True)
@@ -611,7 +624,7 @@ class DumpReader:
         self._check_source()
         n_seen = 0
         n_yielded = 0
-        with open(self.filepath, 'r') as f:
+        with open(self.filepath, 'r', encoding='utf-8') as f:  # UTF-8 as _read_layout
             while True:
                 try:
                     line = f.readline()
@@ -671,8 +684,8 @@ class DumpReader:
         if foreign is not None:
             number, char = foreign
             raise ValueError(f"{self.filepath}: malformed atom block at step {timestep}: "
-                             f"row {number} contains U+{ord(char):04X} as a separator; only "
-                             f"space, tab, CR, LF and FF separate dump columns")
+                             f"row {number} contains U+{ord(char):04X} as a separator; dump "
+                             f"columns are separated by spaces or tabs only")
         lines = text.splitlines()
         if len(lines) != natoms or any(not row.strip() for row in lines):
             raise ValueError(f"{self.filepath}: frame at step {timestep} has invalid atom lines, "

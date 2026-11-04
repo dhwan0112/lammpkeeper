@@ -110,3 +110,23 @@ def canon(o):
 def section_hash(obj):
     """Fingerprint canonical JSON for change detection, not a correctness oracle."""
     return hashlib.sha256(json.dumps(canon(obj), sort_keys=True).encode()).hexdigest()[:16]
+
+
+def dump_backends():
+    """Yield (name, force_numpy) per dump backend loaded here: NumPy, then native.
+
+    `force_numpy` tells a test to detach the native parser (`reader._native =
+    None`). A test that needs native must `require(parsers._native is not None,
+    ...)` itself so its absence is a named SKIP, not a pass over NumPy alone.
+    """
+    from lammps_post import parsers
+    yield 'numpy', True
+    if parsers._native is not None:
+        yield 'native', False
+
+
+def dump_frame(rows, columns, step=0, bounds='pp pp ff'):
+    """Serialize one dump frame (10 Å cube) with the given atom rows and column names."""
+    return '\n'.join(['ITEM: TIMESTEP', str(step), 'ITEM: NUMBER OF ATOMS', str(len(rows)),
+                      'ITEM: BOX BOUNDS ' + bounds, '0 10', '0 10', '0 10',
+                      'ITEM: ATOMS ' + columns, *rows]) + '\n'
