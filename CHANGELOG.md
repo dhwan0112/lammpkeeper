@@ -12,6 +12,21 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Reference RDFs enumerate every periodic image inside the cutoff (REV-REF-2)
+
+- `compute_reference_rdf` no longer builds a fixed 4×4×4 supercell and applies
+  a componentwise minimum-image convention; it pairs each site of the unit cell
+  with every lattice image of each partner site closer than `r_max`, with the
+  image box derived exactly from the cell's perpendicular widths. Shells near
+  the cutoff are now complete for any cutoff and any cell shape (including
+  hexagonal and triclinic cells): alpha-Fe Fe-Fe at 2a = 5.733 Å reports 6
+  neighbours instead of 3.
+- The `supercell` parameter is removed. A singular or non-finite cell and a
+  non-positive `r_max` raise `ValueError` instead of producing a wrong curve.
+- `tests/test_reference_images.py` checks every built-in phase and pair per bin
+  against an independent brute-force image enumeration, plus bcc and simple
+  cubic shell tables and an oblique cell.
+
 ### CIF symmetry operators are validated by a complete grammar (REV-REF-3)
 
 - `_apply_symop` summed whatever tokens it recognized and ignored the rest:

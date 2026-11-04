@@ -720,37 +720,63 @@ def parse_cif(source):
 # Reference RDF Computation
 # ═══════════════════════════════════════════════════════════════
 
-def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
-                          n_bins=200, supercell=(4, 4, 4)):
+def _lattice_image_offsets(cell, r_max):
+    """Integer lattice translations that can bring a site pair within r_max.
+
+    The displacement between two sites is ``(f + n) @ cell`` with the
+    fractional difference ``f`` wrapped to [-0.5, 0.5] and ``n`` an integer
+    vector. Its component along the normal of the plane spanned by the other
+    two lattice vectors is ``(f_i + n_i) * w_i``, where ``w_i = V / |a_j x a_k|``
+    is the perpendicular width of the cell along lattice direction i. A
+    distance below r_max therefore needs ``|n_i| < r_max / w_i + 1/2`` on every
+    axis, so the box ``|n_i| <= ceil(r_max / w_i + 1/2)`` contains every image
+    that can contribute, for any cell shape. Raises ValueError for a singular
+    cell, whose widths are undefined.
+    """
+    cell = np.asarray(cell, dtype=float)
+    if cell.shape != (3, 3) or not np.all(np.isfinite(cell)):
+        raise ValueError('reference cell must be a finite 3x3 matrix of lattice-vector rows')
+    volume = abs(float(np.linalg.det(cell)))
+    if volume <= 0.0:
+        raise ValueError('reference cell is singular (zero volume); periodic images cannot be enumerated')
+    if not np.isfinite(r_max) or r_max <= 0.0:
+        raise ValueError(f'r_max must be a positive distance, got {r_max!r}')
+    widths = np.array([volume / np.linalg.norm(np.cross(cell[(i + 1) % 3], cell[(i + 2) % 3]))
+                       for i in range(3)])
+    bounds = np.ceil(r_max / widths + 0.5).astype(int)
+    grids = np.meshgrid(*[np.arange(-m, m + 1) for m in bounds], indexing='ij')
+    return np.stack([g.ravel() for g in grids], axis=1)
+
+
+def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0, n_bins=200):
     """
     Compute the ideal g(r) from a crystal structure.
 
-    Replicate row-vector unit cells, histogram directed element-A to element-B
-    distances and normalize by N_A times spherical-shell volume times N_B/V.
-    Thus identical-element pairs retain both directions; separations <= 0.01 Å
-    (including self pairs) and >= r_max are excluded. The ideal static lattice
-    has sharp bin-dependent peaks, not a thermally broadened experimental RDF.
+    Every element-A site of the unit cell is paired with every periodic image
+    of every element-B site closer than r_max. The images are enumerated
+    exactly from the cell's perpendicular widths (``_lattice_image_offsets``),
+    so every neighbour shell inside the cutoff is complete for any cutoff and
+    any cell shape, including hexagonal and triclinic cells. No supercell,
+    minimum-image convention or half-cell restriction is involved, and the
+    unit cell is used as is: a cutoff larger than the cell simply enumerates
+    more images. A singular cell raises ValueError.
 
-    Periodicity is applied in all three dimensions by rounding fractional
-    displacements in the supercell basis. This is componentwise fractional
-    wrapping, not a general closest-lattice-vector search for arbitrarily skew
-    cells. Supply a suitable cell/supercell and cutoff so intended neighbor
-    shells are represented without missing repeated images. No finite-boundary
-    shell correction, automatic replication-size choice or input validation
-    of these geometric assumptions is performed.
-    Even the default fourfold alpha-Fe supercell has half-side 5.733 Å, below
-    the default 6 Å cutoff; its outer shells therefore lack a complete image
-    population. All pairs use N_B/V, not (N_B-1)/V for identical elements.
+    Directed element-A to element-B distances are histogrammed and normalized
+    by N_A times spherical-shell volume times N_B/V. Thus identical-element
+    pairs retain both directions; separations <= 0.01 Å (including self pairs)
+    and >= r_max are excluded. The ideal static lattice has sharp bin-dependent
+    peaks, not a thermally broadened experimental RDF. All pairs use N_B/V,
+    not (N_B-1)/V for identical elements.
 
     Args:
         phase_or_crystal: str (key in CRYSTAL_DB) or dict (from parse_cif)
         pair:      tuple — (element_a, element_b) for the RDF pair
         r_max:     float — Maximum radial distance (Å)
         n_bins:    int — Number of histogram bins
-        supercell: tuple — (nx, ny, nz) supercell dimensions
 
     Returns:
-        dict: {'r', 'g', 'label', 'phase'} or None if failed
+        dict: {'r', 'g', 'label', 'phase'} or None if the phase is unknown or
+        either element of the pair is absent
     """
     if isinstance(phase_or_crystal, str):
         if phase_or_crystal not in CRYSTAL_DB:
@@ -763,59 +789,30 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
     else:
         return None
 
-    cell = np.array(crystal['cell'])
+    cell = np.asarray(crystal['cell'], dtype=float)
     atoms_list = crystal['atoms']
+    elements = np.array([elem for elem, _ in atoms_list], dtype=object)
+    frac_all = np.array([frac for _, frac in atoms_list], dtype=float).reshape(-1, 3)
 
-    nx, ny, nz = supercell
-    supercell_matrix = cell * np.array([[nx], [ny], [nz]])
-
-    # Scale each lattice-vector row independently. Dividing translated unit-cell
-    # fractions by replication counts expresses positions in that larger basis.
-    # Build supercell positions
-    all_positions = []
-    all_elements = []
-
-    for ix in range(nx):
-        for iy in range(ny):
-            for iz in range(nz):
-                for elem, frac in atoms_list:
-                    frac = np.array(frac, dtype=float)
-                    # Shift to supercell image
-                    shifted = (frac + np.array([ix, iy, iz])) / np.array([nx, ny, nz])
-                    # Fractional -> Cartesian in supercell
-                    cart = shifted @ supercell_matrix
-                    all_positions.append(cart)
-                    all_elements.append(elem)
-
-    all_positions = np.array(all_positions)
-    all_elements = np.array(all_elements)
-
-    vol = abs(np.linalg.det(supercell_matrix))
-    inv_cell = np.linalg.inv(supercell_matrix)
-
-    # Select atom types
     elem_a, elem_b = pair
-    mask_a = all_elements == elem_a
-    mask_b = all_elements == elem_b
-    pos_a = all_positions[mask_a]
-    pos_b = all_positions[mask_b]
-
-    if len(pos_a) == 0 or len(pos_b) == 0:
+    frac_a = frac_all[elements == elem_a]
+    frac_b = frac_all[elements == elem_b]
+    if len(frac_a) == 0 or len(frac_b) == 0:
         return None
 
-    # Compute pairwise distances with minimum image convention
-    # Work in the lattice basis so the reference does not discard hexagonal or
-    # other oblique cell angles. Componentwise wrapping has the skew-cell
-    # limitation documented above; it is not a universal triclinic MIC solver.
+    offsets = _lattice_image_offsets(cell, r_max)
+    vol = abs(float(np.linalg.det(cell)))
+
     dr = r_max / n_bins
     hist = np.zeros(n_bins)
 
-    for p in pos_a:
-        d = pos_b - p
-        frac_d = d @ inv_cell
+    for fa in frac_a:
+        # Wrap the fractional difference to [-0.5, 0.5]; the enumerated
+        # integer offsets then cover every image inside the cutoff.
+        frac_d = frac_b - fa
         frac_d -= np.round(frac_d)
-        d = frac_d @ supercell_matrix
-        r = np.linalg.norm(d, axis=1)
+        d = (frac_d[:, None, :] + offsets[None, :, :]) @ cell
+        r = np.linalg.norm(d, axis=2).ravel()
         valid = (r > 0.01) & (r < r_max)
         bi = (r[valid] / dr).astype(int)
         bi = bi[bi < n_bins]
@@ -825,8 +822,8 @@ def compute_reference_rdf(phase_or_crystal, pair=('Fe', 'O'), r_max=6.0,
     bins_edge = np.linspace(0, r_max, n_bins + 1)
     r_centers = (bins_edge[:-1] + bins_edge[1:]) / 2
     shell_vol = (4 / 3) * np.pi * (bins_edge[1:] ** 3 - bins_edge[:-1] ** 3)
-    rho_b = len(pos_b) / vol
-    g = hist / (len(pos_a) * shell_vol * rho_b)
+    rho_b = len(frac_b) / vol
+    g = hist / (len(frac_a) * shell_vol * rho_b)
 
     return {
         'r': r_centers,
