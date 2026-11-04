@@ -517,6 +517,27 @@ class DumpReader:
             end = key[0]
         return end, time
 
+    def _check_step_order(self, previous, timestep, frame):
+        """Warn once per pass when a frame's timestep does not increase; return the new state.
+
+        `previous` is None before the first frame, the last timestep while the
+        order holds, and False after the warning (so it is issued once). Time
+        axes are built from step numbers, so a repeated or decreasing step
+        (concatenated or restarted dumps) would make them repeat or run
+        backwards; frames are kept in file order and not dropped.
+        """
+        if previous is False:
+            return False
+        if previous is not None and timestep <= previous:
+            warnings.warn(f"{self.filepath}: dump timesteps are not strictly increasing: "
+                          f"step {timestep} follows step {previous} (frame {frame}); "
+                          "time axes built from step numbers will repeat or run backwards. "
+                          "Remove duplicated or overlapping frames (e.g. from restarts) "
+                          "before time-dependent analyses",
+                          RuntimeWarning, stacklevel=3)
+            return False
+        return timestep
+
     def _accept_units(self, value, frame):
         """Record the first 'ITEM: UNITS' style; every later item must repeat it."""
         if not value or len(value.split()) != 1:
@@ -679,6 +700,7 @@ class DumpReader:
             pos = _find_frame_marker(mm, marker, 0)
             time = None if pos == -1 else self._preamble_before(mm, 0, pos, 0)[1]
             k = 0
+            previous = None
             while pos != -1:
                 # Scanned pages count toward RSS until dropped; release them in
                 # page-aligned steps so indexing a multi-GB dump stays small.
@@ -689,6 +711,7 @@ class DumpReader:
                 mm.seek(pos)
                 mm.readline()                   # ITEM: TIMESTEP
                 timestep, natoms, box, _, cell = self._read_header(mm)
+                previous = self._check_step_order(previous, timestep, k)
                 start = mm.tell()
                 pos = _find_frame_marker(mm, marker, start)
                 # The next frame's optional UNITS/TIME items precede its marker,
@@ -777,6 +800,7 @@ class DumpReader:
         self._check_source()
         n_seen = 0
         n_yielded = 0
+        previous = None                 # timestep order check (every frame, stride or not)
         with open(self.filepath, 'r', encoding='utf-8') as f:  # UTF-8 as _read_layout
             while True:
                 try:
@@ -793,6 +817,7 @@ class DumpReader:
                         raise ValueError(f"{self.filepath}: unexpected atom lines or frame header: "
                                          f"{key or 'end of file'}")
                     timestep, natoms, box, _, cell = self._read_header(f)
+                    previous = self._check_step_order(previous, timestep, n_seen)
 
                     n_seen += 1
                     if (n_seen - 1) % self.stride:

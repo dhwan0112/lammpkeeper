@@ -12,6 +12,10 @@ Changes since the last tagged state, grouped by migration stage
 REL-0 tagged the historical thesis baseline `cdf5c38` as `v1.2.0-thesis`
 on 2026-10-26; that tag predates the unreleased fixes below.
 
+### Non-increasing dump timesteps warn (REV-IO-12)
+
+- Loading a dump whose timesteps repeat or go backwards (restart overlap, concatenated runs) issues one `RuntimeWarning` per pass naming the first offending step, on the streaming and indexed paths and in `load dump`. Frames keep file order. Before, such dumps loaded silently and time axes repeated or ran backwards. Tests: `tests/test_dump_step_order.py`.
+
 ### Dumps with `ITEM: UNITS` / `ITEM: TIME` load (REV-IO-11)
 
 - `DumpReader` accepts the optional header items LAMMPS writes with `dump_modify units yes` / `time yes` instead of failing with `invalid dump header`, on the streaming, indexed and lazy paths alike. `reader.units` holds the unit style; frames that carry `ITEM: TIME` get a `time` key, other frames keep the old keys; `DumpIndex.times` and `LazyFrames.times` give the per-frame time (NaN where absent).
