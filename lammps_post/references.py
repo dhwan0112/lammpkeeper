@@ -97,69 +97,84 @@ def _frac_to_cart(frac_coords, cell):
     return frac_coords @ cell
 
 
+_SYMOP_TERM = re.compile(r'([+-]?)(?:(\d+)\*?)?([xyz])|([+-]?)(\d+/\d+|\d*\.\d+|\d+\.?\d*)')
+
+
+def _parse_symop(symop_str):
+    """
+    Parse one CIF xyz symmetry operator into (rotation, translation).
+
+    The grammar is the conventional one: exactly three comma-separated
+    components; each component is a sum of terms where a term is a signed
+    coordinate (``x``, ``-y``, ``+z``, optionally with an integer coefficient
+    such as ``2*x``) or a signed numeric translation (``1/2``, ``0.5``,
+    ``.25``, ``1``). Case and whitespace are ignored; every term after the
+    first must carry its own sign, and nothing else may appear. The rotation
+    part must be unimodular (determinant +1 or -1), which every space-group
+    operation is in lattice coordinates; a singular or scaled operator is not
+    a symmetry operation and is rejected rather than applied.
+
+    Raises ValueError naming the operator, the component and the offending
+    text for anything outside that grammar. No eval is involved.
+    """
+    if not isinstance(symop_str, str):
+        raise ValueError(f'symmetry operation must be a string, got {type(symop_str).__name__}')
+    components = symop_str.lower().split(',')
+    if len(components) != 3:
+        raise ValueError(f'symmetry operation {symop_str!r} has {len(components)} comma-separated '
+                         f'component(s); exactly three (x, y, z) are required')
+    rotation = np.zeros((3, 3))
+    translation = np.zeros(3)
+    for i, component in enumerate(components):
+        expr = re.sub(r'\s+', '', component)
+        if not expr:
+            raise ValueError(f'symmetry operation {symop_str!r}: component {i + 1} is empty')
+        pos = 0
+        while pos < len(expr):
+            m = _SYMOP_TERM.match(expr, pos)
+            if m is None:
+                raise ValueError(f'symmetry operation {symop_str!r}: component {i + 1} '
+                                 f'({component.strip()!r}) has unrecognized text {expr[pos:]!r}; '
+                                 f'only signed x/y/z terms and numeric or fractional '
+                                 f'translations are supported')
+            sign, coeff, axis, const_sign, const = m.groups()
+            if pos > 0 and not (sign or const_sign):
+                raise ValueError(f'symmetry operation {symop_str!r}: component {i + 1} '
+                                 f'({component.strip()!r}) has term {m.group(0)!r} without an '
+                                 f'explicit sign after {expr[:pos]!r}')
+            if axis:
+                value = float(coeff) if coeff else 1.0
+                rotation[i, 'xyz'.index(axis)] += -value if sign == '-' else value
+            else:
+                if '/' in const:
+                    num, den = const.split('/')
+                    if int(den) == 0:
+                        raise ValueError(f'symmetry operation {symop_str!r}: component {i + 1} '
+                                         f'has translation {const!r} with a zero denominator')
+                    value = int(num) / int(den)
+                else:
+                    value = float(const)
+                translation[i] += -value if const_sign == '-' else value
+            pos = m.end()
+    det = float(np.linalg.det(rotation))
+    if abs(abs(det) - 1.0) > 1e-9:
+        raise ValueError(f'symmetry operation {symop_str!r} has rotation determinant {det:g}; '
+                         f'a space-group operation must be unimodular (determinant +1 or -1)')
+    return rotation, translation
+
+
 def _apply_symop(symop_str, frac):
     """
     Apply a symmetry operation string (e.g., '-x, y+1/2, -z+1/2') to
-    fractional coordinates. Returns new fractional position.
+    fractional coordinates. Returns the new fractional position, which may lie
+    outside the unit cell; wrapping and duplicate handling belong to
+    _expand_symmetry.
 
-    Recognize signed coordinate terms and numeric/fractional translations
-    through tokenization, not eval. This handles the conventional simple xyz
-    expressions used by the built-ins, but is not an arbitrary expression
-    parser or syntax validator. Wrapping and duplicate handling belong to
-    _expand_symmetry, so the result here may lie outside the unit cell.
-    Unrecognized characters/terms are not rejected, and exactly three comma
-    components are assumed rather than checked: input needs external validation.
+    The operator is parsed by _parse_symop, so a malformed or non-unimodular
+    operator raises ValueError instead of silently contributing zero.
     """
-    result = np.zeros(3)
-    parts = [s.strip() for s in symop_str.split(',')]
-
-    for i, part in enumerate(parts):
-        val = 0.0
-        # Parse each term in the expression
-        part = part.replace(' ', '')
-        # Handle fractions like 1/2, 1/4, 3/4
-        tokens = re.findall(r'[+-]?(?:\d+/\d+|[xyz]|\d+\.?\d*)', part)
-
-        for token in tokens:
-            if 'x' in token:
-                coeff = token.replace('x', '')
-                if coeff in ('', '+'):
-                    coeff = 1.0
-                elif coeff == '-':
-                    coeff = -1.0
-                else:
-                    coeff = float(coeff)
-                val += coeff * frac[0]
-            elif 'y' in token:
-                coeff = token.replace('y', '')
-                if coeff in ('', '+'):
-                    coeff = 1.0
-                elif coeff == '-':
-                    coeff = -1.0
-                else:
-                    coeff = float(coeff)
-                val += coeff * frac[1]
-            elif 'z' in token:
-                coeff = token.replace('z', '')
-                if coeff in ('', '+'):
-                    coeff = 1.0
-                elif coeff == '-':
-                    coeff = -1.0
-                else:
-                    coeff = float(coeff)
-                val += coeff * frac[2]
-            elif '/' in token:
-                num, den = token.split('/')
-                val += float(num) / float(den)
-            elif token:
-                try:
-                    val += float(token)
-                except ValueError:
-                    pass
-
-        result[i] = val
-
-    return result
+    rotation, translation = _parse_symop(symop_str)
+    return rotation @ np.asarray(frac, dtype=float) + translation
 
 
 def _expand_symmetry(asym_atoms, symops):
@@ -177,12 +192,16 @@ def _expand_symmetry(asym_atoms, symops):
     have distinct keys across the periodic seam, while nearby interior sites
     may collapse into one key. Neither behavior measures site separation in Å.
     """
+    # Parse every operator before generating any site, so a malformed
+    # operation rejects the whole expansion instead of a partial cell.
+    parsed = [_parse_symop(op) for op in symops]
     all_atoms = []
     seen = set()
 
     for elem, frac in asym_atoms:
-        for op in symops:
-            new_frac = _apply_symop(op, np.array(frac, dtype=float))
+        frac = np.asarray(frac, dtype=float)
+        for rotation, translation in parsed:
+            new_frac = rotation @ frac + translation
             # Wrap to [0, 1)
             new_frac = new_frac % 1.0
             # Round for duplicate detection
@@ -421,6 +440,15 @@ def _validate_cif_site_constraints(fields, col_map, context):
                              'nominal occupancy 1 is supported; no partial/unknown-site weighting')
 
 
+def _symop_loop_row(line):
+    """Return the operator text of one symmetry-loop row (quotes and id removed)."""
+    rest = re.sub(r'^\d+\s+', '', line.strip())
+    quoted = re.match(r"""^(?:'([^']*)'|"([^"]*)")""", rest)
+    if quoted:
+        return quoted.group(1) if quoted.group(1) is not None else quoted.group(2)
+    return rest
+
+
 def parse_cif(source):
     """
     Parse a CIF file to extract crystal structure data.
@@ -642,12 +670,17 @@ def parse_cif(source):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                # Extract the symmetry operation (may have a number prefix)
-                # Format: "1 'x, y, z'" or "'x, y, z'" or "x, y, z"
-                op = re.sub(r"^\d+\s+", '', line)  # Remove leading number
-                op = op.strip("'\"")
-                if ',' in op:
-                    symops.append(op)
+                # Row formats: "1 'x, y, z'", "'x, y, z'", "x, y, z". A quoted
+                # operator may be followed by further loop columns; an
+                # unquoted one is the rest of the row. Every row must be a
+                # valid operator: nothing is skipped silently.
+                op = _symop_loop_row(line)
+                try:
+                    _parse_symop(op)
+                except ValueError as exc:
+                    raise ValueError(f'CIF symmetry loop ({tag}) row {line!r} is not a '
+                                     f'valid operator: {exc}') from None
+                symops.append(op)
             break
 
     if not symops:
